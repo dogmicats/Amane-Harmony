@@ -22,6 +22,8 @@
 3. 一部鸿蒙手机，以及下面任一种安装方式：DevEco Studio + 你自己的华为账号自动签名，或 **Hokit / 小白调试助手等提供侧载（测载）功能的工具**，详见 [docs/BUILD_HAP.md](docs/BUILD_HAP.md)。
 
 > 暂不支持把旁挂服务部署到与 Amane 完全不同的另一台机器：它依赖直读 `amane.db`。
+>
+> **用的不是鸿蒙手机？** 本项目目前只有鸿蒙原生客户端；安卓 / iOS / PC 的替代方案（上游 Web UI、实验性兼容层、按 HTTP 契约自行移植）见 [docs/ANDROID.md](docs/ANDROID.md)。
 
 ## 三步上手
 

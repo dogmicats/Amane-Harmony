@@ -17,6 +17,7 @@
 5. **字幕扫描绝不递归**：只读视频所在目录 `os.scandir`，不做 `os.walk` / `rglob`（媒体目录可能是 FUSE，递归会卡死）。
 6. **发布线与自测线分开**：本仓库只管公开线（`2.1.0` 起、包名 `io.github.dogmycats.amane`）。不要引用、合并或同步自用版 `2.0.x` 的版本号、产物名或 CHANGELOG。
 7. **不改版本号的派生位置**：改版本只改 `version.json`，再同步 `CHANGELOG.md`、`app/AppScope/app.json5`、`server/server.py` 的 `VERSION`。
+8. **不擅自新增第二端客户端**：本仓库只维护鸿蒙原生客户端；跨端需求以 `server/` 的 HTTP 契约为界（见 `docs/ANDROID.md`），不要在 `app/` 里混入安卓 / Web 实现，也不要为兼容第三方运行环境改动签名或产物格式。
 
 ## 部署工作流（必须按这个顺序）
 
