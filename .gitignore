@@ -10,8 +10,9 @@ data/
 *.db
 *.db-wal
 *.db-shm
-subtitles/
-imgcache/
+# 运行时缓存目录（DATA_DIR 下），别把 server/ext/subtitles 一起忽略掉
+/data/subtitles/
+/data/imgcache/
 *.log
 *.jsonl
 
