@@ -9,6 +9,18 @@
 - 把「给 AI 助手的一句话 prompt」**主入口改到 `docs/DEPLOY.md` 开头**（部署旁挂服务才是主要安装步骤）：不懂配置的人可直接交给 agent 用 `tools/agentctl.py` 部署并验证 `/api/user/ping`，希望自己配置的往下看两种部署路径；`README.md`、`docs/PROMPTS.md`、`llms.txt`、Release 说明同步。`docs/BUILD_HAP.md` 的显眼区块缩为一行引导，装 App 的提示词保留在 `docs/PROMPTS.md`，不再把「装 App」误当成部署主流程。
 - 新增 `docs/ANDROID.md`：澄清卓易通方向相反、实验性项目 HOA 的能力边界与本项目为何跑不起来、按 `server/` HTTP 契约自行移植的做法、官方安卓版工作量评估与跨端同步策略；`README.md`、`AGENTS.md`、`llms.txt` 同步。
 
+## [2.1.1] - 2026-11-09
+
+修复外挂字幕在真实部署下的两个问题。
+
+### 修复
+
+- **同目录字幕读不到**：`local_candidates()` 现在遍历该条目的**全部** `media_files`（原来只取第一条，多清晰度时容易落空），对所有路径做同目录 `scandir` 并合并去重。
+- **失败不再静默**：未配置 `MEDIA_PATH_MAP`、映射前缀不匹配、目录不可读、没有同名文件时，`GET /api/user/subtitles` 会带 `hint` 说明，播放页面板直接显示原因。
+- **手机导入不好找文件**：文件选择器显式限制 `.srt / .ass / .ssa / .vtt / .sub`。
+
+> `MEDIA_ROOT` 只用于 compose 挂载卷，**真正决定能否读到同目录字幕的是 `MEDIA_PATH_MAP`**；文档已按此改写。
+
 ## [2.1.0] - 2026-11-09
 
 首个公开发布版本。

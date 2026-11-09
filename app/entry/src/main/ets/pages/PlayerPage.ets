@@ -59,6 +59,7 @@ struct PlayerPage {
   @Local extSubs: SubtitleItem[] = [];
   @Local subUrlInput: string = '';
   @Local subBusy: boolean = false;
+  @Local subHint: string = '';
 
   aboutToAppear(): void {
     const params = router.getParams() as PlayerParams;
@@ -290,6 +291,7 @@ struct PlayerPage {
   /** 打开字幕面板时拉取来源，并自动套用上次的选择。 */
   private async loadSubSources(): Promise<void> {
     if (this.metaId <= 0) {
+      this.subHint = '没有拿到条目 id，无法查询字幕';
       return;
     }
     this.subBusy = true;
@@ -297,6 +299,7 @@ struct PlayerPage {
       const res = await SubtitleClient.list(this.metaId);
       this.localSubs = res.local === undefined || res.local === null ? [] : res.local;
       this.extSubs = res.cached === undefined || res.cached === null ? [] : res.cached;
+      this.subHint = res.hint === undefined || res.hint === null ? '' : res.hint;
       if (res.choice !== undefined && res.choice !== null && res.choice.subtitle_id.length > 0) {
         this.applySub(res.choice.subtitle_id);
       }
@@ -688,6 +691,14 @@ struct PlayerPage {
               Text('外挂字幕').fontSize(11).fontColor(Theme.TEXT_FAINT)
                 .width('100%')
                 .padding({ left: 16, right: 16, top: 10, bottom: 4 })
+              if (this.localSubs.length === 0 && this.subHint.length > 0) {
+                Text(this.subHint)
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .width('100%')
+                  .padding({ left: 16, right: 16, top: 2, bottom: 4 })
+                  .maxLines(3)
+              }
               ForEach(this.localSubs, (item: LocalCandidate) => {
                 Text(`同目录 · ${item.name}`)
                   .fontSize(12)

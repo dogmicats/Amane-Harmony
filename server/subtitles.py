@@ -227,47 +227,77 @@ class SubtitleStore:
                 "updated_at=excluded.updated_at", (item_id, sid, _now()))
             conn.commit()
 
-    def local_candidates(self, item_id: int) -> list[dict]:
-        """列出视频同目录的外挂字幕。只 scandir 同目录，不递归。"""
+    def local_candidates(self, item_id: int) -> tuple[list[dict], str]:
+        """列出视频同目录的外挂字幕。只 scandir 同目录，不递归。
+
+        返回 (候选列表, 说明)。候选为空时说明里给出原因（没配映射 / 目录不可读 /
+        没有同名文件），客户端会直接显示，避免"面板空着但不知道为什么"。
+        一个条目可能有多个文件（不同清晰度），逐个尝试并合并去重。
+        """
         with sqlite3.connect(f"file:{self.amane_db}?mode=ro", uri=True, timeout=10) as conn:
-            row = conn.execute("SELECT path FROM media_files WHERE metadata_id = ? ORDER BY id LIMIT 1", (item_id,)).fetchone()
-        if not row or not row[0]:
-            return []
-        real = self.map_path(row[0])
-        if not real or not os.path.isfile(real):
-            return []
-        folder, stem = os.path.split(real)
-        base = os.path.splitext(stem)[0]
-        out: list[dict] = []
-        try:
-            with os.scandir(folder) as it:
-                entries = [e for e in it if e.is_file()]
-        except OSError:
-            return []
-        for entry in entries:
-            ext = os.path.splitext(entry.name)[1].lower()
-            if ext not in SUB_EXTS:
+            rows = conn.execute(
+                "SELECT path FROM media_files WHERE metadata_id = ? ORDER BY id",
+                (item_id,)).fetchall()
+        paths = [row[0] for row in rows if row and row[0]]
+        if not paths:
+            return [], "amane.db 里没有该条目的文件记录"
+        if not self.path_map:
+            return [], ("未配置 MEDIA_PATH_MAP，服务读不到媒体目录；"
+                        "例如 MEDIA_PATH_MAP=/media2=/mnt/media2")
+
+        found: dict[str, dict] = {}
+        checked: list[str] = []
+        mapped = False
+        for path in paths:
+            real = self.map_path(path)
+            if not real:
+                checked.append(f"{path} 没有匹配的前缀")
                 continue
-            name_stem = os.path.splitext(entry.name)[0]
-            if name_stem != base and not name_stem.startswith(base + "."):
+            mapped = True
+            if not os.path.isfile(real):
+                # 只回显 amane 内路径，不把宿主机绝对路径发给客户端
+                checked.append(f"{path} 映射后不存在")
                 continue
+            folder, stem = os.path.split(real)
+            base = os.path.splitext(stem)[0]
             try:
-                if entry.stat().st_size > MAX_SUB_BYTES:
-                    continue
-            except OSError:
+                with os.scandir(folder) as it:
+                    entries = [e for e in it if e.is_file()]
+            except OSError as exc:
+                checked.append(f"{path} 所在目录不可读（{exc.strerror or exc}）")
                 continue
-            out.append({"name": entry.name, "size": entry.stat().st_size,
-                        "lang": _lang_of(entry.name), "path": entry.path})
-        return sorted(out, key=lambda x: x["name"])
+            for entry in entries:
+                ext = os.path.splitext(entry.name)[1].lower()
+                if ext not in SUB_EXTS:
+                    continue
+                name_stem = os.path.splitext(entry.name)[0]
+                if name_stem != base and not name_stem.startswith(base + "."):
+                    continue
+                try:
+                    size = entry.stat().st_size
+                except OSError:
+                    continue
+                if size > MAX_SUB_BYTES:
+                    continue
+                found[entry.path] = {"name": entry.name, "size": size,
+                                     "lang": _lang_of(entry.name), "path": entry.path}
+        if found:
+            return sorted(found.values(), key=lambda x: x["name"]), ""
+        if not mapped:
+            return [], "MEDIA_PATH_MAP 没有匹配到任何视频路径，检查前缀是否写对"
+        hint = "同目录没有与视频同名的字幕（.srt / .ass / .ssa / .vtt / .sub）"
+        detail = "；".join(checked[:2])
+        return [], hint + ("：" + detail if detail else "")
 
     def load_local(self, item_id: int, name: str) -> dict:
         """把同目录字幕读进缓存，返回统一的 subtitle_id。"""
-        for cand in self.local_candidates(item_id):
+        candidates, hint = self.local_candidates(item_id)
+        for cand in candidates:
             if cand["name"] == name:
                 with open(cand["path"], "rb") as fh:
                     raw = fh.read()
                 return self.put(name, raw, "local")
-        raise ValueError("字幕不存在或不属于该视频")
+        raise ValueError(hint or "字幕不存在或不属于该视频")
 
 
 def install(routes: list, amane_db: str, data_dir: str, media_path_map: str) -> None:
@@ -282,12 +312,15 @@ def install(routes: list, amane_db: str, data_dir: str, media_path_map: str) -> 
 
     def subtitles_list(self, query: dict) -> None:
         fid = int((query.get("item_id") or ["0"])[0])
-        local = store.local_candidates(fid) if fid else []
+        local: list[dict] = []
+        hint = "缺少 item_id"
+        if fid:
+            local, hint = store.local_candidates(fid)
         for item in local:
             item.pop("path", None)  # 绝不把服务器本地路径发给客户端
         ok(self, {"local": local, "cached": store.list_all(),
                   "choice": store.choice(fid) if fid else None,
-                  "providers": []})
+                  "providers": [], "hint": hint})
 
     def subtitles_local(self, query: dict) -> None:
         fid = int((query.get("item_id") or ["0"])[0])
@@ -322,7 +355,7 @@ def install(routes: list, amane_db: str, data_dir: str, media_path_map: str) -> 
             fail(self, 400, "只接受 http(s) URL")
             return
         try:
-            req = Request(url, headers={"User-Agent": "Amane-Harmony/2.1.0"})
+            req = Request(url, headers={"User-Agent": "Amane-Harmony/2.1.1"})
             with _opener.open(req, timeout=FETCH_TIMEOUT) as resp:
                 raw = resp.read(MAX_SUB_BYTES + 1)
         except Exception as exc:  # noqa: BLE001

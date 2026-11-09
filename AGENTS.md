@@ -37,7 +37,7 @@
 | `AMANE_DATA` | Amane 的 data 目录（需可读 `amane.db` / `token` / `image_token`） |
 | `AMANE_TOKEN` | 不给则读 `{AMANE_DATA}/token` |
 | `DATA_DIR` | `user.db`、图片缓存、字幕缓存的位置 |
-| `MEDIA_ROOT` / `MEDIA_PATH_MAP` | 只读媒体卷与容器内路径映射，字幕功能需要 |
+| `MEDIA_ROOT` / `MEDIA_PATH_MAP` | 媒体卷宿主路径 / amane 内路径到容器内路径的映射（字幕「同目录」来源需要，**只有后者参与解析**） |
 | `PORT` | 默认 8770 |
 | `IMG_HOST_ALLOW_EXTRA` | 追加允许代理的图片主机（逗号分隔） |
 

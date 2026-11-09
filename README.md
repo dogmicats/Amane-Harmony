@@ -34,7 +34,7 @@
 ```sh
 # Docker
 cp deploy/.env.example .env
-# 编辑 .env：AMANE_DATA 指向 amane 的 data 目录，MEDIA_ROOT 指向媒体目录
+# 编辑 .env：AMANE_DATA 指向 amane 的 data 目录；MEDIA_ROOT 填媒体卷宿主路径，MEDIA_PATH_MAP 写 amane 内路径到容器内路径的映射
 docker compose -f deploy/compose.example.yml up -d
 
 # 或纯 Python（Windows / Linux / macOS / 群晖都行，无需 Docker）
@@ -45,7 +45,7 @@ python server/server.py          # 先设置同名环境变量，见 docs/DEPLOY
 
 **② 装 App**
 
-从 [Releases](../../releases) 下载 `Amane-2.1.0-unsigned.hap`（未签名），按 [docs/BUILD_HAP.md](docs/BUILD_HAP.md) 完成签名与安装：可以用 DevEco Studio + 你自己的华为账号自动签名后 USB 安装，**也可以直接用 Hokit、小白调试助手等提供侧载（测载）功能的工具**，不必安装 DevEco。也可以从 `app/` 源码自行构建。无论哪种方式，装进手机的都必须是已签名包。
+从 [Releases](../../releases) 下载 `Amane-2.1.1-unsigned.hap`（未签名），按 [docs/BUILD_HAP.md](docs/BUILD_HAP.md) 完成签名与安装：可以用 DevEco Studio + 你自己的华为账号自动签名后 USB 安装，**也可以直接用 Hokit、小白调试助手等提供侧载（测载）功能的工具**，不必安装 DevEco。也可以从 `app/` 源码自行构建。无论哪种方式，装进手机的都必须是已签名包。
 
 **③ 在「设置 → 连接」里填**
 

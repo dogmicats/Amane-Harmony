@@ -4,6 +4,7 @@
 
 | 本仓库版本 | 验证过的上游 | 说明 |
 |---|---|---|
+| 2.1.1 | 同上 | 字幕修复：同目录扫描遍历该条目全部文件；未配 `MEDIA_PATH_MAP` / 目录不可读 / 无同名文件时给出原因；手机导入筛选字幕后缀。 |
 | 2.1.0 | `sqzw-x/amane` main（2026-11-09 前后） | 首发。`media_files` / `metadata` 依赖列见下。 |
 
 CI 的 `schema-smoke.yml` 用最小 fixture 校验下列列存在；`upstream-watch.yml` 在上游发新 release 时自动开 issue 提醒复核。

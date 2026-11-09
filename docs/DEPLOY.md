@@ -32,13 +32,33 @@ AI 助手能帮你：读懂环境变量表、判断该走 Docker 还是纯 Pytho
 | `IMAGE_TOKEN` | 读 `{AMANE_DATA}/image_token` | 图片代理鉴权。 |
 | `DATA_DIR` | `/data` | `user.db`、图片缓存、字幕缓存。 |
 | `PORT` | `8770` | 监听端口。 |
-| `MEDIA_ROOT` | — | 只读媒体目录（字幕功能需要）。 |
+| `MEDIA_ROOT` | — | compose 挂载卷的宿主路径占位（挂到 `/mnt/media`），**不参与字幕路径解析**。 |
 | `MEDIA_PATH_MAP` | 空 | `容器内路径=目标机路径`，逗号分隔，如 `/media2=/mnt/media2,/media=/mnt/media`。**必须最长前缀匹配**，构建器已按前缀长度排序。 |
 | `IMG_HOST_ALLOW_EXTRA` | 空 | 追加允许代理的图片主机。 |
 | `SUBTITLE_CACHE` | `{DATA_DIR}/subtitles` | 字幕缓存目录。 |
 | `PUBLIC_AMANE_URL` | 空 | 写进图片 URL 的对外地址，可选。 |
 
 > 路径映射怎么填：看 Amane 容器里 `media_files.path` 的前缀（如 `/media2/jav/xxx`），把它映射成旁挂服务能看到的位置。若纯 Python 直跑且与 Amane 看到的是同一套路径，`MEDIA_PATH_MAP` 留空即可。
+
+### 两个容易看懵的变量
+
+**`IMAGE_TOKEN`：图片代理的“钥匙”**
+
+Amane 的封面、演员图是要鉴权的，而手机上的 `<Image>` 组件**没法带自定义请求头**。所以本服务提供 `/img` 代理：App 只向本服务要图，本服务带上 Amane 的 `image_token` 去回源。
+
+- 通常不用手填：不给 `IMAGE_TOKEN` 时，服务自己读 `{AMANE_DATA}/image_token`。
+- 它让图片 URL 只带一张“仅能看图”的票据（`/img?b=...&t=...`），**不会把你的主 API token 写进每个图片地址**（那会出现在日志、截图、浏览器历史里）。
+- 报 `图片 token 无效`：说明它和 Amane 的 `image_token` 不一致，或 App 缓存的配置过期了 —— 重新保存一次设置即可。
+
+**`IMG_HOST_ALLOW_EXTRA`：允许代理哪些网站的图片**
+
+`/img` 是“你给地址、我替你下载”的端点，不限制的话任何人都能拿它当免费代理去刷别人的站、甚至探测你内网。所以只代理**白名单内**的主机。
+
+- 默认包含 `githubusercontent.com` 和 `images` / `cdn` / `img` / `static` 这类通用关键字。
+- 你的图床不在里面 → 封面空白、服务日志出现 `host not allowed` → 加进去：`IMG_HOST_ALLOW_EXTRA=jdbstatic.com,dmm.co.jp,your-cdn.example`（逗号分隔，**只写域名**，不要带 `https://`）。
+- 匹配规则：与白名单项相同、是其子域，或 host 中包含该项（`cdn` 这类通用词就是靠这个生效）。所以**只填你信任的域名，别填 `com` 这种过短的关键字**。
+
+> 一句话区分：`IMAGE_TOKEN` 解决“我拿什么去 Amane 取图”，`IMG_HOST_ALLOW_EXTRA` 解决“我允许替用户去哪些站取图”。
 
 ## 方案 A：Docker Compose（推荐）
 
@@ -51,7 +71,7 @@ docker compose -f deploy/compose.example.yml logs -f
 
 模板用同一个 docker network + 服务名互访，**不用 `network_mode: host`**（该模式在 Docker Desktop for Windows / macOS 上不生效）。Amane 的 data 与媒体目录以 `:ro` 挂载。
 
-也可以用 GHCR 上的预构建镜像：`image: ghcr.io/dogmicats/amane-user:2.1.0`，把 compose 里的 `build:` 换成 `image:` 即可。镜像由 `publish-image.yml` 在打 tag 时构建。
+也可以用 GHCR 上的预构建镜像：`image: ghcr.io/dogmicats/amane-user:2.1.1`，把 compose 里的 `build:` 换成 `image:` 即可。镜像由 `publish-image.yml` 在打 tag 时构建。
 
 ## 方案 B：纯 Python（不用 Docker）
 
@@ -79,7 +99,7 @@ python server\server.py
 
 ```sh
 curl http://127.0.0.1:8770/api/user/ping
-# {"ok":true,"version":"2.1.0",...}
+# {"ok":true,"version":"2.1.1",...}
 ```
 
 ## 外网反代（可选）

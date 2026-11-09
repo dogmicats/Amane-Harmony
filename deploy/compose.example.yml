@@ -4,7 +4,7 @@
 services:
   amane-user:
     build: ../server
-    # 也可以用预构建镜像：image: ghcr.io/dogmicats/amane-user:2.1.0
+    # 也可以用预构建镜像：image: ghcr.io/dogmicats/amane-user:2.1.1
     container_name: amane-user
     restart: unless-stopped
     environment:

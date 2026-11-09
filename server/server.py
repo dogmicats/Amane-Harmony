@@ -49,7 +49,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, build_opener, ProxyHandler
 
-VERSION = "2.1.0"
+VERSION = "2.1.1"
 
 AMANE_BASE = os.environ.get("AMANE_BASE", "http://127.0.0.1:8000").rstrip("/")
 AMANE_DATA = os.environ.get("AMANE_DATA", "/amane-data")

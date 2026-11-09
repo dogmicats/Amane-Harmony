@@ -36,6 +36,8 @@ export interface SubtitleListResult {
   cached: SubtitleItem[];
   choice: SubtitleChoice | null;
   providers: string[];
+  /** 本地候选为空时的原因（没配路径映射 / 目录不可读 / 没有同名文件）。 */
+  hint?: string;
 }
 
 export class SubtitleClient {
@@ -68,6 +70,8 @@ export class SubtitleClient {
   static async importFromPhone(ctx: common.UIAbilityContext): Promise<SubtitleItem> {
     const opts: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
     opts.maxSelectNumber = 1;
+    // 只列字幕后缀，省得在文件管理器里翻；不设置时鸿蒙默认显示全部文件。
+    opts.fileSuffixFilters = ['.srt', '.ass', '.ssa', '.vtt', '.sub'];
     const view: picker.DocumentViewPicker = new picker.DocumentViewPicker(ctx);
     const uris: string[] = await view.select(opts);
     if (uris.length === 0) {
