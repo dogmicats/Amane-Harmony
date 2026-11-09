@@ -1,6 +1,6 @@
 # AGENTS.md — 给 AI 助手的项目约定
 
-> 任何 agent（WorkBuddy / Claude Code / Cursor / Copilot / 其它）在修改或部署本项目前，**先读完本文件**。
+> 任何 agent（WorkBuddy / DeepSeek Harness / Claude Code / Cursor / Copilot / 其它）在修改或部署本项目前，**先读完本文件**。
 > 这里写的是不可自行放宽的约束，不是建议。
 
 ## 项目是什么

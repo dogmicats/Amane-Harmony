@@ -4,7 +4,7 @@
 
 ## 最快上手：把这句话发给你的 AI 助手
 
-**不想逐项看环境变量、也不确定该用 Docker 还是纯 Python？把下面这一句整段复制给你的 AI 助手**（WorkBuddy / DeepSeek Harness/Claude Code / Cursor / Copilot 等），它会读本仓库文档、用 `tools/agentctl.py` 按可验证的契约带你把旁挂服务部署好：
+**不想逐项看环境变量、也不确定该用 Docker 还是纯 Python？把下面这一句整段复制给你的 AI 助手**（WorkBuddy / DeepSeek Harness / Claude Code / Cursor / Copilot 等），它会读本仓库文档、用 `tools/agentctl.py` 按可验证的契约带你把旁挂服务部署好：
 
 ```text
 请按 https://github.com/dogmicats/Amane-Harmony/blob/main/docs/DEPLOY.md 与 AGENTS.md，用 tools/agentctl.py 帮我在「运行 Amane 的那台机器」上部署 amane-user 旁挂服务。目标机必须与 Amane 同机，或能访问同一个 data 目录（共享卷 / 网络挂载），不是你自己所在的沙箱、临时容器或另一台无关电脑。先确认目标机在哪、以及用 Docker 还是纯 Python，再跑 doctor --json 按缺项逐个问我；AMANE_TOKEN 由我手动输入，不要回显、不要写日志；plan --json 先把完整计划给我确认，我同意后再 apply --yes，最后用 /api/user/ping 验证；任何一步失败就停下并报告，不要猜配置、不要改 Amane 本体、不要动反代和 DNS。如果你访问不到目标机，就只给我可以在目标机上执行的命令。
