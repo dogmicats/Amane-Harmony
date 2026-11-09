@@ -145,7 +145,7 @@ class SubtitleStore:
             conn.commit()
 
     def map_path(self, container_path: str) -> str:
-        """amane 容器内路径 → 本机可读路径。纯 Python 直跑、没有映射时原样返回。"""
+        """amane 容器内路径 → 目标机上可读路径。纯 Python 直跑、没有映射时原样返回。"""
         if not self.path_map:
             return container_path
         for prefix, target in self.path_map:

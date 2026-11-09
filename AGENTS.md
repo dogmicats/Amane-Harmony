@@ -21,6 +21,7 @@
 
 ## 部署工作流（必须按这个顺序）
 
+0. **先确定目标机**：部署对象是**运行 Amane 的那台机器**，或能访问同一个 data 目录（共享卷 / 网络挂载）的机器；**不是**你所在的沙箱、临时容器或无关主机。若无法在该机执行命令，只输出可复制的命令交给用户，不要在自己的运行环境里安装。
 1. `python tools/agentctl.py doctor --json` → 读 `missing` 列表，逐项向**用户**询问；不要猜路径或 token。
 2. `python tools/agentctl.py plan --json` → 把完整计划展示给用户，**等待明确确认**。
 3. `python tools/agentctl.py apply --yes` → 执行；再跑一次 `doctor --json` 自验。

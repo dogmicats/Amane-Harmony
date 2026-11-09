@@ -29,7 +29,7 @@
 
 **① 起旁挂服务**（二选一）
 
-> **不懂配置？** 把 [部署指南最前面的一句话](docs/DEPLOY.md) 发给你的 AI 助手，它会用 `tools/agentctl.py` 带你部署并验证 `/api/user/ping`；**希望自己配置的再往下看**。
+> **不懂配置？** 把 [部署指南最前面的一句话](docs/DEPLOY.md) 发给你的 AI 助手，它会用 `tools/agentctl.py` 带你部署并验证 `/api/user/ping`。**目标机必须是运行 Amane 的那台**（或能访问同一个 data 目录），不是助手的沙箱；**希望自己配置的再往下看**。
 
 ```sh
 # Docker
@@ -77,7 +77,7 @@ tools/   脱敏自检 + agentctl（给 AI 助手用的部署 CLI）
 
 ## 给 AI 助手
 
-**不懂怎么部署旁挂服务？** 把 [部署指南最前面的一句话 prompt](docs/DEPLOY.md) 发给你的 agent 即可：它会先读 [AGENTS.md](AGENTS.md) 的红线，跑 `tools/agentctl.py doctor --json` 按缺项问你，把 `plan --json` 的完整计划给你确认，再 `apply --yes` 并验证 `/api/user/ping`。**希望自己配置**就看 [docs/DEPLOY.md](docs/DEPLOY.md)；分任务提示词见 [docs/PROMPTS.md](docs/PROMPTS.md)。**不要**让 agent 猜配置、手写 compose 或代填 token。
+**不懂怎么部署旁挂服务？** 把 [部署指南最前面的一句话 prompt](docs/DEPLOY.md) 发给你的 agent 即可：它会先读 [AGENTS.md](AGENTS.md) 的红线，跑 `tools/agentctl.py doctor --json` 按缺项问你，把 `plan --json` 的完整计划给你确认，再 `apply --yes` 并验证 `/api/user/ping`。**目标机是运行 Amane 的那台机器**（或能访问同一个 data 目录的机器），不是 agent 自己的沙箱或临时容器；agent 访问不到时应只给你可复制的命令。**希望自己配置**就看 [docs/DEPLOY.md](docs/DEPLOY.md)；分任务提示词见 [docs/PROMPTS.md](docs/PROMPTS.md)。**不要**让 agent 猜配置、手写 compose 或代填 token。
 
 装 App 也可以让 agent 引导（[提示词](docs/PROMPTS.md)），但签名与安装仍需本人操作。
 

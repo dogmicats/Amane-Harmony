@@ -27,7 +27,7 @@ PATTERNS = [
     ("bearer", r"Bearer\s+[A-Za-z0-9_\-]{24,}", "明文 Bearer 凭据"),
     ("private_ip", r"\b(?:192\.168|10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b", "内网 IP"),
     ("storage_path", r"/vol[12]/1000/", "NAS 绝对路径"),
-    ("personal_path", r"[A-Za-z]:\\(?:Users|Documents|softwares)\\", "个人本机绝对路径"),
+    ("personal_path", r"[A-Za-z]:\\(?:Users|Documents|softwares)\\", "个人电脑绝对路径"),
     ("assigned_secret", r"(?:api[_-]?token|password|passwd|secret|api[_-]?key)\s*[:=]\s*['\"][^'\"<$\s]{8,}['\"]", "疑似口令赋值"),
     ("long_random", r"\b[A-Za-z0-9_-]{40,}\b", "长随机串（疑似密钥）"),
     ("email", r"\b[\w.+-]+@(?!example\.(?:com|org|net))[\w.-]+\.[A-Za-z]{2,}\b", "真实风格邮箱"),

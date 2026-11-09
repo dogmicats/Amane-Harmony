@@ -23,7 +23,7 @@
   AMANE_TOKEN       不给则读 {AMANE_DATA}/token
   IMAGE_TOKEN       不给则读 {AMANE_DATA}/image_token（图片代理鉴权用）
   PUBLIC_AMANE_URL  写进图片 URL 的对外地址（可选，不填则由客户端自己拼）
-  MEDIA_PATH_MAP    amane 容器内路径到本机路径的映射，如 /media2=/mnt/media2,/media=/mnt/media
+  MEDIA_PATH_MAP    amane 容器内路径到目标机路径的映射，如 /media2=/mnt/media2,/media=/mnt/media
   IMG_HOST_ALLOW_EXTRA  追加允许代理的图片主机（逗号分隔）
   SUBTITLE_CACHE   字幕缓存目录，默认 {DATA_DIR}/subtitles
 """

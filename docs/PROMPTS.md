@@ -11,7 +11,7 @@
 不想自己看部署文档时，把这一句发给 AI 助手即可（同一句也放在 [DEPLOY.md](DEPLOY.md) **最前面**，方便直接复制）：
 
 ```
-请按 https://github.com/dogmicats/Amane-Harmony/blob/main/docs/DEPLOY.md 与 AGENTS.md，用 tools/agentctl.py 帮我在本机部署 amane-user 旁挂服务：先读文档和红线，跑 doctor --json 后按缺项逐个问我；AMANE_TOKEN 由我手动输入，不要回显、不要写日志；plan --json 先把完整计划给我确认，我同意后再 apply --yes，最后用 /api/user/ping 验证；任何一步失败就停下并报告，不要猜配置、不要改 Amane 本体、不要动反代和 DNS。
+请按 https://github.com/dogmicats/Amane-Harmony/blob/main/docs/DEPLOY.md 与 AGENTS.md，用 tools/agentctl.py 帮我在「运行 Amane 的那台机器」上部署 amane-user 旁挂服务。目标机必须与 Amane 同机，或能访问同一个 data 目录（共享卷 / 网络挂载），不是你自己所在的沙箱、临时容器或另一台无关电脑。先确认目标机在哪、以及用 Docker 还是纯 Python，再跑 doctor --json 按缺项逐个问我；AMANE_TOKEN 由我手动输入，不要回显、不要写日志；plan --json 先把完整计划给我确认，我同意后再 apply --yes，最后用 /api/user/ping 验证；任何一步失败就停下并报告，不要猜配置、不要改 Amane 本体、不要动反代和 DNS。如果你访问不到目标机，就只给我可以在目标机上执行的命令。
 ```
 
 这一条走 `tools/agentctl.py`：**先 doctor 后 plan，计划经你确认才 apply**，最后验证 `/api/user/ping`。API token 由你手动输入，不要发进对话或日志；容器、端口、反代等实际变更一律先确认。下面两节是同一流程的分步版本，可按需补充细节。
@@ -19,7 +19,7 @@
 ## 部署（Docker）
 
 ```
-你是部署助手，在这台机器上部署 Amane-Harmony 的 amane-user 服务（Docker 方式）。
+你是部署助手。目标是在「运行 Amane 的那台机器」上部署 Amane-Harmony 的 amane-user 服务（Docker 方式）—— 必须与 Amane 同机，或能访问同一个 data 目录；不是你的沙箱、临时容器或无关主机。先向我确认目标机；若你无法在该机执行命令，只输出可复制的命令让我执行。
 1. 先读 AGENTS.md 与 docs/DEPLOY.md，遵守其中红线。
 2. 运行 `python tools/agentctl.py doctor --json`。按 missing 列表逐项向我询问：
    AMANE_DATA 路径、AMANE_TOKEN 由我手动输入，禁止回显、禁止写入日志或对话。
@@ -32,7 +32,7 @@
 ## 部署（纯 Python，非 Docker）
 
 ```
-同上一节，但第 3 步改用 `plan --json --mode python`，第 4 步用
+同上一节，同样在**目标机**上执行（不要装在 agent 自己的运行环境里）。第 3 步改用 `plan --json --mode python`，第 4 步用
 `apply --yes --mode python`。不要创建容器，也不要改动 Amane 本体配置。
 ```
 

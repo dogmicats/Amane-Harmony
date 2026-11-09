@@ -4,6 +4,7 @@
 
 ## 未发布（文档）
 
+- 修正一句话 prompt 里「本机」的歧义：部署目标是**运行 Amane 的那台机器**（或能访问同一个 data 目录的机器），不是 AI 助手所在的沙箱 / 临时容器 / 无关主机；并要求 agent 访问不到目标机时只输出可复制命令。同步 `docs/DEPLOY.md`（新增「部署在哪台机器上」）、`docs/PROMPTS.md`、`AGENTS.md`（部署工作流第 0 步）、`README.md`、`llms.txt`、`tools/agentctl.py` 文案、Release 说明。
 - 补充 HAP 安装的**侧载（测载）**方式：除 DevEco Studio 外，也可用 Hokit、小白调试助手及其它提供同类功能的工具；同步更新 `README.md`、`llms.txt`、`TROUBLESHOOTING.md` 与 Release 说明。HAP 产物不变。
 - 把「给 AI 助手的一句话 prompt」**主入口改到 `docs/DEPLOY.md` 开头**（部署旁挂服务才是主要安装步骤）：不懂配置的人可直接交给 agent 用 `tools/agentctl.py` 部署并验证 `/api/user/ping`，希望自己配置的往下看两种部署路径；`README.md`、`docs/PROMPTS.md`、`llms.txt`、Release 说明同步。`docs/BUILD_HAP.md` 的显眼区块缩为一行引导，装 App 的提示词保留在 `docs/PROMPTS.md`，不再把「装 App」误当成部署主流程。
 - 新增 `docs/ANDROID.md`：澄清卓易通方向相反、实验性项目 HOA 的能力边界与本项目为何跑不起来、按 `server/` HTTP 契约自行移植的做法、官方安卓版工作量评估与跨端同步策略；`README.md`、`AGENTS.md`、`llms.txt` 同步。

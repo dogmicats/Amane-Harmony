@@ -92,7 +92,7 @@ def doctor(mode: str, as_json: bool) -> int:
 
     if mode == "docker":
         add("docker", shutil.which("docker") is not None,
-            "已安装" if shutil.which("docker") else "未找到 docker（CI 里会验证，本机不影响 doctor）",
+            "已安装" if shutil.which("docker") else "未找到 docker（CI 里会验证，当前环境不影响 doctor）",
             required=False)
     try:
         compile(SERVER.read_text(encoding="utf-8"), "server.py", "exec")
@@ -151,7 +151,7 @@ def apply(mode: str, confirmed: bool, as_json: bool) -> int:
         if mode == "docker":
             if not shutil.which("docker"):
                 return emit({"command": "apply", "ok": False, "done": done,
-                             "summary": "本机无 docker；请改用 --mode python，或在 CI / 服务器上执行"},
+                             "summary": "当前环境没有 docker；请改用 --mode python，或到运行 Amane 的目标机上执行"},
                             as_json, 3)
             import subprocess
             cp = subprocess.run(["docker", "compose", "-f", str(COMPOSE), "up", "-d"],

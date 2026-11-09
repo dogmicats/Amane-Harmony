@@ -7,12 +7,14 @@
 **不想逐项看环境变量、也不确定该用 Docker 还是纯 Python？把下面这一句整段复制给你的 AI 助手**（WorkBuddy / DeepSeek Harness/Claude Code / Cursor / Copilot 等），它会读本仓库文档、用 `tools/agentctl.py` 按可验证的契约带你把旁挂服务部署好：
 
 ```text
-请按 https://github.com/dogmicats/Amane-Harmony/blob/main/docs/DEPLOY.md 与 AGENTS.md，用 tools/agentctl.py 帮我在本机部署 amane-user 旁挂服务：先读文档和红线，跑 doctor --json 后按缺项逐个问我；AMANE_TOKEN 由我手动输入，不要回显、不要写日志；plan --json 先把完整计划给我确认，我同意后再 apply --yes，最后用 /api/user/ping 验证；任何一步失败就停下并报告，不要猜配置、不要改 Amane 本体、不要动反代和 DNS。
+请按 https://github.com/dogmicats/Amane-Harmony/blob/main/docs/DEPLOY.md 与 AGENTS.md，用 tools/agentctl.py 帮我在「运行 Amane 的那台机器」上部署 amane-user 旁挂服务。目标机必须与 Amane 同机，或能访问同一个 data 目录（共享卷 / 网络挂载），不是你自己所在的沙箱、临时容器或另一台无关电脑。先确认目标机在哪、以及用 Docker 还是纯 Python，再跑 doctor --json 按缺项逐个问我；AMANE_TOKEN 由我手动输入，不要回显、不要写日志；plan --json 先把完整计划给我确认，我同意后再 apply --yes，最后用 /api/user/ping 验证；任何一步失败就停下并报告，不要猜配置、不要改 Amane 本体、不要动反代和 DNS。如果你访问不到目标机，就只给我可以在目标机上执行的命令。
 ```
+
+**部署在哪台机器上？** 必须是**运行 Amane 的那台机器**，或能访问同一个 data 目录（共享卷 / NFS / SMB 挂载）的机器 —— 它要能读到 `amane.db`、`token`、`image_token`。**不要装在** AI 助手自己的沙箱、临时容器或另一台无关电脑上：那样即使 `/api/user/ping` 返回 200，列表、收藏和播放也会是空的，因为读不到库。
 
 AI 助手能帮你：读懂环境变量表、判断该走 Docker 还是纯 Python、检查 Amane 的 data 目录与媒体路径映射（`MEDIA_PATH_MAP`）、生成 `.env`、执行 `doctor / plan / apply`、验证 `/api/user/ping`、失败时回滚。
 
-**仍要你自己动手的**：提供 Amane 的 data 目录与 API token（**不要让助手代填，也不要发进对话或日志**）、确认部署计划、批准容器 / 端口 / 反代等实际变更。token 只写进你本机的 `.env`。
+**仍要你自己动手的**：提供 Amane 的 data 目录与 API token（**不要让助手代填，也不要发进对话或日志**）、确认部署计划、批准容器 / 端口 / 反代等实际变更。token 只写进**目标机**上的 `.env`。
 
 > **想自己配置、或要看完整的环境变量与两条部署路径 → 继续往下看。**
 
@@ -31,7 +33,7 @@ AI 助手能帮你：读懂环境变量表、判断该走 Docker 还是纯 Pytho
 | `DATA_DIR` | `/data` | `user.db`、图片缓存、字幕缓存。 |
 | `PORT` | `8770` | 监听端口。 |
 | `MEDIA_ROOT` | — | 只读媒体目录（字幕功能需要）。 |
-| `MEDIA_PATH_MAP` | 空 | `容器内路径=本机路径`，逗号分隔，如 `/media2=/mnt/media2,/media=/mnt/media`。**必须最长前缀匹配**，构建器已按前缀长度排序。 |
+| `MEDIA_PATH_MAP` | 空 | `容器内路径=目标机路径`，逗号分隔，如 `/media2=/mnt/media2,/media=/mnt/media`。**必须最长前缀匹配**，构建器已按前缀长度排序。 |
 | `IMG_HOST_ALLOW_EXTRA` | 空 | 追加允许代理的图片主机。 |
 | `SUBTITLE_CACHE` | `{DATA_DIR}/subtitles` | 字幕缓存目录。 |
 | `PUBLIC_AMANE_URL` | 空 | 写进图片 URL 的对外地址，可选。 |
