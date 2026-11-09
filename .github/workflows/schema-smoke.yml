@@ -38,13 +38,23 @@ jobs:
           print('schema fixture OK:', {k: len(v) for k, v in needed.items()})
           PY
       - name: 服务端与工具语法编译
-        run: python -m py_compile server/server.py server/subtitles.py server/subtitle_providers/*.py tools/agentctl.py tools/scan_secrets.py
-      - name: 在线字幕源注册表必须为空
+        run: python -m py_compile server/server.py server/ext/*/server_ext.py tools/agentctl.py tools/scan_secrets.py
+      - name: 扩展清单只含公开扩展
         run: |
           python - <<'PY'
-          import sys
-          sys.path.insert(0, 'server')
-          from subtitle_providers.registry import available, PROVIDERS
-          assert PROVIDERS == [] and available() == [], '在线字幕源未经批准被启用'
-          print('provider registry empty OK')
+          import json
+          data = json.load(open('server/extensions.json', encoding='utf-8'))
+          ids = [e['id'] for e in data['extensions']]
+          assert ids == ['actors', 'facets', 'subtitles'], ids
+          assert all(e.get('scope') == 'public' for e in data['extensions']), '出现非公开扩展'
+          print('extensions OK:', ids)
+          PY
+      - name: 在线字幕源必须保持未启用
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          src = Path('server/ext/subtitles/server_ext.py').read_text(encoding='utf-8')
+          assert '"providers": []' in src, '在线字幕源未经批准被启用'
+          assert 'http' not in src.split('def providers_list')[1][:400], 'providers 端点不应访问网络'
+          print('providers 恒为空 OK')
           PY
