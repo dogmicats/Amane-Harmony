@@ -1,5 +1,23 @@
 # 部署 amane-user
 
+> **这是本项目的主要安装步骤**：先部署 `amane-user` 旁挂服务，客户端连的就是它。不懂配置 → 看下一节的一句话；想自己配置 → 直接往下翻环境变量表。
+
+## 最快上手：把这句话发给你的 AI 助手
+
+**不想逐项看环境变量、也不确定该用 Docker 还是纯 Python？把下面这一句整段复制给你的 AI 助手**（WorkBuddy / Claude Code / Cursor / Copilot 等），它会读本仓库文档、用 `tools/agentctl.py` 按可验证的契约带你把旁挂服务部署好：
+
+```text
+请按 https://github.com/dogmicats/Amane-Harmony/blob/main/docs/DEPLOY.md 与 AGENTS.md，用 tools/agentctl.py 帮我在本机部署 amane-user 旁挂服务：先读文档和红线，跑 doctor --json 后按缺项逐个问我；AMANE_TOKEN 由我手动输入，不要回显、不要写日志；plan --json 先把完整计划给我确认，我同意后再 apply --yes，最后用 /api/user/ping 验证；任何一步失败就停下并报告，不要猜配置、不要改 Amane 本体、不要动反代和 DNS。
+```
+
+AI 助手能帮你：读懂环境变量表、判断该走 Docker 还是纯 Python、检查 Amane 的 data 目录与媒体路径映射（`MEDIA_PATH_MAP`）、生成 `.env`、执行 `doctor / plan / apply`、验证 `/api/user/ping`、失败时回滚。
+
+**仍要你自己动手的**：提供 Amane 的 data 目录与 API token（**不要让助手代填，也不要发进对话或日志**）、确认部署计划、批准容器 / 端口 / 反代等实际变更。token 只写进你本机的 `.env`。
+
+> **想自己配置、或要看完整的环境变量与两条部署路径 → 继续往下看。**
+
+---
+
 `server/server.py` 只用 Python 标准库（3.9+），**不需要 pip install**。它必须与 Amane **同机或共享同一个 data 目录**，因为要直读 `amane.db`。
 
 ## 环境变量

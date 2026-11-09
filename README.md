@@ -29,6 +29,8 @@
 
 **① 起旁挂服务**（二选一）
 
+> **不懂配置？** 把 [部署指南最前面的一句话](docs/DEPLOY.md) 发给你的 AI 助手，它会用 `tools/agentctl.py` 带你部署并验证 `/api/user/ping`；**希望自己配置的再往下看**。
+
 ```sh
 # Docker
 cp deploy/.env.example .env
@@ -42,8 +44,6 @@ python server/server.py          # 先设置同名环境变量，见 docs/DEPLOY
 验证：`curl http://<主机>:8770/api/user/ping` → `{"ok":true,...}`
 
 **② 装 App**
-
-> **不懂配置？** 直接把 [安装指南最前面的一句话](docs/BUILD_HAP.md) 发给你的 AI 助手，让它带你装；希望自己配置的再往下看。
 
 从 [Releases](../../releases) 下载 `Amane-2.1.0-unsigned.hap`（未签名），按 [docs/BUILD_HAP.md](docs/BUILD_HAP.md) 完成签名与安装：可以用 DevEco Studio + 你自己的华为账号自动签名后 USB 安装，**也可以直接用 Hokit、小白调试助手等提供侧载（测载）功能的工具**，不必安装 DevEco。也可以从 `app/` 源码自行构建。无论哪种方式，装进手机的都必须是已签名包。
 
@@ -77,9 +77,9 @@ tools/   脱敏自检 + agentctl（给 AI 助手用的部署 CLI）
 
 ## 给 AI 助手
 
-想让 agent 帮你自动部署？先读 [AGENTS.md](AGENTS.md)，再看 [docs/PROMPTS.md](docs/PROMPTS.md)，并让 agent 通过 `tools/agentctl.py` 的 `--json` 命令操作（**不要**让它自己猜配置或手写 compose）。
+**不懂怎么部署旁挂服务？** 把 [部署指南最前面的一句话 prompt](docs/DEPLOY.md) 发给你的 agent 即可：它会先读 [AGENTS.md](AGENTS.md) 的红线，跑 `tools/agentctl.py doctor --json` 按缺项问你，把 `plan --json` 的完整计划给你确认，再 `apply --yes` 并验证 `/api/user/ping`。**希望自己配置**就看 [docs/DEPLOY.md](docs/DEPLOY.md)；分任务提示词见 [docs/PROMPTS.md](docs/PROMPTS.md)。**不要**让 agent 猜配置、手写 compose 或代填 token。
 
-**装 App 也能交给它**：把 [安装指南最前面的一句话 prompt](docs/BUILD_HAP.md) 发过去即可，不懂签名的人照着做就行；希望自己配置的往下看三种安装方式。
+装 App 也可以让 agent 引导（[提示词](docs/PROMPTS.md)），但签名与安装仍需本人操作。
 
 ## 字幕来源说明
 

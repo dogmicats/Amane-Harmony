@@ -1,20 +1,20 @@
 # 给 AI 助手的提示词包
 
-这些提示词配合 `tools/agentctl.py` 使用（**「安装 HAP」一节除外**，它是引导式的，不涉及 CLI）。**核心原则：agent 只做调度，不做判断** —— 部署逻辑固化在 CLI 里，agent 调命令、解析 JSON、向用户确认，而不是手写 compose 或猜路径。
+**第一句就是部署旁挂服务的完整入口**（同一句也置顶在 [DEPLOY.md](DEPLOY.md)）。这些提示词配合 `tools/agentctl.py` 使用（**「安装 HAP」一节除外**，它是引导式的，不涉及 CLI）。**核心原则：agent 只做调度，不做判断** —— 部署逻辑固化在 CLI 里，agent 调命令、解析 JSON、向用户确认，而不是手写 compose 或猜路径。
 
 使用前先让 agent 读仓库根目录的 `AGENTS.md`（里面有不可放宽的红线）。
 
 ---
 
-## 安装 HAP（一句话，最省事）
+## 部署旁挂服务（一句话，最省事）
 
-不想自己看安装文档时，把这一句发给 AI 助手即可（同一句也放在 [BUILD_HAP.md](BUILD_HAP.md) **最前面**，方便直接复制）：
+不想自己看部署文档时，把这一句发给 AI 助手即可（同一句也放在 [DEPLOY.md](DEPLOY.md) **最前面**，方便直接复制）：
 
 ```
-请按 https://github.com/dogmicats/Amane-Harmony/blob/main/docs/BUILD_HAP.md 与 AGENTS.md，引导我把 Releases 里的 Amane-2.1.0-unsigned.hap 签名并安装到我的鸿蒙手机；先问我需要的信息，别猜配置、别代填账号密码，涉及签名和安装的操作先向我确认。
+请按 https://github.com/dogmicats/Amane-Harmony/blob/main/docs/DEPLOY.md 与 AGENTS.md，用 tools/agentctl.py 帮我在本机部署 amane-user 旁挂服务：先读文档和红线，跑 doctor --json 后按缺项逐个问我；AMANE_TOKEN 由我手动输入，不要回显、不要写日志；plan --json 先把完整计划给我确认，我同意后再 apply --yes，最后用 /api/user/ping 验证；任何一步失败就停下并报告，不要猜配置、不要改 Amane 本体、不要动反代和 DNS。
 ```
 
-这一条**不走 `agentctl.py`**：HAP 安装需要在手机上点「信任此设备」、登录华为账号，agent 只能做环境检查、给可直接执行的命令、逐步引导，不能也不应代替用户输入账号密码或托管 UDID。签名与安装动作一律先向用户确认。
+这一条走 `tools/agentctl.py`：**先 doctor 后 plan，计划经你确认才 apply**，最后验证 `/api/user/ping`。API token 由你手动输入，不要发进对话或日志；容器、端口、反代等实际变更一律先确认。下面两节是同一流程的分步版本，可按需补充细节。
 
 ## 部署（Docker）
 
@@ -35,6 +35,16 @@
 同上一节，但第 3 步改用 `plan --json --mode python`，第 4 步用
 `apply --yes --mode python`。不要创建容器，也不要改动 Amane 本体配置。
 ```
+
+## 安装 HAP（引导式，可选）
+
+装 App 与部署旁挂服务是两件事：先按上面几节把服务起好，才轮到 [BUILD_HAP.md](BUILD_HAP.md)。不想自己看安装文档时，可以把这一句发给 AI 助手：
+
+```
+请按 https://github.com/dogmicats/Amane-Harmony/blob/main/docs/BUILD_HAP.md 与 AGENTS.md，引导我把 Releases 里的 Amane-2.1.0-unsigned.hap 签名并安装到我的鸿蒙手机；先问我需要的信息，别猜配置、别代填账号密码，涉及签名和安装的操作先向我确认。
+```
+
+这一条**不走 `agentctl.py`**：HAP 安装需要在手机上点「信任此设备」、登录华为账号，agent 只能做环境检查、给可直接执行的命令、逐步引导，不能也不应代替用户输入账号密码或托管 UDID。签名与安装动作一律先向用户确认。
 
 ## 配置外网反代
 

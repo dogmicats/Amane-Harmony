@@ -4,12 +4,12 @@
 
 - README.md: 项目概览与三步上手
 - AGENTS.md: AI 助手必须遵守的红线与部署工作流
-- docs/DEPLOY.md: Docker 与纯 Python 两条部署路径
-- docs/BUILD_HAP.md: 未签名 HAP 的签名与安装（开头有给 AI 助手的一句话 prompt；DevEco / 命令行 / Hokit、小白调试助手等侧载工具）
+- docs/DEPLOY.md: 旁挂服务部署（Docker / 纯 Python；**开头置顶给 AI 助手的一句话 prompt**，是部署主入口）
+- docs/BUILD_HAP.md: 未签名 HAP 的签名与安装（DevEco / 命令行 / Hokit、小白调试助手等侧载工具）
 - docs/ANDROID.md: 非鸿蒙设备的替代方案、实验性兼容层现状与自行移植指引
 - docs/SUBTITLES.md: 四种字幕来源与预留接口说明
 - docs/COMPATIBILITY.md: 上游版本兼容矩阵与数据库依赖列
-- docs/PROMPTS.md: 分任务的 AI 助手提示词
+- docs/PROMPTS.md: 分任务的 AI 助手提示词（含一句话部署 prompt 与 HAP 安装引导）
 - docs/TROUBLESHOOTING.md: 故障排查
 - deploy/.env.example: 全部环境变量
 - tools/agentctl.py: 给 agent 用的幂等部署 CLI（--json）
