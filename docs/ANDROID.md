@@ -41,7 +41,7 @@
 这里的「移植」不是改 HAP，而是**另写一个客户端，直接调本项目的 HTTP 接口**。`server/` 是纯标准库 Python 服务，约 23 个 `/api/user/*` 端点 + `/img`，与操作系统无关；安卓 / iOS / 桌面 / Web 都能接。
 
 - 端点全集：`server/server.py` 里的 `ROUTES` 与 `server/subtitles.py` 的 `install()`；字段与依赖见 [COMPATIBILITY.md](COMPATIBILITY.md)、[SUBTITLES.md](SUBTITLES.md)、[DEPLOY.md](DEPLOY.md)。
-- 播放：安卓用 ExoPlayer / mpv-android 请求 `<user_base>/api/user/play/<source>/<id>?token=...`。鸿蒙端那个 `Authorization` 请求头被错误编码的坑只影响 `@mpv-ohos/mpv-arkts`，安卓端不受影响。
+- 播放：**优先用 `mpv-android` 的 libmpv 封装**——它和鸿蒙端是同一套播放行为，ASS/SSA 字幕、音轨切换、硬解都是现成的，请求 `<user_base>/api/user/play/<source>/<id>?token=...` 即可。ExoPlayer 也能播，但它不原生支持 ASS（要加 ffmpeg 扩展，特效仍然弱），字幕这块会明显更费劲。鸿蒙端那个 `Authorization` 被错误编码的坑只影响 `@mpv-ohos/mpv-arkts`，安卓端不受影响。
 - 字幕：服务端已把四种来源统一成 `subtitle_id`，取 `<user_base>/api/user/subtitle/<id>?token=...` 即可，见 [SUBTITLES.md](SUBTITLES.md)。
 - 建议：先写个能打通 `/api/user/ping` 与 `/api/user/home` 的小原型，再补播放；把端点与响应结构整理成机器可读契约（OpenAPI / JSON）能大幅降低维护成本，**欢迎提 PR 补 `docs/API.md`**。
 - 社区移植版请自行命名、自行发版；本项目不合并、不背书，也不与它的版本号绑定。可以在 Discussions 里互相链接。
@@ -53,10 +53,12 @@
 | 路线 | 做法 | 能复用什么 | 评价 |
 |---|---|---|---|
 | A. ArkUI-X 重新出包 | 用官方跨端框架把 ArkTS 编到 Android | 部分 UI / 业务代码 | 不推荐：第三方 ohpm HAR 与原生播放组件仍需重写，还要跟着框架的 API 覆盖度踩坑 |
-| B. 安卓原生重写（首选） | Kotlin/Compose + ExoPlayer 或 mpv-android | **服务端 100% 复用**，客户端重写 | 单人 + AI 辅助约数周可出 MVP，大头是播放页、字幕面板与真机适配；之后是长期双端维护 |
+| B. 安卓原生重写（首选） | Kotlin/Compose + **libmpv**（mpv-android 封装） | **服务端 100% 复用**，播放与字幕行为可照搬鸿蒙端 | AI 辅助约 **3–6 天**能出「能浏览、能播、能挂字幕」的粗糙版；再加 **1–2 周**到日常可用（设置、手势、错误处理、系统版本差异、签名分发）。前提：手边有安卓真机 |
 | C. Web / PWA | 在上游 Web UI 基础上接本项目接口 | 一套代码覆盖安卓 / iOS / PC | 播放格式与硬解受浏览器限制，但维护成本最低 |
 
-真正的成本不在「写出来」，而在**长期维护**：作者手边没有安卓真机，无法验证播放、字幕编码兼容与各种系统版本差异；多一个端就多一套构建、签名、发版与排障。因此**首发不做，也不承诺时间表**；更愿意把力气花在把 HTTP 契约写清楚上，让需要的人自己接。
+> **为什么鸿蒙端像是「一下午就出来了」？** 那 25 个 ArkTS 文件 / 约 4900 行是长期迭代的结果；一下午做的是**脱敏、字幕面板（约 130 行）、改包名与版本、构建发布**，不是从零写客户端。安卓端要重写的是这 4900 行的等价物 —— 不是把当天的增量再抄一遍。从零写一个鸿蒙客户端，同样不可能是一下午。
+
+真正的成本不在「写出来」，而在**验证与长期维护**：作者手边没有安卓真机，无法验证播放、字幕编码兼容与各种系统版本差异；多一个端就多一套构建、签名、发版与排障。因此**首发不做，也不承诺时间表**；更愿意把力气花在把 HTTP 契约写清楚上，让需要的人自己接。
 
 ## 后续真要出第二端，怎么同步更新
 
