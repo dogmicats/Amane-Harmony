@@ -18,6 +18,8 @@ export interface MediaItem {
   updated_at: string;
   position: number;
   duration: number;
+  /** 无码 / 破解 / 流出 / 中字，服务端汇总好直接给。 */
+  marks?: string[];
 }
 
 export interface MediaFile {
@@ -27,22 +29,31 @@ export interface MediaFile {
   duration: number;
   definition: string;
   mosaic: string;
+  has_subtitle_in_name: boolean;
+  has_external_subtitle: boolean;
   library_id: number;
 }
 
-/** 收藏自动入库队列里的一条待办（amane-user /api/user/ingest）。 */
-export interface IngestTask {
-  src_lib: number;
-  dst_lib: number;
-  status: string;
-  message: string;
-  attempts: number;
-  updated_at: string;
+/** 一个条目下的可播版本（amane-user /api/user/streams）。 */
+export interface StreamItem {
+  key: string;
+  file_id: number;
+  name: string;
+  size: number;
+  duration: number;
+  definition: string;
+  has_subtitle: boolean;
+  library: string;
+  content_type: string;
+  /** 浏览器口径的可解码性；客户端用 mpv，不可用项仍可尝试。 */
+  available: boolean;
+  detail: string;
 }
 
-export interface IngestList {
-  items: IngestTask[];
-  counts: Record<string, number>;
+export interface StreamList {
+  items: StreamItem[];
+  source: string;
+  metadata_id: number;
 }
 
 export interface ItemDetail {
@@ -65,8 +76,10 @@ export interface ItemDetail {
   duration: number;
   finished: boolean;
   files: MediaFile[];
+  /** 无码 / 破解 / 流出 / 中字，服务端按文件汇总，详情页头部直接画。 */
+  marks: string[];
   stills: string[];
-  ingest: IngestTask[];
+  comments: CommentItem[];
 }
 
 export interface HomeRow {
@@ -122,6 +135,8 @@ export interface HistoryItem {
   duration: number;
   played_at: string;
   finished: boolean;
+  /** 观看记录同样是影片列表，标记必须带上。 */
+  marks?: string[];
 }
 
 export interface HistoryList {
@@ -138,6 +153,16 @@ export interface StatsInfo {
 
 export interface DetailParams {
   id: number;
+  /** 从盲盒点进来的那张剧照；详情页用它做「从中心放大铺满 → 扩散淡出」的转场。 */
+  heroUrl?: string;
+}
+
+/** amane 的「评价」：网友推荐 / 官方评价摘录。 */
+export interface CommentItem {
+  id: number;
+  body: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface PlayerParams {
@@ -145,6 +170,10 @@ export interface PlayerParams {
   number: string;
   title: string;
   position: number;
+  /** 指定版本：/api/user/streams 返回的 key（f<文件id>）；缺省表示让上游自己挑。 */
+  fileKey?: string;
+  /** 版本显示名，播放页顶栏用。 */
+  fileName?: string;
 }
 
 export interface BrowseParams {

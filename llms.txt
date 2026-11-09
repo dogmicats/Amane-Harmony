@@ -2,7 +2,8 @@
 
 > 鸿蒙原生客户端 + 纯标准库旁挂服务，为自建 Amane 媒体库提供手机端浏览/收藏/播放/外挂字幕。非官方第三方项目，MIT。
 
-- README.md: 项目概览与三步上手
+- README.md: 项目概览、功能展示（含 docs/screenshots）与三步上手
+- server/extensions.json: 服务端扩展清单（actors / facets / subtitles），核心只留 ExtensionHost
 - AGENTS.md: AI 助手必须遵守的红线与部署工作流
 - docs/DEPLOY.md: 旁挂服务部署（Docker / 纯 Python；**目标机须与 Amane 同机或共享 data 目录**；开头置顶给 AI 助手的一句话 prompt，是部署主入口）
 - docs/BUILD_HAP.md: 未签名 HAP 的签名与安装（DevEco / 命令行 / Hokit、小白调试助手等侧载工具）

@@ -1,4 +1,7 @@
-import { HistoryItem, HomeData, HomeRow, IngestTask, ItemDetail, LibraryInfo, MediaFile, MediaItem } from './Types';
+import {
+  CommentItem, HistoryItem, HomeData, HomeRow, ItemDetail, LibraryInfo, MediaFile, MediaItem,
+  StreamItem, StreamList
+} from './Types';
 
 /**
  * 服务端字段有可能是 null / 缺失（scratch 数据、老条目），
@@ -57,6 +60,9 @@ export function safeItem(raw: MediaItem): MediaItem {
   item.updated_at = str(raw.updated_at);
   item.position = num(raw.position);
   item.duration = num(raw.duration);
+  // 服务端已经算好「无码/破解/流出/中字」，这里必须原样带过来，
+  // 否则卡片拿到了数据也不显示（之前收藏页就没标签）。
+  item.marks = Array.isArray(raw.marks) ? raw.marks : [];
   return item;
 }
 
@@ -72,7 +78,10 @@ export function safeItems(list: MediaItem[]): MediaItem[] {
 }
 
 export function safeFile(raw: MediaFile): MediaFile {
-  const file: MediaFile = { id: 0, path: '', size: 0, duration: 0, definition: '', mosaic: '', library_id: 0 };
+  const file: MediaFile = {
+    id: 0, path: '', size: 0, duration: 0, definition: '', mosaic: '',
+    has_subtitle_in_name: false, has_external_subtitle: false, library_id: 0
+  };
   if (raw === undefined || raw === null) {
     return file;
   }
@@ -82,43 +91,18 @@ export function safeFile(raw: MediaFile): MediaFile {
   file.duration = num(raw.duration);
   file.definition = str(raw.definition);
   file.mosaic = str(raw.mosaic);
+  file.has_subtitle_in_name = Number(raw.has_subtitle_in_name) === 1;
+  file.has_external_subtitle = Number(raw.has_external_subtitle) === 1;
   file.library_id = Math.trunc(num(raw.library_id));
   return file;
-}
-
-/** 入库队列条目：message 在库里允许为 NULL，status 也可能缺，全部兜底。 */
-export function safeIngest(raw: IngestTask): IngestTask {
-  const t: IngestTask = {
-    src_lib: 0, dst_lib: 0, status: '', message: '', attempts: 0, updated_at: ''
-  };
-  if (raw === undefined || raw === null) {
-    return t;
-  }
-  t.src_lib = Math.trunc(num(raw.src_lib));
-  t.dst_lib = Math.trunc(num(raw.dst_lib));
-  t.status = str(raw.status);
-  t.message = str(raw.message);
-  t.attempts = Math.trunc(num(raw.attempts));
-  t.updated_at = str(raw.updated_at);
-  return t;
-}
-
-export function safeIngestList(raw: IngestTask[]): IngestTask[] {
-  if (raw === undefined || raw === null || !Array.isArray(raw)) {
-    return [];
-  }
-  const out: IngestTask[] = [];
-  for (let i = 0; i < raw.length; i++) {
-    out.push(safeIngest(raw[i]));
-  }
-  return out;
 }
 
 export function safeDetail(raw: ItemDetail): ItemDetail {
   const d: ItemDetail = {
     id: 0, number: '', title: '', plot: '', actors: [], tags: [], studio: '', series: '',
     release: '', runtime: 0, content_type: '', score: 0, poster: '', fanart: '',
-    favorite: false, position: 0, duration: 0, finished: false, files: [], stills: [], ingest: []
+    favorite: false, position: 0, duration: 0, finished: false, files: [], marks: [], stills: [],
+    comments: []
   };
   if (raw === undefined || raw === null) {
     return d;
@@ -149,6 +133,24 @@ export function safeDetail(raw: ItemDetail): ItemDetail {
     }
   }
   d.files = files;
+  d.marks = Array.isArray(raw.marks) ? raw.marks : [];
+
+  const comments: CommentItem[] = [];
+  if (raw.comments !== undefined && raw.comments !== null && Array.isArray(raw.comments)) {
+    for (let i = 0; i < raw.comments.length; i++) {
+      const c: CommentItem = raw.comments[i];
+      if (c === undefined || c === null) {
+        continue;
+      }
+      comments.push({
+        id: Math.trunc(num(c.id)),
+        body: str(c.body),
+        created_at: str(c.created_at),
+        updated_at: str(c.updated_at)
+      });
+    }
+  }
+  d.comments = comments;
 
   const stills: string[] = [];
   if (raw.stills !== undefined && raw.stills !== null && Array.isArray(raw.stills)) {
@@ -159,7 +161,6 @@ export function safeDetail(raw: ItemDetail): ItemDetail {
     }
   }
   d.stills = stills;
-  d.ingest = safeIngestList(raw.ingest);
   return d;
 }
 
@@ -182,7 +183,8 @@ export function safeHistory(list: HistoryItem[]): HistoryItem[] {
       position: num(raw.position),
       duration: num(raw.duration),
       played_at: str(raw.played_at),
-      finished: raw.finished === true
+      finished: raw.finished === true,
+      marks: Array.isArray(raw.marks) ? raw.marks : []
     };
     out.push(item);
   }
@@ -232,4 +234,31 @@ export function safeHome(raw: HomeData): HomeData {  const home: HomeData = { he
   }
   home.libraries = libs;
   return home;
+}
+
+export function safeStreams(raw: StreamList): StreamItem[] {
+  const out: StreamItem[] = [];
+  if (raw === undefined || raw === null || !Array.isArray(raw.items)) {
+    return out;
+  }
+  for (let i = 0; i < raw.items.length; i++) {
+    const s: StreamItem = raw.items[i];
+    if (s === undefined || s === null) {
+      continue;
+    }
+    out.push({
+      key: str(s.key),
+      file_id: Math.trunc(num(s.file_id)),
+      name: str(s.name),
+      size: Math.trunc(num(s.size)),
+      duration: Number(s.duration) || 0,
+      definition: str(s.definition),
+      has_subtitle: s.has_subtitle === true,
+      library: str(s.library),
+      content_type: str(s.content_type),
+      available: s.available === true,
+      detail: str(s.detail)
+    });
+  }
+  return out;
 }

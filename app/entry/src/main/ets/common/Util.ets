@@ -1,3 +1,5 @@
+import { MediaItem } from './Types';
+
 /** 展示用的格式化函数。 */
 
 export function clock(seconds: number): string {
@@ -67,4 +69,35 @@ export function scoreText(score: number): string {
     return '';
   }
   return score.toFixed(1);
+}
+
+/**
+ * 把「只有列表字段」的条目补成完整 MediaItem，好让各页面共用同一个 PosterCard。
+ * 分类页 / 演员作品页 / 共演结果都只有 id/number/title/release/poster/score，
+ * 其余字段给安全默认值即可（PosterCard 只读这几个）。
+ */
+export function posterItem(
+  id: number, number: string, title: string, release: string, poster: string, score: number,
+  marks: string[] = []
+): MediaItem {
+  const item: MediaItem = {
+    id: id, number: number, title: title, plot: '', actors: [], tags: [], studio: '', series: '',
+    release: release, runtime: 0, content_type: '', score: score, poster: poster, fanart: '',
+    updated_at: '', position: 0, duration: 0, marks: marks
+  };
+  return item;
+}
+
+/** 标记配色：破解粉 / 流出橙 / 无码青 / 中字蓝，与详情页保持一致。 */
+export function markColor(label: string): string {
+  if (label === '破解') {
+    return '#FF6B8A';
+  }
+  if (label === '流出') {
+    return '#FFB454';
+  }
+  if (label === '无码') {
+    return '#7FE3C0';
+  }
+  return '#8FC6FF';
 }

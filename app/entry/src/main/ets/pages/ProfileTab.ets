@@ -150,6 +150,9 @@ export struct ProfileTab {
           this.MenuRow('⚙', '连接设置', '', 'server', () => {
             router.pushUrl({ url: 'pages/SettingsPage' });
           })
+          this.MenuRow('▷', '播放器', '硬解、缓冲、拖动响应', 'static', () => {
+            router.pushUrl({ url: 'pages/PlayerSettingsPage' });
+          })
         }
         .width('100%')
 

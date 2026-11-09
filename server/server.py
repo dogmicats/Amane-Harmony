@@ -23,9 +23,10 @@
   AMANE_TOKEN       不给则读 {AMANE_DATA}/token
   IMAGE_TOKEN       不给则读 {AMANE_DATA}/image_token（图片代理鉴权用）
   PUBLIC_AMANE_URL  写进图片 URL 的对外地址（可选，不填则由客户端自己拼）
-  MEDIA_PATH_MAP    amane 容器内路径到目标机路径的映射，如 /media2=/mnt/media2,/media=/mnt/media
+  MEDIA_PATH_MAP    amane 内路径到本服务可见路径的映射，如 /media2=/mnt/media2,/media=/mnt/media
   IMG_HOST_ALLOW_EXTRA  追加允许代理的图片主机（逗号分隔）
-  SUBTITLE_CACHE   字幕缓存目录，默认 {DATA_DIR}/subtitles
+  IMG_REFERER       抓取外链图片时携带的 Referer（可选）
+  EXTENSIONS_MANIFEST   扩展清单路径，默认 /app/extensions.json
 """
 
 from __future__ import annotations
@@ -49,11 +50,23 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, build_opener, ProxyHandler
 
-VERSION = "2.1.1"
+VERSION = "2.2.0"
 
 AMANE_BASE = os.environ.get("AMANE_BASE", "http://127.0.0.1:8000").rstrip("/")
 AMANE_DATA = os.environ.get("AMANE_DATA", "/amane-data")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
+PHOTO_DIR = os.environ.get("PHOTO_DIR") or os.path.join(DATA_DIR, "photos")
+
+
+def save_photo(name: str, blob: bytes) -> str:
+    """把上传的写真图落到 PHOTO_DIR，返回相对访问路径。"""
+    if not re.fullmatch(r"[0-9a-f]{8,64}\.(?:jpg|png|webp|gif)", name):
+        raise ValueError("非法的图片文件名")
+    os.makedirs(PHOTO_DIR, exist_ok=True)
+    path = os.path.join(PHOTO_DIR, name)
+    with open(path, "wb") as fh:
+        fh.write(blob)
+    return f"/api/user/photo/{name}"
 PORT = int(os.environ.get("PORT", "8770"))
 PUBLIC_AMANE_URL = os.environ.get("PUBLIC_AMANE_URL", "").rstrip("/")
 
@@ -77,10 +90,10 @@ def _read_secret(name: str) -> str:
 AMANE_TOKEN = _read_secret("AMANE_TOKEN")
 IMAGE_TOKEN = _read_secret("IMAGE_TOKEN")
 
-# 外链图片只允许这些主机，避免把这个端口变成任意 URL 代理
-# 外链图片主机白名单。公开版只保留通用 CDN 后缀，媒体站域名由部署者按需追加：
-#   IMG_HOST_ALLOW_EXTRA=your-cdn.example,your-image-host.example
-_IMG_HOST_BASE = ["githubusercontent.com", "images", "cdn", "img", "static"]
+# 外链图片主机白名单（防 SSRF）。默认只放通用 CDN 后缀，
+# 具体海报站点由部署者按自己的刮削来源追加：
+#   IMG_HOST_ALLOW_EXTRA=poster-cdn.example,image-host.example
+_IMG_HOST_BASE = ["githubusercontent.com", "jsdelivr.net", "images", "cdn", "img", "static"]
 IMG_HOST_ALLOW = tuple(_IMG_HOST_BASE + [
     h.strip() for h in os.environ.get("IMG_HOST_ALLOW_EXTRA", "").split(",") if h.strip()
 ])
@@ -153,6 +166,10 @@ class ExtensionHost:
             route=self.route, add_ddl=self.add_ddl, add_init=self.add_init, hook=self.hook,
             user_db=user_db, amane_db=amane_db, log=log, now_iso=now_iso,
             os=os, json=json, datetime=datetime, timedelta=timedelta, timezone=timezone,
+            # 通用上游能力：扩展不必自己读凭据文件 / 拼图片代理 URL
+            amane_get=amane_get, public_image=public_image,
+            # 上传类扩展要把文件落盘，统一走核心，别各写一套路径规则
+            save_photo=save_photo, photo_dir=PHOTO_DIR,
         )
         base = os.path.dirname(EXTENSIONS_MANIFEST)
         for item in manifest.get("extensions", []):
@@ -349,6 +366,68 @@ def pick_fanart(row: sqlite3.Row) -> str:
     return pick_poster(row)
 
 
+def marks_of(conn: sqlite3.Connection, ids: list) -> dict:
+    """一次查出这些影片的媒体标记：无码 / 破解 / 流出 / 中字。
+
+    列表页（媒体库、收藏、首页）都要显示，所以统一在这里算，
+    避免每个接口各写一遍 SQL。注意库里存的是大写枚举。
+    """
+    clean = [int(i) for i in ids if i]
+    if not clean:
+        return {}
+    marks: dict[int, list[str]] = {}
+    try:
+        ph = ",".join("?" * len(clean))
+        rows = conn.execute(
+            "SELECT metadata_id, "
+            "MAX(CASE WHEN UPPER(mosaic)='CRACKED' THEN 1 ELSE 0 END) c, "
+            "MAX(CASE WHEN UPPER(mosaic)='LEAKED' THEN 1 ELSE 0 END) l, "
+            "MAX(CASE WHEN UPPER(mosaic)='UNCENSORED' THEN 1 ELSE 0 END) u, "
+            "MAX(CASE WHEN has_subtitle_in_name=1 OR has_external_subtitle=1 "
+            "THEN 1 ELSE 0 END) s "
+            "FROM media_files WHERE metadata_id IN (" + ph + ") GROUP BY metadata_id",
+            clean,
+        ).fetchall()
+    except sqlite3.Error as exc:
+        log(f"WARN marks_of: {exc}")
+        return {}
+    for r in rows:
+        labels: list[str] = []
+        if r["u"]:
+            labels.append("无码")
+        if r["c"]:
+            labels.append("破解")
+        if r["l"]:
+            labels.append("流出")
+        if r["s"]:
+            labels.append("中字")
+        if labels:
+            marks[r[0]] = labels
+    return marks
+
+
+def attach_marks(conn: sqlite3.Connection, items: list) -> list:
+    """就地给列表补 marks 字段（没有标记的给空数组，前端不必判空）。"""
+    got = marks_of(conn, [it.get("id") for it in items if isinstance(it, dict)])
+    for it in items:
+        if isinstance(it, dict):
+            it["marks"] = got.get(it.get("id"), [])
+    return items
+
+
+def attach_marks_auto(items: list) -> list:
+    """没有现成连接时用它（首页聚合、历史记录这些跨库查询点）。
+
+    影片标记是**所有影片列表页**的必备字段：媒体库、首页、收藏、
+    观看记录、标签/系列/制片厂/导演、演员作品、共演结果，一个都不能漏。
+    规范见 docs/UI_RULES.md。
+    """
+    if not items:
+        return items
+    with amane_db() as conn:
+        return attach_marks(conn, items)
+
+
 def item_of(row: sqlite3.Row) -> dict:
     scores = _json_dict(row["scores"])
     score = 0.0
@@ -408,7 +487,9 @@ def fetch_by_ids(ids: list[int]) -> list[dict]:
     with amane_db() as conn:
         rows = conn.execute(f"SELECT {META_COLUMNS} FROM metadata m WHERE m.id IN ({marks})", ids).fetchall()
     by_id = {r["id"]: item_of(r) for r in rows}
-    return [by_id[i] for i in ids if i in by_id]
+    out = [by_id[i] for i in ids if i in by_id]
+    # 观看记录等页面直接吃这里的字段，标记必须一起给
+    return attach_marks_auto(out)
 
 
 def attach_progress(items: list[dict]) -> list[dict]:
@@ -457,7 +538,7 @@ def build_home() -> dict:
             if items and lib["count"] >= 4:
                 rows_out.append({"kind": "library", "id": f"lib-{lib['id']}", "title": lib["name"],
                                  "library_id": lib["id"], "count": lib["count"],
-                                 "items": attach_progress(items)})
+                                 "items": attach_marks(conn, attach_progress(items))})
 
     recommend = build_recommend(20)
     hero = [x for x in recommend if x["fanart"]][:6] or recommend[:4]
@@ -494,7 +575,7 @@ def build_recommend(limit: int = 20) -> list[dict]:
     libs = [lib for lib in libraries() if lib["count"] >= 30]
     if not libs:
         with amane_db() as conn:
-            return query_meta(conn, "", (), "m.updated_at DESC", limit)
+            return attach_marks(conn, attach_progress(query_meta(conn, "", (), "m.updated_at DESC", limit)))
     pool: list[dict] = []
     with amane_db() as conn:
         for lib in libs:
@@ -515,7 +596,7 @@ def build_recommend(limit: int = 20) -> list[dict]:
         uniq.append(item)
     rng = random.Random(date.today().isoformat())
     rng.shuffle(uniq)
-    return attach_progress(uniq[:limit])
+    return attach_marks_auto(attach_progress(uniq[:limit]))
 
 
 def cached_home() -> dict:
@@ -557,6 +638,39 @@ def host_allowed(url: str) -> bool:
     return ok
 
 
+# --------------------------------------------------------------------------- #
+# 扩展可复用的通用能力
+#
+# 核心只提供「怎么安全地去上游取数、怎么把外链图片变成客户端能加载的 URL」，
+# 不认识任何具体扩展。扩展由 ExtensionHost.load() 注入这两个函数，
+# 因此不必自己读 /amane-data/token，也不会和核心的白名单判断产生分叉。
+# --------------------------------------------------------------------------- #
+
+def amane_get(path: str, params: dict | None = None, timeout: int = 12) -> dict:
+    """带 Bearer 向 amane 上游请求 JSON；供需要代理上游数据的扩展复用。"""
+    from urllib.parse import urlencode
+    url = AMANE_BASE + path
+    if params:
+        clean = {k: v for k, v in params.items() if v is not None and v != ""}
+        url += "?" + urlencode(clean, doseq=True)
+    req = Request(url, headers={"Authorization": f"Bearer {AMANE_TOKEN}"})
+    with _opener.open(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def public_image(url: str) -> str:
+    """外链图片 → /img?b=<base64url>&t=...；非白名单 host 直接丢弃。
+
+    ArkUI 的 Image 会对 URL 里的 % 做二次编码，所以外链一律不能原样下发，
+    由这里统一转成核心图片代理可识别的形式。
+    """
+    if not isinstance(url, str) or not url.startswith("http"):
+        return ""
+    if not host_allowed(url):
+        return ""
+    return _img_proxy(url)
+
+
 def serve_image(url: str) -> tuple[bytes, str]:
     os.makedirs(IMAGE_CACHE, exist_ok=True)
     digest = hashlib.sha1(url.encode("utf-8")).hexdigest()
@@ -571,7 +685,7 @@ def serve_image(url: str) -> tuple[bytes, str]:
         raise ValueError("host not allowed")
     req = Request(url, headers={
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
-        "Referer": "https://www.javbus.com/",
+        "Referer": os.environ.get("IMG_REFERER", ""),
         "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
     })
     with _opener.open(req, timeout=20) as resp:
@@ -596,15 +710,6 @@ def serve_image(url: str) -> tuple[bytes, str]:
 # --------------------------------------------------------------------------- #
 
 ROUTES = []
-
-# -- 字幕（独立模块，统一 subtitle_id 抽象）-------------------------------- #
-# 在线字幕源预留接口：subtitle_providers/registry.py 的注册表为空，
-# 当前不实现、不启用任何在线源，也不接受任何第三方凭据。
-try:
-    from subtitles import install as _install_subtitles
-    _install_subtitles(ROUTES, AMANE_DB, DATA_DIR, os.environ.get("MEDIA_PATH_MAP", ""))
-except Exception as _sub_exc:  # noqa: BLE001
-    log(f"字幕模块加载失败（其余功能不受影响）: {_sub_exc}")
 
 
 def route(method: str, pattern: str):
@@ -653,7 +758,7 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             return {}
-        if length <= 0 or length > 1024 * 1024:
+        if length <= 0 or length > 16 * 1024 * 1024:
             return {}
         raw = self.rfile.read(length)
         try:
@@ -754,18 +859,115 @@ class Handler(BaseHTTPRequestHandler):
         "ETag", "Last-Modified", "Cache-Control",
     )
 
+    @route("GET", r"/api/user/photo/([0-9a-f]{8,64}\.(?:jpg|png|webp|gif))")
+    @route("HEAD", r"/api/user/photo/([0-9a-f]{8,64}\.(?:jpg|png|webp|gif))")
+    def photo(self, query: dict, name: str) -> None:
+        """写真库上传的本地图片（自家文件，不走图片白名单）。"""
+        path = os.path.join(PHOTO_DIR, name)
+        if not os.path.isfile(path):
+            return self._error(404, "图片不存在")
+        try:
+            with open(path, "rb") as fh:
+                blob = fh.read()
+        except OSError as exc:
+            return self._error(500, str(exc))
+        ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(blob)))
+        self.send_header("Cache-Control", "public, max-age=604800")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(blob)
+
+    @route("GET", r"/api/user/streams/([^/]+)/(\d+)")
+    def streams(self, query: dict, source: str, mid: str) -> None:
+        """列出该条目在这个播放源上的所有流，并补上本地文件信息。
+
+        一个元数据下挂多个版本（不同分辨率、正片/分段、网盘与本地各一份）是常态。
+        amane 的流 key 形如 `f<media_file_id>`，用它回查 media_files 就能给出
+        「文件名 / 分辨率 / 体积 / 时长 / 字幕 / 所在库」，客户端据此让用户选版本。
+        `available` 是**浏览器口径**（WMV 之类会被标 false），但客户端用 mpv，
+        所以不可用项照样返回、只排在后面，由用户自己决定。
+        """
+        source = source[:64]
+        try:
+            data = amane_get(f"/api/playback/{source}/{int(mid)}/streams")
+        except Exception as exc:  # noqa: BLE001
+            return self._error(502, f"上游播放源不可用: {exc}")
+        items = [x for x in (data.get("items") or []) if isinstance(x, dict)]
+
+        ids: list[int] = []
+        for it in items:
+            key = str(it.get("key") or "")
+            if key[:1] == "f" and key[1:].isdigit():
+                ids.append(int(key[1:]))
+        info: dict[int, sqlite3.Row] = {}
+        libs: dict[int, str] = {}
+        if ids:
+            ph = ",".join("?" * len(ids))
+            with amane_db() as conn:
+                for r in conn.execute(
+                    "SELECT id, path, size, duration, definition, library_id, "
+                    "has_subtitle_in_name, has_external_subtitle FROM media_files "
+                    f"WHERE id IN ({ph})",
+                    ids,
+                ):
+                    info[r["id"]] = r
+                for r in conn.execute("SELECT id, name FROM libraries"):
+                    libs[r["id"]] = r["name"] or ""
+
+        out: list[dict] = []
+        for it in items:
+            key = str(it.get("key") or "")
+            fid = int(key[1:]) if key[:1] == "f" and key[1:].isdigit() else 0
+            row = info.get(fid)
+            name = str(it.get("name") or "")
+            # 上游 name 形如「本机文件 · XXX.mkv」，去掉前缀只留文件名
+            base = name.split(" · ")[-1].split("/")[-1] or name
+            try:
+                size = int(row["size"] or 0) if row is not None else 0
+            except (TypeError, ValueError):
+                size = 0
+            try:
+                duration = round(float(row["duration"] or 0), 1) if row is not None else 0
+            except (TypeError, ValueError):
+                duration = 0
+            out.append({
+                "key": key,
+                "file_id": fid,
+                "name": base,
+                "size": size,
+                "duration": duration,
+                "definition": (row["definition"] or "") if row is not None else "",
+                "has_subtitle": bool(
+                    row is not None and (row["has_subtitle_in_name"] or row["has_external_subtitle"])
+                ),
+                "library": libs.get(row["library_id"], "") if row is not None else "",
+                "content_type": str(it.get("content_type") or ""),
+                "available": bool(it.get("available")),
+                "detail": str(it.get("detail") or ""),
+            })
+        out.sort(key=lambda x: (0 if x["available"] else 1, -x["size"]))
+        self._json({"items": out, "source": source, "metadata_id": int(mid)})
+
     @route("GET", r"/api/user/play/([^/]+)/(\d+)")
     @route("HEAD", r"/api/user/play/([^/]+)/(\d+)")
     def play(self, query: dict, source: str, mid: str) -> None:
         head_only: bool = self.command == "HEAD"
-        upstream: str = f"{AMANE_BASE}/api/playback/{source}/{mid}"
+        # ?key=f<文件id> 指定版本；不带 key 时仍交给上游自己挑一条
+        key = (query.get("key") or [""])[0]
+        suffix = ""
+        if re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", key):
+            suffix = f"/streams/{key}"
+        upstream: str = f"{AMANE_BASE}/api/playback/{source}/{mid}{suffix}"
         req_headers: dict[str, str] = {"Authorization": f"Bearer {AMANE_TOKEN}"}
         for key in ("Range", "If-Range", "If-Modified-Since", "If-None-Match"):
             val = self.headers.get(key)
             if val:
                 req_headers[key] = val
 
-        log(f"play {source}/{mid} range={self.headers.get('Range', '-')}")
+        log(f"play {source}/{mid}{suffix} range={self.headers.get('Range', '-')}")
         resp = None
         try:
             resp = _opener.open(Request(upstream, headers=req_headers), timeout=180)
@@ -888,9 +1090,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, "library_id 必须是整数")
 
         if search:
-            where.append("(m.number LIKE ? OR m.title LIKE ? OR m.actors LIKE ? OR m.series LIKE ?)")
-            like = f"%{search}%"
-            params = (*params, like, like, like, like)
+            # 模糊搜索：按空格 / 连字符拆词，每个词都要命中（AND）。
+            # number 额外去掉连字符再比一次，这样 "ipzz932" 能搜到 "IPZZ-932"，
+            # "ipzz 932" 拆成两个词也照样命中。
+            tokens = [x for x in re.split(r"[\s\-_/]+", search) if x][:6]
+            for tok in tokens:
+                where.append(
+                    "(m.number LIKE ? OR REPLACE(m.number, '-', '') LIKE ? "
+                    "OR m.title LIKE ? OR m.actors LIKE ? OR m.series LIKE ?)")
+                like = f"%{tok}%"
+                params = (*params, like, like, like, like, like)
 
         # 马赛克：CRACKED / LEAKED / NONE（原版无标记）
         mosaic = arg("mosaic").upper()
@@ -945,6 +1154,7 @@ class Handler(BaseHTTPRequestHandler):
         clause = " AND ".join(where)
         with amane_db() as conn:
             items = query_meta(conn, clause, params, order, limit, offset)
+            attach_marks(conn, items)
             total = count_meta(conn, clause, params)
         self._json({
             "items": attach_progress(items),
@@ -971,10 +1181,39 @@ class Handler(BaseHTTPRequestHandler):
             data["stills"] = stills
             files = conn.execute(
                 "SELECT id, path, size, duration, definition, mosaic, has_subtitle_in_name, "
-                "has_external_subtitle, library_id, oshash FROM media_files WHERE metadata_id = ? ORDER BY id",
+                "has_external_subtitle, library_id FROM media_files WHERE metadata_id = ? ORDER BY id",
                 (int(metadata_id),),
             ).fetchall()
         data["files"] = [dict(f) for f in files]
+        # 详情页标记也在服务端算：客户端不必再从 files 里各拼一遍，
+        # 一个数据源 = 所有详情页天然一致（见 docs/UI_RULES.md）。
+        labels: list[str] = []
+        mosaics = {str((f["mosaic"] or "")).upper() for f in files}
+        if "UNCENSORED" in mosaics:
+            labels.append("无码")
+        if "CRACKED" in mosaics:
+            labels.append("破解")
+        if "LEAKED" in mosaics:
+            labels.append("流出")
+        if any(f["has_subtitle_in_name"] or f["has_external_subtitle"] for f in files):
+            labels.append("中字")
+        data["marks"] = labels
+        with amane_db() as conn:
+            # amane 的「评价」：网友推荐 / 讨论帖引用，早于 updated_at 的是原帖
+            rows = conn.execute(
+                "SELECT id, body, created_at, updated_at FROM comments "
+                "WHERE metadata_id = ? ORDER BY created_at DESC LIMIT 40",
+                (int(metadata_id),),
+            ).fetchall()
+        data["comments"] = [
+            {
+                "id": r["id"],
+                "body": r["body"] or "",
+                "created_at": r["created_at"] or "",
+                "updated_at": r["updated_at"] or "",
+            }
+            for r in rows
+        ]
         with user_db() as conn:
             fav = conn.execute("SELECT 1 FROM favorites WHERE metadata_id = ?", (int(metadata_id),)).fetchone()
             hist = conn.execute(
@@ -1017,7 +1256,10 @@ class Handler(BaseHTTPRequestHandler):
                 (max(1, min(limit, 200)), max(0, offset)),
             )]
             total = conn.execute("SELECT COUNT(*) FROM favorites").fetchone()[0]
-        self._json({"items": fetch_by_ids(ids), "total": total})
+        items = fetch_by_ids(ids)
+        with amane_db() as conn:
+            attach_marks(conn, items)
+        self._json({"items": items, "total": total})
 
     @route("GET", r"/api/user/favorites/ids")
     def favorite_ids(self, query, *_) -> None:

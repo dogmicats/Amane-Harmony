@@ -5,6 +5,7 @@ import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { BrowseResult, DetailParams, MediaItem } from '../common/Types';
 import { safeItems } from '../common/Safe';
+import { PosterCard } from '../view/PosterCard';
 
 @Entry
 @Component
@@ -118,30 +119,14 @@ struct SearchPage {
         Grid() {
           ForEach(this.items, (item: MediaItem) => {
             GridItem() {
-              Column() {
-                Image(Store.I.img(item.poster))
-                  .width('100%')
-                  .aspectRatio(0.704)
-                  .objectFit(ImageFit.Cover)
-                  .borderRadius(10)
-                  .backgroundColor(Theme.CARD)
-                Text(item.number)
-                  .fontSize(12)
-                  .fontColor(Theme.TEXT)
-                  .maxLines(1)
-                  .width('100%')
-                  .margin({ top: 5 })
-                Text(item.title)
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .width('100%')
-              }
-              .width('100%')
-              .onClick(() => {
-                const params: DetailParams = { id: item.id };
-                router.pushUrl({ url: 'pages/DetailPage', params: params });
+              // 与媒体库 / 首页 / 演员作品共用同一张海报卡，标记不再各页漏做
+              PosterCard({
+                item: item,
+                fluid: true,
+                onTap: () => {
+                  const params: DetailParams = { id: item.id };
+                  router.pushUrl({ url: 'pages/DetailPage', params: params });
+                }
               })
             }
           }, (item: MediaItem) => `s-${item.id}`)

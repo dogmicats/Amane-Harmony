@@ -21,7 +21,7 @@
 | … 不存在 | 映射后的路径在旁挂服务里看不到 | compose 加只读卷 `- /your/media:/mnt/media2:ro`，再 `docker exec` 进容器 `ls /mnt/media2` 确认 |
 | … 不可读（Permission denied） | 容器内用户没有读权限 | 检查宿主机目录权限；必要时调整容器用户或 `chmod o+r` |
 | 同目录没有与视频同名的字幕 | 命名不符合规则 | 必须是 `<视频名>.srt` 或 `<视频名>.<语言>.srt`；`xxx.zh-CN.ass`、`xxx.chs.srt` 都行，`字幕.srt` 不行 |
-| 面板里没有字幕入口 / 提示 404 | 服务端不是 2.1.1+（旧版没有字幕端点） | 升级旁挂服务：`curl .../api/user/subtitles/providers` 应返回 `{"providers":[]}`，而不是 404 |
+| 面板里没有字幕入口 / 提示 404 | 服务端不是 2.2.0+（旧版没有字幕端点） | 升级旁挂服务：`curl .../api/user/subtitles/providers` 应返回 `{"providers":[]}`，而不是 404 |
 
 > `MEDIA_ROOT` 只是 compose 挂载卷的宿主路径占位，**不参与字幕路径解析**；真正生效的是 `MEDIA_PATH_MAP`。不配它也能用手机导入和手动 URL，只是看不到同目录字幕。
 
@@ -48,7 +48,7 @@
 
 ## 在线字幕搜索：**未启用**
 
-`server/subtitle_providers/` 只有一个抽象接口（`base.py`）和一个**空的注册表**（`registry.py`）。`GET /api/user/subtitles/providers` 永远返回 `[]`。
+`server/ext/subtitles/server_ext.py` 的 `providers` 端点恒返回 `{"providers": []}`：在线源既未实现，也没有 UI 入口。
 
 这是刻意保留的扩展点，不是未完成的功能：主流在线字幕服务需要每个用户自己的 API key，且有严格的每日配额；把共享 key 内置进公开发布版既会瞬间耗尽，也违反服务条款。等有稳定、合规、无需共享凭据的字幕来源时，只需往注册表里加一个 provider，客户端一行都不用改。
 

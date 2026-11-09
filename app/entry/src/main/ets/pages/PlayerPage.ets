@@ -8,6 +8,7 @@ import { PlayerParams } from '../common/Types';
 import { clock } from '../common/Util';
 import { common } from '@kit.AbilityKit';
 import { SubtitleClient, SubtitleItem, LocalCandidate } from '../common/Subtitles';
+import { PlayerPrefs } from '../common/PlayerPrefs';
 
 const SPEEDS: number[] = [0.75, 1.0, 1.25, 1.5, 2.0];
 
@@ -24,6 +25,8 @@ struct PlayerPage {
   private metaId: number = 0;
   private metaNumber: string = '';
   private metaTitle: string = '';
+  private fileKey: string = '';
+  private fileName: string = '';
   private startPos: number = 0;
   private tickId: number = -1;
   private saveId: number = -1;
@@ -43,11 +46,16 @@ struct PlayerPage {
   @Local buffering: boolean = false;
   @Local bitrate: number = 0;
   @Local bufPct: number = 0;
+  @Local bandwidthWarn: boolean = false;
   @Local speed: number = 1.0;
   @Local showControls: boolean = true;
   @Local volume: number = 100;
   @Local bright: number = 0.5;
   @Local seekPreview: number = -1;
+  /** 是否显示「缓存中」全屏遮罩：只有真的卡住（>0.4s）才显示。 */
+  @Local showBufferOverlay: boolean = false;
+  private bufferSince: number = -1;
+  private lastSeekAt: number = 0;
   @Local errorText: string = '';
   @Local showPanel: boolean = false;
   @Local panelKind: string = 'subs';
@@ -57,6 +65,10 @@ struct PlayerPage {
   @Local volumeHint: number = -1;
   @Local localSubs: LocalCandidate[] = [];
   @Local extSubs: SubtitleItem[] = [];
+  @Local currentSubId: string = '';
+  @Local currentSubIndex: number = -1;
+  @Local subChosen: boolean = false;
+  @Local currentLocalName: string = '';
   @Local subUrlInput: string = '';
   @Local subBusy: boolean = false;
   @Local subHint: string = '';
@@ -70,9 +82,24 @@ struct PlayerPage {
       const start: number = params.position === undefined || params.position === null
         ? 0 : Number(params.position);
       this.startPos = start > 5 ? start : 0;
+      this.fileKey = params.fileKey === undefined || params.fileKey === null ? '' : params.fileKey;
+      this.fileName = params.fileName === undefined || params.fileName === null ? '' : params.fileName;
     }
     try {
-      this.player = new Player(new PlayerConfig({ hwdec: true, vo: 'gpu-next', osc: false, osd: false }));
+      // configDir 让 mpv 读沙箱里的 mpv.conf（缓存 / demuxer / gpu 等参数都在那儿调）；
+      // hwdec 走构造参数，因为配置文件里的 hwdec 会被它覆盖。
+      const ctx = getContext(this) as common.UIAbilityContext;
+      // apply() 会读结构化设置，必要时按当前版本重生成 mpv.conf；
+      // hwdec 只能走构造参数（配置文件里的 hwdec 会被它覆盖）。
+      const tuning = PlayerPrefs.apply(ctx);
+      PlayerPrefs.dir(ctx);
+      this.player = new Player(new PlayerConfig({
+        configDir: PlayerPrefs.dir(ctx),
+        hwdec: tuning.hwdec,
+        vo: 'gpu-next',
+        osc: false,
+        osd: false
+      }));
       this.surfaceReady = true;
     } catch (error) {
       const e = error as BusinessError;
@@ -134,14 +161,16 @@ struct PlayerPage {
     this.win.setWindowSystemBarEnable(['status', 'navigation']);
   }
 
-  private openMedia(): void {
+  private async openMedia(): Promise<void> {
     if (this.player === undefined) {
       return;
     }
+    // 被判成外网但此刻局域网可达时，先把地址切回内网再开流
+    await Store.I.preferLanForPlay();
     try {
       // token 已经在 URL 的 query 里，不要再走 httpHeaders：
       // mpv-arkts 会把头名编码坏（%65%authorization），反而触发 401。
-      const media: Media = new Media(Store.I.playUrl(this.metaId), {
+      const media: Media = new Media(Store.I.playUrl(this.metaId, this.fileKey), {
         start: this.startPos
       });
       this.player.stream.error.listen((message: string) => {
@@ -169,7 +198,9 @@ struct PlayerPage {
       this.duration = st.duration;
       this.playing = st.playing;
       this.buffering = st.buffering;
+      this.refreshBufferOverlay();
       this.bitrate = st.videoBitrate > 0 ? st.videoBitrate : 0;
+      this.bandwidthWarn = Store.I.onWan && this.bitrate > 10000000;
       this.bufPct = st.bufferingPercentage >= 0 ? st.bufferingPercentage : 0;
       this.speed = st.speed;
       if (st.eof && !this.completed) {
@@ -180,6 +211,33 @@ struct PlayerPage {
       const e = error as BusinessError;
       console.error(`[amane] sync: ${e.code} ${e.message}`);
     }
+  }
+
+  /**
+   * 「缓存中」遮罩去抖。
+   *
+   * mpv 只要暂停等数据就置 paused-for-cache，哪怕只有几十毫秒；
+   * 拖动进度条又必然触发一次（要重新定位、重新预读），于是每拖一次
+   * 就闪一次全屏加载——用户看到的就是「百分百触发缓存中」。
+   *
+   * 规则：
+   * - 刚 seek 完的 1.5 秒内，短暂 buffering 属于正常，不弹遮罩；
+   * - 任何 buffering 必须持续 0.45 秒以上才认为是真的卡住。
+   * （syncState 每 300ms 采样一次，更短的抖动根本采不到。）
+   */
+  private refreshBufferOverlay(): void {
+    const now: number = Date.now();
+    if (!this.buffering) {
+      this.bufferSince = -1;
+      this.showBufferOverlay = false;
+      return;
+    }
+    if (this.bufferSince < 0) {
+      this.bufferSince = now;
+    }
+    const elapsed: number = now - this.bufferSince;
+    const afterSeek: boolean = now - this.lastSeekAt < 1500;
+    this.showBufferOverlay = elapsed >= (afterSeek ? 1200 : 450);
   }
 
   private saveProgress(force: boolean): void {
@@ -220,6 +278,11 @@ struct PlayerPage {
     }
     const target: number = Math.max(0, Math.min(this.duration, seconds));
     try {
+      // 先标记再 seek：mpv 会在几毫秒内进入 paused-for-cache，
+      // 采样恰好落在这一段时按「正常重缓冲」处理，不弹遮罩。
+      this.lastSeekAt = Date.now();
+      this.bufferSince = -1;
+      this.showBufferOverlay = false;
       this.player.seek(target);
       this.pos = target;
     } catch (error) {
@@ -312,6 +375,11 @@ struct PlayerPage {
 
   /** 所有来源统一走这里：一个 subtitle_id → 一条远程字幕轨道。 */
   private applySub(id: string): void {
+    // 先收起面板：字幕加载与 mpv 解析都在后台，不该把用户卡在面板上
+    this.showPanel = false;
+    this.currentSubId = id;
+    this.currentSubIndex = -1;
+    this.subChosen = true;
     if (this.player === undefined) {
       return;
     }
@@ -321,7 +389,7 @@ struct PlayerPage {
       SubtitleClient.remember(this.metaId, id).catch(() => {
         // 记住失败不影响播放
       });
-      this.showPanel = false;
+      this.toast('已切换字幕');
     } catch (error) {
       console.error(`[amane] apply sub: ${JSON.stringify(error)}`);
       this.toast('加载字幕失败');
@@ -329,6 +397,8 @@ struct PlayerPage {
   }
 
   private async useLocalSub(name: string): Promise<void> {
+    this.currentLocalName = name;
+    this.showPanel = false;
     try {
       const item: SubtitleItem = await SubtitleClient.loadLocal(this.metaId, name);
       this.applySub(item.id);
@@ -341,7 +411,7 @@ struct PlayerPage {
   private async importSub(): Promise<void> {
     try {
       const ctx: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
-      const item: SubtitleItem = await SubtitleClient.importFromPhone(ctx);
+      const item: SubtitleItem = await SubtitleClient.importFromPhone(ctx, this.metaId);
       this.applySub(item.id);
     } catch (error) {
       console.error(`[amane] import sub: ${JSON.stringify(error)}`);
@@ -356,7 +426,7 @@ struct PlayerPage {
       return;
     }
     try {
-      const item: SubtitleItem = await SubtitleClient.addUrl(raw);
+      const item: SubtitleItem = await SubtitleClient.addUrl(raw, this.metaId);
       this.subUrlInput = '';
       this.applySub(item.id);
     } catch (error) {
@@ -376,6 +446,10 @@ struct PlayerPage {
   }
 
   private pickSub(index: number): void {
+    this.showPanel = false;
+    this.currentSubIndex = index;
+    this.currentSubId = '';
+    this.subChosen = true;
     if (this.player === undefined) {
       return;
     }
@@ -385,9 +459,11 @@ struct PlayerPage {
       } else if (index < this.subTracks.length) {
         this.player.setSubtitleTrack(this.subTracks[index]);
       }
+      this.toast(index < 0 ? '已关闭字幕' : '已切换字幕');
     } catch (error) {
       const e = error as BusinessError;
       console.error(`[amane] pick sub: ${e.code} ${e.message}`);
+      this.toast('切换字幕失败');
     }
     this.showPanel = false;
   }
@@ -436,6 +512,15 @@ struct PlayerPage {
     return `${state} · 码率 ${rate} Mbps · 缓存 ${cache}%`;
   }
 
+  /** 外网链路余量小：码率超过警戒值给一条可操作提示，不阻断播放。 */
+  private bandwidthText(): string {
+    if (!this.bandwidthWarn || this.bitrate <= 0) {
+      return '';
+    }
+    const mbps: number = this.bitrate / 1000000;
+    return `外网约 10~17 Mbps，当前片源 ${mbps.toFixed(1)} Mbps 余量偏小，可能反复缓冲；回家切局域网更稳。`;
+  }
+
   private seekPreviewLabel(): string {
     const value: number = this.seekPreview >= 0 ? this.seekPreview : this.pos;
     return `${clock(value)} / ${clock(this.duration)}`;
@@ -467,6 +552,21 @@ struct PlayerPage {
                 .fontSize(13)
                 .fontColor('#FFFFFF')
                 .fontWeight(FontWeight.Medium)
+              Text(Store.I.onWan ? '外网' : '局域网')
+                .fontSize(9)
+                .fontColor(Store.I.onWan ? '#FFB454' : '#7FE3C0')
+                .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+                .backgroundColor('#59000000')
+                .borderRadius(4)
+                .margin({ bottom: 3 })
+              if (this.fileName.length > 0) {
+                Text(`版本 · ${this.fileName}`)
+                  .fontSize(10)
+                  .fontColor('#B9B9C4')
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .width('100%')
+              }
               Text(this.metaTitle)
                 .fontSize(10)
                 .fontColor('#B3FFFFFF')
@@ -494,6 +594,14 @@ struct PlayerPage {
             .fontColor('#99FFFFFF')
             .width('100%')
             .padding({ left: 16, right: 16, top: 2 })
+
+          if (this.bandwidthText().length > 0) {
+            Text(this.bandwidthText())
+              .fontSize(10)
+              .fontColor(Theme.GOLD)
+              .width('100%')
+              .padding({ left: 16, right: 16, top: 4, bottom: 2 })
+          }
 
           Blank()
 
@@ -611,7 +719,7 @@ struct PlayerPage {
           .borderRadius(10)
       }
 
-      if (this.buffering) {
+      if (this.showBufferOverlay) {
         Column({ space: 8 }) {
           LoadingProgress()
             .width(34)
@@ -700,9 +808,9 @@ struct PlayerPage {
                   .maxLines(3)
               }
               ForEach(this.localSubs, (item: LocalCandidate) => {
-                Text(`同目录 · ${item.name}`)
+                Text(`${this.currentLocalName === item.name ? '✓ ' : ''}同目录 · ${item.name}`)
                   .fontSize(12)
-                  .fontColor(Theme.TEXT)
+                  .fontColor(this.currentLocalName === item.name ? Theme.ACCENT : Theme.TEXT)
                   .width('100%')
                   .padding({ left: 16, right: 16, top: 8, bottom: 8 })
                   .maxLines(1)
@@ -712,9 +820,9 @@ struct PlayerPage {
                   })
               }, (item: LocalCandidate) => `local-${item.name}`)
               ForEach(this.extSubs, (item: SubtitleItem) => {
-                Text(`${item.name} · ${item.source}`)
+                Text(`${this.currentSubId === item.id ? '✓ ' : ''}${item.name} · ${item.source}`)
                   .fontSize(12)
-                  .fontColor(Theme.TEXT)
+                  .fontColor(this.currentLocalName === item.name ? Theme.ACCENT : Theme.TEXT)
                   .width('100%')
                   .padding({ left: 16, right: 16, top: 8, bottom: 8 })
                   .maxLines(1)
@@ -757,6 +865,9 @@ struct PlayerPage {
           .backgroundColor('#E614141A')
           .borderRadius({ topLeft: 14, topRight: 14 })
           .margin({ bottom: 16 })
+          .onClick(() => {
+            // 吞掉点击：不然会冒泡到下面的遮罩层，面板刚点就关了
+          })
         }
         .width('100%')
         .height('100%')
@@ -836,7 +947,7 @@ struct PlayerPage {
 
   @Builder
   PanelRow(label: string, index: number) {
-    Text(label)
+    Text((this.panelKind === 'subs' && this.subChosen && this.currentSubIndex === index ? '✓ ' : '') + label)
       .fontSize(13)
       .fontColor(Theme.TEXT)
       .width('100%')

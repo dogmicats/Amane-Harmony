@@ -5,6 +5,8 @@ import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { DetailParams, FavList, MediaItem } from '../common/Types';
 import { safeItems } from '../common/Safe';
+import { BuildConfig } from '../common/BuildConfig';
+import { MarkBadges } from '../view/MarkBadges';
 
 @Component
 export struct FavoritesTab {
@@ -85,13 +87,18 @@ export struct FavoritesTab {
                     .objectFit(ImageFit.Cover)
                     .borderRadius(10)
                     .backgroundColor(Theme.CARD)
-                  Text('♥')
-                    .fontSize(13)
-                    .fontColor(Theme.ACCENT)
-                    .padding(5)
-                    .backgroundColor('#99000000')
-                    .borderRadius(10)
-                    .margin(5)
+                  Row({ space: 3 }) {
+                    if (item.marks !== undefined && item.marks !== null && item.marks.length > 0) {
+                      MarkBadges({ marks: item.marks, max: 2, badgeSize: 8, fill: 'dark' })
+                    }
+                    Text('♥')
+                      .fontSize(13)
+                      .fontColor(Theme.ACCENT)
+                      .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+                      .backgroundColor('#99000000')
+                      .borderRadius(10)
+                  }
+                  .margin(5)
                 }
                 .width('100%')
 

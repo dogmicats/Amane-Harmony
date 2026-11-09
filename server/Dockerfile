@@ -7,8 +7,9 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8770
 
 WORKDIR /app
-COPY server.py subtitles.py ./
-COPY subtitle_providers/ ./subtitle_providers/
+# 核心只有 server.py；能力都在 extensions.json 登记的扩展里
+COPY server.py extensions.json ./
+COPY ext/ ./ext/
 
 RUN useradd --create-home --uid 10001 amane 2>/dev/null || adduser -D -u 10001 amane; \
     mkdir -p /data && chown -R 10001:10001 /data /app

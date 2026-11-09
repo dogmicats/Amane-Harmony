@@ -5,6 +5,7 @@ import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { HomeData, HomeRow, MediaItem, BrowseParams, DetailParams, PlayerParams } from '../common/Types';
 import { safeHome } from '../common/Safe';
+import { BuildConfig } from '../common/BuildConfig';
 import { HeroBanner } from '../view/HeroBanner';
 import { MediaRow } from '../view/MediaRow';
 
@@ -137,6 +138,58 @@ export struct HomeTab {
                 this.openDetail(item);
               }
             })
+          }
+
+
+          // 公开扩展 actors 的特色入口：共演筛选放首屏，别藏在演员页角落里
+          if (BuildConfig.ENABLE_ACTORS) {
+            ListItem() {
+              // 外层 Column 承担左右留白：Row 再设 width('100%') 时，
+              // 100% 就是「已减掉留白」的宽度，不会像 margin 那样把整条撑出屏幕。
+              Column() {
+              Row({ space: 12 }) {
+                Column({ space: 4 }) {
+                  Row({ space: 6 }) {
+                    Text('共演筛选')
+                      .fontSize(15)
+                      .fontWeight(FontWeight.Bold)
+                      .fontColor(Theme.TEXT)
+                    Text('特色')
+                      .fontSize(9)
+                      .fontColor(Theme.ACCENT)
+                      .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+                      .backgroundColor(Theme.ACCENT_SOFT)
+                      .borderRadius(4)
+                  }
+                  Text('挑几个人找同台作品，或按「几个女演员」直接筛')
+                    .fontSize(10)
+                    .fontColor(Theme.TEXT_FAINT)
+                    .maxLines(2)
+                    .width('100%')
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+
+                Text('去试 ›')
+                  .fontSize(12)
+                  .fontColor('#FFFFFF')
+                  .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+                  .backgroundColor(Theme.ACCENT)
+                  .borderRadius(14)
+              }
+              .width('100%')
+              .padding(14)
+              .backgroundColor(Theme.CARD)
+              .borderRadius(14)
+              .border({ width: 0.5, color: '#1FFFFFFF' })
+              .onClick(() => {
+                router.pushUrl({ url: 'ext/actors/CastFinderPage' });
+              })
+              }
+              .width('100%')
+              .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+              .margin({ bottom: 12 })
+            }
           }
 
           if (this.home.continue.length > 0) {

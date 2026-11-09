@@ -5,7 +5,7 @@ import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { BrowseResult, DetailParams, MediaItem } from '../common/Types';
 import { safeItems } from '../common/Safe';
-import { dateText, scoreText } from '../common/Util';
+import { PosterCard } from './PosterCard';
 
 const PAGE_SIZE: number = 45;
 
@@ -275,84 +275,20 @@ export struct BrowseGrid {
     .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4, bottom: 8 })
   }
 
+  /**
+   * 网格单元直接用统一海报卡：媒体库原先自己拼了一套图 + 评分 + 日期，
+   * 结果标记（破解/流出/中字）在媒体库里永远不显示。
+   * 现在所有影片列表共用 PosterCard，标记只在一处实现。
+   */
   @Builder
   Cell(item: MediaItem) {
-    Column({ space: 3 }) {
-      Stack({ alignContent: Alignment.TopEnd }) {
-        Image(Store.I.img(item.poster))
-          .width('100%')
-          .aspectRatio(0.704)
-          .objectFit(ImageFit.Cover)
-          .borderRadius(10)
-          .backgroundColor(Theme.CARD)
-          .alt($r('app.media.placeholder'))
-
-        if (scoreText(item.score).length > 0) {
-          Text(scoreText(item.score))
-            .fontSize(10)
-            .fontColor(Theme.GOLD)
-            .fontWeight(FontWeight.Medium)
-            .padding({ left: 4, right: 4, top: 1, bottom: 1 })
-            .backgroundColor('#B3000000')
-            .borderRadius(5)
-            .margin(5)
-        }
-
-        if (item.position > 0 && item.duration > 0) {
-          Column() {
-            Blank()
-            Progress({ value: item.position, total: item.duration, type: ProgressType.Linear })
-              .width('100%')
-              .height(3)
-              .color(Theme.ACCENT)
-              .backgroundColor('#4DFFFFFF')
-          }
-          .width('100%')
-          .height('100%')
-          .justifyContent(FlexAlign.End)
-        }
+    PosterCard({
+      item: item,
+      fluid: true,
+      showDate: true,
+      onTap: () => {
+        this.openDetail(item);
       }
-      .width('100%')
-      .borderRadius(10)
-      .clip(true)
-
-      Text(item.number.length > 0 ? item.number : '—')
-        .fontSize(12)
-        .fontColor(Theme.TEXT)
-        .fontWeight(FontWeight.Medium)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%')
-        .margin({ top: 3 })
-
-      Text(item.title.length > 0 ? item.title : ' ')
-        .fontSize(10)
-        .fontColor(Theme.TEXT_DIM)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%')
-
-      Row({ space: 4 }) {
-        if (scoreText(item.score).length > 0) {
-          Text(`★${scoreText(item.score)}`)
-            .fontSize(9)
-            .fontColor(Theme.GOLD)
-        }
-        if (item.release.length >= 4) {
-          Text(dateText(item.release))
-            .fontSize(9)
-            .fontColor(Theme.TEXT_FAINT)
-            .maxLines(1)
-        }
-      }
-      .width('100%')
-      .height(12)
-      .alignItems(VerticalAlign.Center)
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-    .onClick(() => {
-      this.openDetail(item);
     })
   }
 

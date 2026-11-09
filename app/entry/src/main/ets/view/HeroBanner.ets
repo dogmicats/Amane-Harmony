@@ -2,6 +2,7 @@ import { MediaItem } from '../common/Types';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { runtimeText } from '../common/Util';
+import { MarkBadges } from './MarkBadges';
 
 /**
  * 首页顶部大海报轮播：横图铺满 + 底部渐变 + 番号/标题/两个按钮。
@@ -42,6 +43,9 @@ export struct HeroBanner {
                     .padding({ left: 6, right: 6, top: 2, bottom: 2 })
                     .backgroundColor('#4D7C5CFF')
                     .borderRadius(4)
+                  if (item.marks !== undefined && item.marks !== null && item.marks.length > 0) {
+                    MarkBadges({ marks: item.marks, max: 3, badgeSize: 9, fill: 'dark' })
+                  }
                   if (item.studio.length > 0) {
                     Text(item.studio)
                       .fontSize(11)

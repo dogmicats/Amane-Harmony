@@ -7,6 +7,12 @@
     "pages/SearchPage",
     "pages/HistoryPage",
     "pages/SettingsPage",
-    "pages/WebPage"
+    "pages/PlayerSettingsPage",
+    "pages/WebPage",
+    "pages/ImageViewerPage",
+    "ext/actors/ActorDetailPage",
+    "ext/actors/ActorWorksPage",
+    "ext/actors/CastFinderPage",
+    "ext/facets/FacetPage"
   ]
 }

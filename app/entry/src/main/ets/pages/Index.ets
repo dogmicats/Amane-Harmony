@@ -3,10 +3,14 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { router } from '@kit.ArkUI';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { uploadCrashLog } from '../common/CrashReporter';
 import { HomeTab } from './HomeTab';
 import { LibraryTab } from './LibraryTab';
 import { FavoritesTab } from './FavoritesTab';
 import { ProfileTab } from './ProfileTab';
+import { BuildConfig } from '../common/BuildConfig';
+import { ActorsTab } from '../ext/actors/ActorsTab';
+import { FacetsTab } from '../ext/facets/FacetsTab';
 
 @Entry
 @Component
@@ -18,7 +22,16 @@ struct Index {
   @State homeRefresh: number = 0;
   @State favRefresh: number = 0;
   @State libRefresh: number = 0;
+  @State actorsRefresh: number = 0;
+  @State facetsRefresh: number = 0;
   private tabs: TabsController = new TabsController();
+  // 「我的」永远固定在最后：扩展开关会把前面的 Tab 数量改掉，
+  // 用写死的 index 判断会把「我的」和 extension Tab 混在一起。
+  private readonly actorIndex: number = 3;
+  private readonly facetIndex: number = BuildConfig.ENABLE_ACTORS ? 4 : 3;
+  private readonly profileIndex: number = 3
+    + (BuildConfig.ENABLE_ACTORS ? 1 : 0)
+    + (BuildConfig.ENABLE_FACETS ? 1 : 0);
 
   aboutToAppear(): void {
     try {
@@ -53,6 +66,9 @@ struct Index {
       }
       this.booting = false;
       this.refreshTabs();
+      // 连接就绪后静默回传上次的崩溃栈；失败会保留本地文件，不影响启动
+      const ctx = getContext(this) as common.UIAbilityContext;
+      uploadCrashLog(ctx).catch(() => {});
     } catch (error) {
       const err = error as BusinessError;
       console.error(`[amane] boot failed: ${err.code} ${err.message}`);
@@ -70,6 +86,8 @@ struct Index {
     this.homeRefresh++;
     this.libRefresh++;
     this.favRefresh++;
+    this.actorsRefresh++;
+    this.facetsRefresh++;
   }
 
   onPageShow(): void {
@@ -81,18 +99,33 @@ struct Index {
   }
 
   @Builder
-  TabBarItem(index: number, label: string, glyph: string) {
-    Column({ space: 3 }) {
-      Text(glyph)
-        .fontSize(18)
-        .fontColor(this.currentTab === index ? Theme.ACCENT : Theme.TEXT_FAINT)
-      Text(label)
-        .fontSize(10)
-        .fontColor(this.currentTab === index ? Theme.TEXT : Theme.TEXT_FAINT)
+  TabBarItem(index: number, label: string, icon: Resource) {
+    Column() {
+      // 选中项做成一块玻璃胶囊：半透明白底 + 0.5 高光描边，压在毛玻璃底栏上
+      Column({ space: 3 }) {
+        Image(icon)
+          .width(20)
+          .height(20)
+          .objectFit(ImageFit.Contain)
+          .fillColor(this.currentTab === index ? Theme.ACCENT : Theme.TEXT_FAINT)
+        Text(label)
+          .fontSize(9)
+          .fontColor(this.currentTab === index ? Theme.TEXT : Theme.TEXT_FAINT)
+      }
+      .width(56)
+      .height(44)
+      .justifyContent(FlexAlign.Center)
+      .borderRadius(14)
+      .backgroundColor(this.currentTab === index ? '#1FFFFFFF' : '#00FFFFFF')
+      .border({
+        width: this.currentTab === index ? 0.5 : 0,
+        color: '#2EFFFFFF'
+      })
     }
     .width('100%')
     .height(54)
     .justifyContent(FlexAlign.Center)
+    .border({ width: { top: 0.5 }, color: '#1AFFFFFF' })
   }
 
   build() {
@@ -155,29 +188,48 @@ struct Index {
           TabContent() {
             HomeTab({ refreshKey: this.homeRefresh })
           }
-          .tabBar(this.TabBarItem(0, '首页', '⌂'))
+          .tabBar(this.TabBarItem(0, '首页', $r('app.media.ic_tab_home')))
           .backgroundColor(Theme.BG)
 
           TabContent() {
             LibraryTab({ refreshKey: this.libRefresh })
           }
-          .tabBar(this.TabBarItem(1, '媒体库', '▤'))
+          .tabBar(this.TabBarItem(1, '媒体库', $r('app.media.ic_tab_lib')))
           .backgroundColor(Theme.BG)
 
           TabContent() {
             FavoritesTab({ refreshKey: this.favRefresh })
           }
-          .tabBar(this.TabBarItem(2, '收藏', '♥'))
+          .tabBar(this.TabBarItem(2, '收藏', $r('app.media.ic_tab_fav')))
           .backgroundColor(Theme.BG)
+
+          // 公开扩展 actors：演员网格。关掉 ENABLE_ACTORS 时后面的 Tab index 会自动前移
+          if (BuildConfig.ENABLE_ACTORS) {
+            TabContent() {
+              ActorsTab({ refreshKey: this.actorsRefresh })
+            }
+            .tabBar(this.TabBarItem(this.actorIndex, '演员', $r('app.media.ic_tab_actor')))
+            .backgroundColor(Theme.BG)
+          }
+
+          // 公开扩展 facets：标签 / 系列 / 制片商 分类浏览
+          if (BuildConfig.ENABLE_FACETS) {
+            TabContent() {
+              FacetsTab({ refreshKey: this.facetsRefresh })
+            }
+            .tabBar(this.TabBarItem(this.facetIndex, '标签', $r('app.media.ic_tab_tag')))
+            .backgroundColor(Theme.BG)
+          }
 
           TabContent() {
             ProfileTab({ refreshKey: this.homeRefresh })
           }
-          .tabBar(this.TabBarItem(3, '我的', '☺'))
+          .tabBar(this.TabBarItem(this.profileIndex, '我的', $r('app.media.ic_tab_me')))
           .backgroundColor(Theme.BG)
         }
         .barHeight(54)
-        .barBackgroundColor('#0F0F14')
+        .barBackgroundColor('#8C0B0B0F')
+        .barBackgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
         .scrollable(false)
         .animationDuration(0)
         .onChange((index: number) => {
@@ -188,6 +240,10 @@ struct Index {
             this.libRefresh++;
           } else if (index === 2) {
             this.favRefresh++;
+          } else if (index === this.actorIndex) {
+            this.actorsRefresh++;
+          } else if (index === this.facetIndex) {
+            this.facetsRefresh++;
           }
         })
       }

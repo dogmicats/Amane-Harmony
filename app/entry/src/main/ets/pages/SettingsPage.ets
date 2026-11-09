@@ -1,5 +1,7 @@
 import { router } from '@kit.ArkUI';
+import { common } from '@kit.AbilityKit';
 import { probe } from '../common/Http';
+import { CrashInfo, clearCrashLog, crashInfo, uploadCrashLog } from '../common/CrashReporter';
 import {
   Store, normalizeBase, MODE_AUTO, MODE_LAN, MODE_WAN,
   DEFAULT_AMANE, DEFAULT_USER, DEFAULT_WAN_AMANE, DEFAULT_TOKEN
@@ -16,6 +18,36 @@ struct SettingsPage {
   @State draftMode: string = Store.I.mode;
   @State testResult: string = '';
   @State testing: boolean = false;
+  @State crashText: string = '';
+
+  aboutToAppear(): void {
+    this.refreshCrash();
+  }
+
+  private refreshCrash(): void {
+    const ctx = getContext(this) as common.UIAbilityContext;
+    const info: CrashInfo = crashInfo(ctx);
+    this.crashText = info.exists
+      ? `崩溃日志 ${info.lines} 行 / ${info.bytes} 字符（启动后会静默上报）`
+      : '暂无崩溃日志';
+  }
+
+  private async uploadCrash(): Promise<void> {
+    const ctx = getContext(this) as common.UIAbilityContext;
+    const n: number = await uploadCrashLog(ctx);
+    if (n > 0) {
+      this.refreshCrash();
+      this.testResult = `已上报 ${n} 字符的崩溃日志`;
+    } else {
+      this.crashText = '没有可上报的日志，或服务不可达（本地文件已保留）';
+    }
+  }
+
+  private clearCrash(): void {
+    const ctx = getContext(this) as common.UIAbilityContext;
+    clearCrashLog(ctx);
+    this.refreshCrash();
+  }
 
   @Builder
   Field(label: string, value: string, hint: string, onChange: (v: string) => void) {
@@ -65,7 +97,7 @@ struct SettingsPage {
           .onClick(() => {
             router.back();
           })
-        Text('连接设置')
+        Text('设置')
           .fontSize(17)
           .fontWeight(FontWeight.Medium)
           .fontColor(Theme.TEXT)
@@ -132,6 +164,11 @@ struct SettingsPage {
             .width('100%')
             .lineHeight(16)
 
+          Text(`当前使用：${Store.I.onWan ? '外网' : '局域网'} · ${Store.I.user}`)
+            .fontSize(10)
+            .fontColor(Store.I.onWan ? '#FFB454' : '#8BD9A0')
+            .width('100%')
+
           if (this.testResult.length > 0) {
             Text(this.testResult)
               .fontSize(11)
@@ -175,6 +212,51 @@ struct SettingsPage {
               this.draftWan = DEFAULT_WAN_AMANE;
               this.draftToken = DEFAULT_TOKEN;
             })
+
+          Text('播放器设置已经独立成页（我的 → 播放器）')
+            .fontSize(10)
+            .fontColor(Theme.TEXT_FAINT)
+            .width('100%')
+            .margin({ top: 8 })
+
+          Text('诊断')
+            .fontSize(12)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Theme.TEXT_DIM)
+            .width('100%')
+            .margin({ top: 8 })
+
+          Column({ space: 8 }) {
+            Text(this.crashText)
+              .fontSize(11)
+              .fontColor(Theme.TEXT_FAINT)
+              .width('100%')
+            Row({ space: 8 }) {
+              Button('上传崩溃日志')
+                .layoutWeight(1)
+                .height(36)
+                .backgroundColor(Theme.CARD_HI)
+                .fontColor(Theme.TEXT)
+                .fontSize(12)
+                .onClick(() => {
+                  this.uploadCrash();
+                })
+              Button('清空')
+                .width(80)
+                .height(36)
+                .backgroundColor(Color.Transparent)
+                .fontColor(Theme.TEXT_FAINT)
+                .fontSize(12)
+                .onClick(() => {
+                  this.clearCrash();
+                })
+            }
+            .width('100%')
+          }
+          .width('100%')
+          .padding(12)
+          .backgroundColor(Theme.CARD)
+          .borderRadius(12)
         }
         .width('100%')
         .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 30 })

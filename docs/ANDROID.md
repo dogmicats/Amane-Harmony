@@ -40,7 +40,7 @@
 
 这里的「移植」不是改 HAP，而是**另写一个客户端，直接调本项目的 HTTP 接口**。`server/` 是纯标准库 Python 服务，约 23 个 `/api/user/*` 端点 + `/img`，与操作系统无关；安卓 / iOS / 桌面 / Web 都能接。
 
-- 端点全集：`server/server.py` 里的 `ROUTES` 与 `server/subtitles.py` 的 `install()`；字段与依赖见 [COMPATIBILITY.md](COMPATIBILITY.md)、[SUBTITLES.md](SUBTITLES.md)、[DEPLOY.md](DEPLOY.md)。
+- 端点全集：`server/server.py` 里的 `ROUTES` 与 `server/ext/*/server_ext.py` 的 `ROUTES`；字段与依赖见 [COMPATIBILITY.md](COMPATIBILITY.md)、[SUBTITLES.md](SUBTITLES.md)、[DEPLOY.md](DEPLOY.md)。
 - 播放：**优先用 `mpv-android` 的 libmpv 封装**——它和鸿蒙端是同一套播放行为，ASS/SSA 字幕、音轨切换、硬解都是现成的，请求 `<user_base>/api/user/play/<source>/<id>?token=...` 即可。ExoPlayer 也能播，但它不原生支持 ASS（要加 ffmpeg 扩展，特效仍然弱），字幕这块会明显更费劲。鸿蒙端那个 `Authorization` 被错误编码的坑只影响 `@mpv-ohos/mpv-arkts`，安卓端不受影响。
 - 字幕：服务端已把四种来源统一成 `subtitle_id`，取 `<user_base>/api/user/subtitle/<id>?token=...` 即可，见 [SUBTITLES.md](SUBTITLES.md)。
 - 建议：先写个能打通 `/api/user/ping` 与 `/api/user/home` 的小原型，再补播放；把端点与响应结构整理成机器可读契约（OpenAPI / JSON）能大幅降低维护成本，**欢迎提 PR 补 `docs/API.md`**。

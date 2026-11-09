@@ -6,6 +6,7 @@ import { Theme } from '../common/Theme';
 import { HistoryItem, HistoryList, PlayerParams } from '../common/Types';
 import { clock, dateText, remainText } from '../common/Util';
 import { safeHistory } from '../common/Safe';
+import { MarkBadges } from '../view/MarkBadges';
 
 @Entry
 @Component
@@ -132,9 +133,15 @@ struct HistoryPage {
                 .borderRadius(8)
 
                 Column({ space: 5 }) {
-                  Text(item.number)
-                    .fontSize(12)
-                    .fontColor(Theme.ACCENT)
+                  Row({ space: 6 }) {
+                    Text(item.number)
+                      .fontSize(12)
+                      .fontColor(Theme.ACCENT)
+                    if (item.marks !== undefined && item.marks !== null && item.marks.length > 0) {
+                      MarkBadges({ marks: item.marks, max: 2, badgeSize: 8, fill: 'card' })
+                    }
+                  }
+                  .alignItems(VerticalAlign.Center)
                   Text(item.title)
                     .fontSize(13)
                     .fontColor(Theme.TEXT)

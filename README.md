@@ -1,90 +1,79 @@
 # Amane-Harmony
 
-鸿蒙原生客户端 + 旁挂服务，为自建的 [Amane](https://github.com/sqzw-x/amane) 媒体库补上手机端体验：浏览、收藏、观看历史、播放，以及**外挂字幕**。
+给自建 [Amane](https://github.com/sqzw-x/amane) 媒体库用的鸿蒙原生客户端，配一个纯标准库的旁挂服务：浏览、筛选、收藏、续播、演员、分类、外挂字幕都在手机上完成。
 
-> **非官方第三方项目**，与上游 `sqzw-x/amane` 无隶属关系，也不由上游维护。
-> 本仓库**不含任何媒体内容、字幕内容、服务器地址或凭据**；所有连接信息由你首次启动时自行填写。
-> 上游采用 GPL-3.0；本仓库是独立客户端与独立 HTTP 服务，通过 HTTP/SQLite 与之交互，采用 MIT。
+<p align="center">
+  <img src="docs/screenshots/home.png" width="196" alt="首页">
+  <img src="docs/screenshots/library.png" width="196" alt="媒体库">
+  <img src="docs/screenshots/detail.png" width="196" alt="详情">
+  <img src="docs/screenshots/actors.png" width="196" alt="演员">
+</p>
 
-## 它是什么 / 不是什么
+> 截图来自程序生成的虚构演示库（抽象海报、假番号、假人名），不含真实媒体。
 
-| | |
-|---|---|
-| ✅ 是 | 一个 ArkUI + mpv 的鸿蒙 App、一个纯标准库的 Python 旁挂服务、一套部署模板 |
-| ❌ 不是 | Amane 的分支 / 插件 / 修改版镜像；不改动 Amane 本体，不写入 `amane.db` |
+## 功能
 
-旁挂服务 `amane-user` 提供收藏、历史、首页聚合、图片代理、播放流代理和字幕端点。它**只读** Amane 的 `amane.db`，自己的数据放在独立的 `user.db`。之所以需要播放流代理，是因为 `@mpv-ohos/mpv-arkts` 1.0.0 会把 `Authorization` 请求头错误编码导致 401；由服务端补正确的 Bearer 头回源。
+**演员**
 
-## 前置条件
+- 网格筛选：性别、有头像、有资料、年龄段、身高段、罩杯段、胸围段、出生地，9 种排序
+- 演员详情：资料、别名、写真、作品墙
+- 共演检索：指定最多 6 位演员，或按女 / 男 / 总人数区间找片
+- 剧照盲盒：随机抽该演员作品的剧照，点图直达对应影片
 
-1. 已按[上游文档](https://sqzw-x.github.io/amane/)部署好 Amane，并知道它的 **data 目录**和 **API token**。
-2. 一台与 Amane **同机 / 可共享 data 目录**的机器跑旁挂服务（Docker 或纯 Python 均可）。
-3. 一部鸿蒙手机，以及下面任一种安装方式：DevEco Studio + 你自己的华为账号自动签名，或 **Hokit / 小白调试助手等提供侧载（测载）功能的工具**，详见 [docs/BUILD_HAP.md](docs/BUILD_HAP.md)。
+**浏览**
 
-> 暂不支持把旁挂服务部署到与 Amane 完全不同的另一台机器：它依赖直读 `amane.db`。
->
-> **用的不是鸿蒙手机？** 本项目目前只有鸿蒙原生客户端；安卓 / iOS / PC 的替代方案（上游 Web UI、实验性兼容层、按 HTTP 契约自行移植）见 [docs/ANDROID.md](docs/ANDROID.md)。
+- 首页：海报轮播、继续观看、每日推荐、每个库一行
+- 媒体库：7 种排序、5 类筛选可叠加、三列网格滚动加载
+- 分类：标签 / 系列 / 制片商 / 我的标签
+- 搜索：番号、标题、演员输入即搜
 
-## 三步上手
+**详情**
 
-**① 起旁挂服务**（二选一）
+- 出演阵容、可点标签、所属系列（同系列作品可视化）
+- 剧照横滑与全屏、评价、多版本选择（4K / 1080p / 分段）
+- 列表与详情标注无码 / 破解 / 流出 / 中字
 
-> **不懂配置？** 把 [部署指南最前面的一句话](docs/DEPLOY.md) 发给你的 AI 助手，它会用 `tools/agentctl.py` 带你部署并验证 `/api/user/ping`。**目标机必须是运行 Amane 的那台**（或能访问同一个 data 目录），不是助手的沙箱；**希望自己配置的再往下看**。
+**播放**
+
+- mpv 内核硬解；拖拽调进度、竖直调亮度音量、双击暂停、0.75–2x 倍速、音轨字幕切换、退出记进度
+- 外挂字幕：视频同目录、手机导入、手动 URL、记住每部片的选择
+- 播放器设置：缓存、硬解、渲染选项生成 `mpv.conf`
+
+**其他**
+
+- 收藏跨设备一致；历史显示进度与剩余时长、点击续播、左滑删除
+- 内嵌 Amane 网页，刮削与入库仍在原处完成
+
+## 安装
+
+**1. 部署旁挂服务**
+
+在运行 Amane 的那台机器上（或能访问同一个 data 目录的机器）：
 
 ```sh
-# Docker
-cp deploy/.env.example .env
-# 编辑 .env：AMANE_DATA 指向 amane 的 data 目录；MEDIA_ROOT 填媒体卷宿主路径，MEDIA_PATH_MAP 写 amane 内路径到容器内路径的映射
+cp deploy/.env.example .env    # 填 AMANE_DATA 与 MEDIA_PATH_MAP
 docker compose -f deploy/compose.example.yml up -d
-
-# 或纯 Python（Windows / Linux / macOS / 群晖都行，无需 Docker）
-python server/server.py          # 先设置同名环境变量，见 docs/DEPLOY.md
+curl http://127.0.0.1:8770/api/user/ping
 ```
 
-验证：`curl http://<主机>:8770/api/user/ping` → `{"ok":true,...}`
+不想手写配置，就把 [docs/DEPLOY.md](docs/DEPLOY.md) 开头那段话发给 AI 助手，它会用 `tools/agentctl.py` 带你部署并验证。
 
-**② 装 App**
+**2. 装 App**
 
-从 [Releases](../../releases) 下载 `Amane-2.1.1-unsigned.hap`（未签名），按 [docs/BUILD_HAP.md](docs/BUILD_HAP.md) 完成签名与安装：可以用 DevEco Studio + 你自己的华为账号自动签名后 USB 安装，**也可以直接用 Hokit、小白调试助手等提供侧载（测载）功能的工具**，不必安装 DevEco。也可以从 `app/` 源码自行构建。无论哪种方式，装进手机的都必须是已签名包。
+从 [Releases](../../releases) 下载 `Amane-2.2.0-unsigned.hap`，用你自己的证书签名后安装，或用 Hokit、小白调试助手等侧载工具。步骤见 [docs/BUILD_HAP.md](docs/BUILD_HAP.md)。
 
-**③ 在「设置 → 连接」里填**
+**3. 填连接信息**
 
-| 字段 | 填什么 |
-|---|---|
-| 局域网 Amane | `http://<NAS-IP>:8000` |
-| 局域网用户服务 | `http://<NAS-IP>:8770` |
-| 外网地址 | 可选，配了反代才填 |
-| API token | Amane 的 token |
+「我的 → 连接设置」：Amane 地址 `:8000`、用户服务地址 `:8770`、API token。
 
-保存后即可使用。播放页的「字幕」面板支持视频旁的字幕、手机导入、手动 URL，并会记住每部片上次的选择，详见 [docs/SUBTITLES.md](docs/SUBTITLES.md)。
+## 文档
 
-## 外网访问（可选）
+功能细节、逐项配置、排障都在 **[Wiki](https://github.com/dogmicats/Amane-Harmony/wiki)**。
 
-`deploy/Caddyfile.example` 给出路径分流模板：`/api/user/*` 与 `/img` → 8770，其余 → 8000。任何反向代理 / 内网穿透都可以用，本仓库不绑定特定服务商。
+仓库内另有：[部署](docs/DEPLOY.md)、[签名安装](docs/BUILD_HAP.md)、[字幕](docs/SUBTITLES.md)、[兼容性](docs/COMPATIBILITY.md)、[排障](docs/TROUBLESHOOTING.md)、[非鸿蒙设备](docs/ANDROID.md)、[AI 助手约定](AGENTS.md)。
 
-> 安全提醒：播放与字幕把 token 放在 URL query 中。请只在 HTTPS 或可信内网使用，反向代理不要记录 query，并定期轮换 token。
-
-## 目录
-
-```
-app/     鸿蒙客户端源码（ArkUI + mpv）
-server/  amane-user 服务（纯标准库）+ Dockerfile + 字幕模块
-deploy/  compose / .env / Caddyfile 模板与各平台启动脚本
-optional/ 可选的辅助脚本
-docs/    部署、构建、字幕、兼容性、排障、AI 助手提示词
-tools/   脱敏自检 + agentctl（给 AI 助手用的部署 CLI）
-```
-
-## 给 AI 助手
-
-**不懂怎么部署旁挂服务？** 把 [部署指南最前面的一句话 prompt](docs/DEPLOY.md) 发给你的 agent 即可：它会先读 [AGENTS.md](AGENTS.md) 的红线，跑 `tools/agentctl.py doctor --json` 按缺项问你，把 `plan --json` 的完整计划给你确认，再 `apply --yes` 并验证 `/api/user/ping`。**目标机是运行 Amane 的那台机器**（或能访问同一个 data 目录的机器），不是 agent 自己的沙箱或临时容器；agent 访问不到时应只给你可复制的命令。**希望自己配置**就看 [docs/DEPLOY.md](docs/DEPLOY.md)；分任务提示词见 [docs/PROMPTS.md](docs/PROMPTS.md)。**不要**让 agent 猜配置、手写 compose 或代填 token。
-
-装 App 也可以让 agent 引导（[提示词](docs/PROMPTS.md)），但签名与安装仍需本人操作。
-
-## 字幕来源说明
-
-本版本**不提供在线字幕搜索**。`server/subtitle_providers/` 只有抽象接口且注册表为空，UI 也没有入口。这是刻意保留的扩展点，等有稳定、合规、无需共享密钥的字幕来源后再启用。详见 [docs/SUBTITLES.md](docs/SUBTITLES.md)。
-
-## 许可与致谢
+## 许可
 
 MIT，见 [LICENSE](LICENSE)。第三方组件见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。上游 Amane 见 [CITATION.cff](CITATION.cff)。
+
+非官方第三方项目，与上游无隶属关系；本仓库不含媒体内容、服务器地址或凭据。

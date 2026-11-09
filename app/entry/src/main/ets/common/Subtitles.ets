@@ -67,7 +67,7 @@ export class SubtitleClient {
   }
 
   /** 手机文件选择器 → 读字节 → base64 上传 → 服务端缓存。 */
-  static async importFromPhone(ctx: common.UIAbilityContext): Promise<SubtitleItem> {
+  static async importFromPhone(ctx: common.UIAbilityContext, itemId: number): Promise<SubtitleItem> {
     const opts: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
     opts.maxSelectNumber = 1;
     // 只列字幕后缀，省得在文件管理器里翻；不设置时鸿蒙默认显示全部文件。
@@ -96,9 +96,9 @@ export class SubtitleClient {
   }
 
   /** 手动字幕 URL：由服务端抓取（带超时与体积上限），不直接交给播放器。 */
-  static async addUrl(subUrl: string): Promise<SubtitleItem> {
+  static async addUrl(subUrl: string, itemId: number): Promise<SubtitleItem> {
     const url: string = `${Store.I.user}/api/user/subtitles/url?${SubtitleClient.q()}`;
-    const body: string = JSON.stringify({ url: subUrl });
+    const body: string = JSON.stringify({ url: subUrl, item_id: itemId });
     const text: string = await httpPost(url, Store.I.token, body);
     return JSON.parse(text) as SubtitleItem;
   }

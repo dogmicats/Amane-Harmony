@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "_readme": "服务端扩展清单（公开版）。core 只留 ExtensionHost，具体能力由这里的条目动态加载；删掉某条即整体退化，核心代码无需改动。",
+  "extensions": [
+    {
+      "id": "actors",
+      "title": "演员页",
+      "scope": "public",
+      "entry": "ext/actors/server_ext.py",
+      "enabled": true
+    },
+    {
+      "id": "facets",
+      "title": "分类浏览（标签 / 系列 / 制片商）",
+      "scope": "public",
+      "entry": "ext/facets/server_ext.py",
+      "enabled": true
+    },
+    {
+      "id": "subtitles",
+      "title": "外挂字幕",
+      "scope": "public",
+      "entry": "ext/subtitles/server_ext.py",
+      "enabled": true
+    }
+  ]
+}
