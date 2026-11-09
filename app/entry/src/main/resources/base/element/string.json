@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Amane 媒体库"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Amane 媒体库"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Amane"
+    }
+  ]
+}

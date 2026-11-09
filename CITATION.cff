@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this client, please also credit the upstream Amane project."
+title: "Amane-Harmony"
+abstract: "Unofficial HarmonyOS native client and companion service for a self-hosted Amane media library."
+type: software
+license: MIT
+version: 2.1.0
+date-released: 2026-11-09
+repository-code: "https://github.com/dogmicats/Amane-Harmony"
+authors:
+  - name: "dogmicats"
+references:
+  - type: software
+    title: "Amane"
+    abstract: "The upstream media library manager this project connects to."
+    license: GPL-3.0-only
+    repository-code: "https://github.com/sqzw-x/amane"
+    url: "https://sqzw-x.github.io/amane/"
+    notes: "Upstream project. Amane-Harmony is an independent third-party client and is not affiliated with, endorsed by, or maintained by the upstream authors."

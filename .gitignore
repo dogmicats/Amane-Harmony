@@ -1,0 +1,29 @@
+# 凭据与本地配置（绝不入库）
+.env
+*.env
+config/*.local.json
+**/config.local.json
+*.local.json
+
+# 运行时数据
+data/
+*.db
+*.db-wal
+*.db-shm
+subtitles/
+imgcache/
+*.log
+*.jsonl
+
+# 构建产物与缓存
+dist/
+build/
+oh_modules/
+.hvigor/
+.sign/
+*.hap
+__pycache__/
+*.pyc
+.DS_Store
+
+# 本仓库的 BuildConfig.ets 是 public 通道生成物（全空），需要入库，故不忽略。

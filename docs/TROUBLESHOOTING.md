@@ -1,0 +1,24 @@
+# 故障排查
+
+| 现象 | 检查 |
+|---|---|
+| `/api/user/ping` 不通 | 服务没起 / 端口不对 / 防火墙；`python server/server.py` 前台跑看日志。 |
+| App 提示 token 无效 | 「设置 → 连接」里的 token 与 Amane 的 `{data}/token` 一致；反代有没有把 `?token=` 吃掉。 |
+| 播放一直加载 | ① 确认 `/api/user/*` 被反代分到 8770；② 确认没让 mpv 直连 Amane（mpv-arkts 的请求头缺陷会 401）；③ 播放接口需要长 `read_timeout`。 |
+| 图片加载不出来 | `IMG_HOST_ALLOW_EXTRA` 是否包含图片主机；图片 URL 不要带百分号编码（ArkUI `Image()` 会二次编码）。 |
+| 字幕列表为空 | `MEDIA_PATH_MAP` 是否把 amane 容器内路径映射对；媒体卷是否 `:ro` 挂进容器；字幕文件名是否与视频 stem 一致。 |
+| 字幕乱码 | 服务端已做 UTF-8/GB18030/Shift-JIS/BIG5 转换；若是少见编码，先用文本工具转存成 UTF-8 再导入。 |
+| 远程字幕加载失败 | 给字幕地址加 `&format=vtt` 强制转 WebVTT；ASS 特效字幕建议改用「手机导入」。 |
+| 字幕扫描卡住 | 确认没有改成递归遍历；FUSE / 云盘挂载上 `os.walk` 会卡死。 |
+| Docker Desktop 上连不上 Amane | 不要用 `network_mode: host`；用同一 network + 服务名，并把 `AMANE_BASE` 写成 `http://amane:8000`。 |
+| 装不上 HAP | 需要用你自己的华为账号自动签名；见 [BUILD_HAP.md](BUILD_HAP.md)。 |
+
+## 拿日志
+
+```sh
+docker compose -f deploy/compose.example.yml logs -f amane-user
+# 或纯 Python
+VERBOSE=1 python server/server.py
+```
+
+提 Issue 时请**先删掉日志里的 token、内网地址与主机名**。

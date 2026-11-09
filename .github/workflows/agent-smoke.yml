@@ -1,0 +1,38 @@
+name: agent-smoke
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  agentctl-and-deploy-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: agentctl doctor --json 可解析
+        run: |
+          python tools/agentctl.py doctor --json > /tmp/doctor.json || true
+          python -c "import json;d=json.load(open('/tmp/doctor.json'));assert 'checks' in d and 'missing' in d;print('doctor json OK, missing=',len(d['missing']))"
+      - name: agentctl plan --json 可解析
+        run: |
+          python tools/agentctl.py plan --json > /tmp/plan.json
+          python -c "import json;d=json.load(open('/tmp/plan.json'));assert d['requires_confirmation'] is True;print('plan json OK')"
+      - name: docker compose config 校验
+        run: docker compose -f deploy/compose.example.yml config -q
+        env:
+          AMANE_DATA: /tmp/amane-data
+          AMANE_TOKEN: replace-with-placeholder
+          MEDIA_ROOT: /tmp/media
+          DATA_DIR: /tmp/user-data
+      - name: caddy validate 校验
+        run: |
+          docker run --rm -v "$PWD/deploy/Caddyfile.example:/etc/caddy/Caddyfile" \
+            -e SITE_HOST=media.example.com -e ACME_EMAIL=you@example.com \
+            caddy:2 caddy validate --config /etc/caddy/Caddyfile

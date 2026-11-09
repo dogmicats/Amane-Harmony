@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "_readme": "Amane-Harmony 发布线唯一版本事实源。改版本只改这里 + 同步 CHANGELOG.md、app/AppScope/app.json5、server/server.py VERSION。与自用/自测线的版本号完全独立。",
+  "app": {
+    "version": "2.1.0",
+    "code": 2001000,
+    "bundle": "io.github.dogmycats.amane"
+  },
+  "server": {
+    "version": "2.1.0"
+  },
+  "min_upstream": "见 docs/COMPATIBILITY.md",
+  "release_date": "2026-11-09"
+}

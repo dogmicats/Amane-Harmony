@@ -1,0 +1,23 @@
+[Unit]
+Description=Amane-Harmony companion service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=amane
+WorkingDirectory=/opt/amane-harmony
+Environment=AMANE_DATA=/opt/amane/data
+Environment=AMANE_BASE=http://127.0.0.1:8000
+Environment=DATA_DIR=/opt/amane-harmony/data
+Environment=PORT=8770
+ExecStart=/usr/bin/python3 /opt/amane-harmony/server/server.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadOnlyPaths=/opt/amane/data
+ReadWritePaths=/opt/amane-harmony/data
+
+[Install]
+WantedBy=multi-user.target

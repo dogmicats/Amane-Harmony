@@ -1,0 +1,36 @@
+# 通用模板：不用 network_mode: host（Docker Desktop for Win/Mac 不支持），
+# 改用同一个 docker network + 服务名互访。Amane 本体不在本文件里定义，
+# 请把 amane 服务加入同一个 amane_net 网络，或把 AMANE_BASE 指到可达地址。
+services:
+  amane-user:
+    build: ../server
+    # 也可以用预构建镜像：image: ghcr.io/dogmicats/amane-user:2.1.0
+    container_name: amane-user
+    restart: unless-stopped
+    environment:
+      AMANE_BASE: ${AMANE_BASE:-http://amane:8000}
+      AMANE_DATA: /amane-data
+      AMANE_TOKEN: ${AMANE_TOKEN:-}
+      IMAGE_TOKEN: ${IMAGE_TOKEN:-}
+      DATA_DIR: /data
+      PORT: 8770
+      MEDIA_PATH_MAP: ${MEDIA_PATH_MAP:-}
+      IMG_HOST_ALLOW_EXTRA: ${IMG_HOST_ALLOW_EXTRA:-}
+    volumes:
+      - ${AMANE_DATA}:/amane-data:ro
+      - ${DATA_DIR:-./data}:/data
+      - ${MEDIA_ROOT:-./media}:/mnt/media:ro
+    ports:
+      - "${PORT:-8770}:8770"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8770/api/user/ping',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - amane_net
+
+networks:
+  amane_net:
+    # 若 Amane 已在别的 compose 里，改成 external:true 并填真实网络名
+    name: amane_net

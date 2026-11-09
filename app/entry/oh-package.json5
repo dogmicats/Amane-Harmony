@@ -1,0 +1,13 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "Amane entry module",
+  "main": "",
+  "author": "",
+  "license": "",
+  "dependencies": {
+    "@mpv-ohos/mpv-arkts": "^1.0.0"
+  },
+  "devDependencies": {},
+  "dynamicDependencies": {}
+}

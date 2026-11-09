@@ -1,0 +1,32 @@
+# 路径分流模板。所有值都是占位符，不含任何真实域名/邮箱/token。
+# 用环境变量提供：SITE_HOST=media.example.com ACME_EMAIL=you@example.com
+{
+	email {$ACME_EMAIL}
+}
+
+{$SITE_HOST} {
+	# 用户数据、图片、播放流、字幕 → amane-user:8770
+	@user path /api/user/* /img* /api/user/subtitle/*
+	handle @user {
+		reverse_proxy amane-user:8770 {
+			transport http {
+				read_timeout 3600s
+				write_timeout 3600s
+			}
+		}
+	}
+
+	# 其余（含 /api/* 官方接口）→ amane:8000
+	handle {
+		reverse_proxy amane:8000 {
+			transport http {
+				read_timeout 3600s
+			}
+		}
+	}
+
+	# 安全：不要把带 token 的 query 写进访问日志
+	log {
+		output discard
+	}
+}

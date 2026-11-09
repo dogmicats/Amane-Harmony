@@ -1,0 +1,28 @@
+name: upstream-watch
+on:
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 检查上游最新 release 并开提醒 issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(curl -fsSL https://api.github.com/repos/sqzw-x/amane/releases/latest | python -c "import sys,json;print(json.load(sys.stdin).get('tag_name',''))")
+          echo "upstream=$TAG"
+          if [ -z "$TAG" ]; then echo 'no release found'; exit 0; fi
+          TITLE="上游 Amane 发布 $TAG：请复核兼容性矩阵"
+          if gh issue list --search "$TITLE in:title" --state open --json number | python -c "import sys,json;sys.exit(0 if json.load(sys.stdin) else 1)"; then
+            echo '已有提醒 issue，跳过'
+            exit 0
+          fi
+          gh issue create --title "$TITLE" --body "上游 sqzw-x/amane 发布了 \`$TAG\`。请复核 docs/COMPATIBILITY.md 的依赖列与 schema-smoke.yml 的 fixture，必要时适配后再发本仓库新版本。此 issue 由 upstream-watch 自动创建。"

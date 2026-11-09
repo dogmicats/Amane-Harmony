@@ -1,0 +1,50 @@
+name: schema-smoke
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 校验旁挂服务依赖的 amane.db 列
+        run: |
+          python - <<'PY'
+          import sqlite3
+          needed = {
+            'media_files': ['id','path','metadata_id','library_id','size','duration',
+                            'definition','mosaic','has_subtitle_in_name','has_external_subtitle','oshash'],
+            'metadata': ['id','number','title','plot','actors','tags','studio','series',
+                         'release','runtime','content_type','poster_urls','thumb_urls',
+                         'extrafanart_urls','scores','updated_at'],
+            'libraries': ['id','name'],
+          }
+          conn = sqlite3.connect(':memory:')
+          for table, cols in needed.items():
+              ddl = ', '.join(f'{c} TEXT' for c in cols)
+              conn.execute(f'CREATE TABLE {table} ({ddl})')
+              got = {r[1] for r in conn.execute(f'PRAGMA table_info({table})')}
+              missing = set(cols) - got
+              assert not missing, f'{table} 缺列: {missing}'
+          print('schema fixture OK:', {k: len(v) for k, v in needed.items()})
+          PY
+      - name: 服务端与工具语法编译
+        run: python -m py_compile server/server.py server/subtitles.py server/subtitle_providers/*.py tools/agentctl.py tools/scan_secrets.py
+      - name: 在线字幕源注册表必须为空
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, 'server')
+          from subtitle_providers.registry import available, PROVIDERS
+          assert PROVIDERS == [] and available() == [], '在线字幕源未经批准被启用'
+          print('provider registry empty OK')
+          PY

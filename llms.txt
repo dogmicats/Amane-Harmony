@@ -1,0 +1,14 @@
+# Amane-Harmony
+
+> 鸿蒙原生客户端 + 纯标准库旁挂服务，为自建 Amane 媒体库提供手机端浏览/收藏/播放/外挂字幕。非官方第三方项目，MIT。
+
+- README.md: 项目概览与三步上手
+- AGENTS.md: AI 助手必须遵守的红线与部署工作流
+- docs/DEPLOY.md: Docker 与纯 Python 两条部署路径
+- docs/BUILD_HAP.md: 未签名 HAP 的自签与安装
+- docs/SUBTITLES.md: 四种字幕来源与预留接口说明
+- docs/COMPATIBILITY.md: 上游版本兼容矩阵与数据库依赖列
+- docs/PROMPTS.md: 分任务的 AI 助手提示词
+- docs/TROUBLESHOOTING.md: 故障排查
+- deploy/.env.example: 全部环境变量
+- tools/agentctl.py: 给 agent 用的幂等部署 CLI（--json）

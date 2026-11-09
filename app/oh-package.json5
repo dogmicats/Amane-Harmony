@@ -1,0 +1,8 @@
+{
+  "modelVersion": "5.0.0",
+  "name": "amane",
+  "version": "1.0.0",
+  "description": "Amane media library, packaged as a HarmonyOS app.",
+  "dependencies": {},
+  "devDependencies": {}
+}
