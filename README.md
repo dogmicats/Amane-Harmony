@@ -19,7 +19,7 @@
 
 1. 已按[上游文档](https://sqzw-x.github.io/amane/)部署好 Amane，并知道它的 **data 目录**和 **API token**。
 2. 一台与 Amane **同机 / 可共享 data 目录**的机器跑旁挂服务（Docker 或纯 Python 均可）。
-3. 一部鸿蒙手机 + 你自己的华为开发者账号（用于给未签名 HAP 签名）。
+3. 一部鸿蒙手机，以及下面任一种安装方式：DevEco Studio + 你自己的华为账号自动签名，或 **Hokit / 小白调试助手等提供侧载（测载）功能的工具**，详见 [docs/BUILD_HAP.md](docs/BUILD_HAP.md)。
 
 > 暂不支持把旁挂服务部署到与 Amane 完全不同的另一台机器：它依赖直读 `amane.db`。
 
@@ -41,7 +41,7 @@ python server/server.py          # 先设置同名环境变量，见 docs/DEPLOY
 
 **② 装 App**
 
-从 [Releases](../../releases) 下载 `Amane-2.1.0-unsigned.hap`（未签名），按 [docs/BUILD_HAP.md](docs/BUILD_HAP.md) 用 DevEco Studio + 你自己的华为账号自动签名后 USB 安装。也可以直接从 `app/` 源码自行构建。
+从 [Releases](../../releases) 下载 `Amane-2.1.0-unsigned.hap`（未签名），按 [docs/BUILD_HAP.md](docs/BUILD_HAP.md) 完成签名与安装：可以用 DevEco Studio + 你自己的华为账号自动签名后 USB 安装，**也可以直接用 Hokit、小白调试助手等提供侧载（测载）功能的工具**，不必安装 DevEco。也可以从 `app/` 源码自行构建。无论哪种方式，装进手机的都必须是已签名包。
 
 **③ 在「设置 → 连接」里填**
 

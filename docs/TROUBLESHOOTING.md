@@ -11,7 +11,7 @@
 | 远程字幕加载失败 | 给字幕地址加 `&format=vtt` 强制转 WebVTT；ASS 特效字幕建议改用「手机导入」。 |
 | 字幕扫描卡住 | 确认没有改成递归遍历；FUSE / 云盘挂载上 `os.walk` 会卡死。 |
 | Docker Desktop 上连不上 Amane | 不要用 `network_mode: host`；用同一 network + 服务名，并把 `AMANE_BASE` 写成 `http://amane:8000`。 |
-| 装不上 HAP | 需要用你自己的华为账号自动签名；见 [BUILD_HAP.md](BUILD_HAP.md)。 |
+| 装不上 HAP | 装进手机的必须是已签名包：用 DevEco 自动签名、自己的签名工具链，或 Hokit / 小白调试助手等侧载（测载）工具完成本地调试签名；见 [BUILD_HAP.md](BUILD_HAP.md)。 |
 
 ## 拿日志
 

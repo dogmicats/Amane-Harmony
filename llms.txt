@@ -5,7 +5,7 @@
 - README.md: 项目概览与三步上手
 - AGENTS.md: AI 助手必须遵守的红线与部署工作流
 - docs/DEPLOY.md: Docker 与纯 Python 两条部署路径
-- docs/BUILD_HAP.md: 未签名 HAP 的自签与安装
+- docs/BUILD_HAP.md: 未签名 HAP 的签名与安装（DevEco / 命令行 / Hokit、小白调试助手等侧载工具）
 - docs/SUBTITLES.md: 四种字幕来源与预留接口说明
 - docs/COMPATIBILITY.md: 上游版本兼容矩阵与数据库依赖列
 - docs/PROMPTS.md: 分任务的 AI 助手提示词
