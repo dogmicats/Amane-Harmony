@@ -41,6 +41,8 @@ python server/server.py          # 先设置同名环境变量，见 docs/DEPLOY
 
 **② 装 App**
 
+> **不懂配置？** 直接把 [安装指南最前面的一句话](docs/BUILD_HAP.md) 发给你的 AI 助手，让它带你装；希望自己配置的再往下看。
+
 从 [Releases](../../releases) 下载 `Amane-2.1.0-unsigned.hap`（未签名），按 [docs/BUILD_HAP.md](docs/BUILD_HAP.md) 完成签名与安装：可以用 DevEco Studio + 你自己的华为账号自动签名后 USB 安装，**也可以直接用 Hokit、小白调试助手等提供侧载（测载）功能的工具**，不必安装 DevEco。也可以从 `app/` 源码自行构建。无论哪种方式，装进手机的都必须是已签名包。
 
 **③ 在「设置 → 连接」里填**
@@ -74,6 +76,8 @@ tools/   脱敏自检 + agentctl（给 AI 助手用的部署 CLI）
 ## 给 AI 助手
 
 想让 agent 帮你自动部署？先读 [AGENTS.md](AGENTS.md)，再看 [docs/PROMPTS.md](docs/PROMPTS.md)，并让 agent 通过 `tools/agentctl.py` 的 `--json` 命令操作（**不要**让它自己猜配置或手写 compose）。
+
+**装 App 也能交给它**：把 [安装指南最前面的一句话 prompt](docs/BUILD_HAP.md) 发过去即可，不懂签名的人照着做就行；希望自己配置的往下看三种安装方式。
 
 ## 字幕来源说明
 

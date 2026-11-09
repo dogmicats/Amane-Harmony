@@ -5,6 +5,7 @@
 ## 未发布（文档）
 
 - 补充 HAP 安装的**侧载（测载）**方式：除 DevEco Studio 外，也可用 Hokit、小白调试助手及其它提供同类功能的工具；同步更新 `README.md`、`llms.txt`、`TROUBLESHOOTING.md` 与 Release 说明。HAP 产物不变。
+- `docs/BUILD_HAP.md` **开头置顶**「把这句话发给你的 AI 助手」区块与一句话 prompt：不懂配置的人可直接交给 agent 引导安装，希望自己配置的往下看三种方式；`README.md` 与 `docs/PROMPTS.md` 同步加入该提示词。
 
 ## [2.1.0] - 2026-11-09
 

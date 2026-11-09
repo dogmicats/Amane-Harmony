@@ -1,10 +1,20 @@
 # 给 AI 助手的提示词包
 
-这些提示词配合 `tools/agentctl.py` 使用。**核心原则：agent 只做调度，不做判断** —— 部署逻辑固化在 CLI 里，agent 调命令、解析 JSON、向用户确认，而不是手写 compose 或猜路径。
+这些提示词配合 `tools/agentctl.py` 使用（**「安装 HAP」一节除外**，它是引导式的，不涉及 CLI）。**核心原则：agent 只做调度，不做判断** —— 部署逻辑固化在 CLI 里，agent 调命令、解析 JSON、向用户确认，而不是手写 compose 或猜路径。
 
 使用前先让 agent 读仓库根目录的 `AGENTS.md`（里面有不可放宽的红线）。
 
 ---
+
+## 安装 HAP（一句话，最省事）
+
+不想自己看安装文档时，把这一句发给 AI 助手即可（同一句也放在 [BUILD_HAP.md](BUILD_HAP.md) **最前面**，方便直接复制）：
+
+```
+请按 https://github.com/dogmicats/Amane-Harmony/blob/main/docs/BUILD_HAP.md 与 AGENTS.md，引导我把 Releases 里的 Amane-2.1.0-unsigned.hap 签名并安装到我的鸿蒙手机；先问我需要的信息，别猜配置、别代填账号密码，涉及签名和安装的操作先向我确认。
+```
+
+这一条**不走 `agentctl.py`**：HAP 安装需要在手机上点「信任此设备」、登录华为账号，agent 只能做环境检查、给可直接执行的命令、逐步引导，不能也不应代替用户输入账号密码或托管 UDID。签名与安装动作一律先向用户确认。
 
 ## 部署（Docker）
 
