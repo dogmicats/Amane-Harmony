@@ -41,23 +41,38 @@ export struct PosterCard {
   build() {
     Column() {
       Stack({ alignContent: Alignment.TopEnd }) {
-        if (this.fluid) {
-          Image(Store.I.img(this.item.poster))
-            .width('100%')
-            .aspectRatio(0.704)
-            .objectFit(ImageFit.Cover)
-            .borderRadius(Theme.RADIUS)
-            .backgroundColor(Theme.CARD)
-            .alt($r('app.media.placeholder'))
-        } else {
-          Image(Store.I.img(this.item.poster))
-            .width(this.cardWidth)
-            .height(this.cardWidth * 1.42)
-            .objectFit(ImageFit.Cover)
-            .borderRadius(Theme.RADIUS)
-            .backgroundColor(Theme.CARD)
-            .alt($r('app.media.placeholder'))
+        // 内层只放「图片 + 底部进度条」：图片自己有确定高度（aspectRatio / 固定高），
+        // 进度条贴在底边对齐，不再用 height('100%') 的浮层。
+        // 之前那层 100% 高的 Column 在 Grid 里没有确定父高，会把整个单元格撑到
+        // 一屏高——带播放记录的影片出现在中间时，元素就「乱飞」（网格行高被它顶开）。
+        Stack({ alignContent: Alignment.BottomStart }) {
+          if (this.fluid) {
+            Image(Store.I.img(this.item.poster))
+              .width('100%')
+              .aspectRatio(0.704)
+              .objectFit(ImageFit.Cover)
+              .backgroundColor(Theme.CARD)
+              .alt($r('app.media.placeholder'))
+          } else {
+            Image(Store.I.img(this.item.poster))
+              .width(this.cardWidth)
+              .height(this.cardWidth * 1.42)
+              .objectFit(ImageFit.Cover)
+              .backgroundColor(Theme.CARD)
+              .alt($r('app.media.placeholder'))
+          }
+
+          if (this.ratio() > 0) {
+            Progress({ value: this.ratio(), total: 100, type: ProgressType.Linear })
+              .width('100%')
+              .height(3)
+              .color(Theme.ACCENT)
+              .backgroundColor('#4DFFFFFF')
+          }
         }
+        .width(this.fluid ? '100%' : this.cardWidth)
+        .borderRadius(Theme.RADIUS)
+        .clip(true)
 
         // 右上角一行：先标记、后评分。
         // 左下/左上都会被海报裁切或圆角吃掉，右上角是唯一稳妥的位置。
@@ -77,22 +92,6 @@ export struct PosterCard {
             }
           }
           .margin(6)
-        }
-
-        if (this.ratio() > 0) {
-          Column() {
-            Blank()
-            Progress({ value: this.ratio(), total: 100, type: ProgressType.Linear })
-              .width('100%')
-              .height(3)
-              .color(Theme.ACCENT)
-              .backgroundColor('#4DFFFFFF')
-          }
-          .width('100%')
-          .height('100%')
-          .justifyContent(FlexAlign.End)
-          .borderRadius(Theme.RADIUS)
-          .clip(true)
         }
 
       }

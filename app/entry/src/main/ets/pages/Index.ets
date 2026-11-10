@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { router } from '@kit.ArkUI';
+import { router, uiMaterial } from '@kit.ArkUI';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { uploadCrashLog } from '../common/CrashReporter';
@@ -95,6 +95,16 @@ struct Index {
     if (!this.booting && this.failMsg.length === 0) {
       this.homeRefresh++;
       this.favRefresh++;
+      // 详情页把本地文件夹删了：媒体库 / 搜索里那张卡要跟着消失
+      if (Store.I.itemRemoved) {
+        Store.I.itemRemoved = false;
+        this.libRefresh++;
+      }
+      // 分类页里改了收藏 / 隐藏才重拉标签列表：无条件重拉会把滚动位置也一起清掉
+      if (Store.I.facetDirty) {
+        Store.I.facetDirty = false;
+        this.facetsRefresh++;
+      }
     }
   }
 
@@ -116,16 +126,15 @@ struct Index {
       .height(44)
       .justifyContent(FlexAlign.Center)
       .borderRadius(14)
-      .backgroundColor(this.currentTab === index ? '#1FFFFFFF' : '#00FFFFFF')
+      .backgroundColor(this.currentTab === index ? '#26FFFFFF' : '#00FFFFFF')
       .border({
         width: this.currentTab === index ? 0.5 : 0,
         color: '#2EFFFFFF'
       })
     }
     .width('100%')
-    .height(54)
+    .height(52)
     .justifyContent(FlexAlign.Center)
-    .border({ width: { top: 0.5 }, color: '#1AFFFFFF' })
   }
 
   build() {
@@ -227,9 +236,19 @@ struct Index {
           .tabBar(this.TabBarItem(this.profileIndex, '我的', $r('app.media.ic_tab_me')))
           .backgroundColor(Theme.BG)
         }
-        .barHeight(54)
-        .barBackgroundColor('#8C0B0B0F')
-        .barBackgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
+        // 悬浮玻璃功能栏：内容从栏下穿过，材质交给系统沉浸光感（TabBar 是官方
+        // 明确支持 systemMaterial 的位置），带圆角胶囊、随系统深浅色/算力自适应。
+        .barHeight(58)
+        .barOverlap(true)
+        .barBackgroundColor(Color.Transparent)
+        .barFloatingStyle({
+          barSideMargin: 16,
+          barBottomMargin: 12,
+          systemMaterial: new uiMaterial.ImmersiveMaterial({
+            style: uiMaterial.ImmersiveStyle.THIN,
+            materialColor: '#2E000000'
+          })
+        })
         .scrollable(false)
         .animationDuration(0)
         .onChange((index: number) => {

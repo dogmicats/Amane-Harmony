@@ -71,7 +71,7 @@ docker compose -f deploy/compose.example.yml logs -f
 
 模板用同一个 docker network + 服务名互访，**不用 `network_mode: host`**（该模式在 Docker Desktop for Windows / macOS 上不生效）。Amane 的 data 与媒体目录以 `:ro` 挂载。
 
-也可以用 GHCR 上的预构建镜像：`image: ghcr.io/dogmicats/amane-user:2.2.0`，把 compose 里的 `build:` 换成 `image:` 即可。镜像由 `publish-image.yml` 在打 tag 时构建。
+也可以用 GHCR 上的预构建镜像：`image: ghcr.io/dogmicats/amane-user:2.3.0`，把 compose 里的 `build:` 换成 `image:` 即可。镜像由 `publish-image.yml` 在打 tag 时构建。
 
 ## 方案 B：纯 Python（不用 Docker）
 
@@ -99,7 +99,7 @@ python server\server.py
 
 ```sh
 curl http://127.0.0.1:8770/api/user/ping
-# {"ok":true,"version":"2.2.0",...}
+# {"ok":true,"version":"2.3.0",...}
 ```
 
 ## 外网反代（可选）
@@ -111,3 +111,5 @@ curl http://127.0.0.1:8770/api/user/ping
 ## 媒体目录是 FUSE / 云盘挂载时
 
 字幕扫描**只列出视频所在目录**，不递归、不做全库 walk —— CD2 / rclone 这类 FUSE 挂载上递归遍历可能长时间卡死。这也是为什么字幕功能要求显式配置 `MEDIA_PATH_MAP`，而不是让服务自己去找文件。
+
+播放代理默认把读过的数据块缓存进内存（LRU，上限 320MB，可用 `AMANE_PLAY_CACHE_MB` 调整）：拖动回看、seek 风暴型文件不再反复回源网盘冷区。内存紧张的机器可以调低；纯本地盘部署影响不大。

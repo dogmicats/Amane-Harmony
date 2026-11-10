@@ -225,6 +225,39 @@ export interface CastFindItem {
   male_count: number;
   cast_total: number;
   cast: CastMember[];
+  /** 导演名（最多 3 个）：共演页要能一眼看出「这批结果是不是同一个导演包的」。 */
+  directors: string[];
+}
+
+/** 共演页导演筛选栏的候选项（来自 /api/user/facets/director）。 */
+export interface DirectorHit {
+  id: number;
+  name: string;
+  count: number;
+}
+
+export interface DirectorHitList {
+  items: DirectorHit[];
+  total: number;
+}
+
+export function safeDirectorHits(raw: DirectorHitList): DirectorHit[] {
+  const out: DirectorHit[] = [];
+  if (raw === undefined || raw === null || !Array.isArray(raw.items)) {
+    return out;
+  }
+  for (let i = 0; i < raw.items.length; i++) {
+    const d: DirectorHit = raw.items[i];
+    if (d === undefined || d === null) {
+      continue;
+    }
+    const id: number = Math.trunc(n(d.id));
+    const name: string = s(d.name);
+    if (id > 0 && name.length > 0) {
+      out.push({ id: id, name: name, count: Math.trunc(n(d.count)) });
+    }
+  }
+  return out;
 }
 
 export interface CastFindList {
@@ -232,6 +265,12 @@ export interface CastFindList {
   total: number;
   offset: number;
   limit: number;
+  /** 服务端回显的 `female_n` / `male_n` / `director_id`。
+   *  老服务端（< 1.3.8）不认识这些参数、也不会回显 —— 客户端用它判断
+   *  「条件是生效了还是被旧服务端默默忽略了」，否则页面会若无其事地显示全库结果。 */
+  female_n: number[];
+  male_n: number[];
+  director_id: number[];
 }
 
 export function safeCastMember(raw: CastMember): CastMember {
@@ -258,7 +297,10 @@ export function safeCastMembers(raw: CastMember[]): CastMember[] {
 }
 
 export function safeCastFindList(raw: CastFindList): CastFindList {
-  const out: CastFindList = { items: [], total: 0, offset: 0, limit: 0 };
+  const out: CastFindList = {
+    items: [], total: 0, offset: 0, limit: 0,
+    female_n: [], male_n: [], director_id: []
+  };
   if (raw === undefined || raw === null) {
     return out;
   }
@@ -278,12 +320,31 @@ export function safeCastFindList(raw: CastFindList): CastFindList {
       female_count: Math.trunc(n(m.female_count)),
       male_count: Math.trunc(n(m.male_count)),
       cast_total: Math.trunc(n(m.cast_total)),
-      cast: safeCastMembers(m.cast)
+      cast: safeCastMembers(m.cast),
+      directors: Array.isArray(m.directors) ? m.directors : []
     });
   }
   out.total = Math.trunc(n(raw.total));
   out.offset = Math.trunc(n(raw.offset));
   out.limit = Math.trunc(n(raw.limit));
+  out.female_n = intList(raw.female_n);
+  out.male_n = intList(raw.male_n);
+  out.director_id = intList(raw.director_id);
+  return out;
+}
+
+/** 回显用的整数数组：老服务端没有这个字段时给空数组（不留 undefined）。 */
+function intList(raw: number[]): number[] {
+  const out: number[] = [];
+  if (!Array.isArray(raw)) {
+    return out;
+  }
+  for (let i = 0; i < raw.length; i++) {
+    const v: number = Math.trunc(Number(raw[i]));
+    if (isFinite(v)) {
+      out.push(v);
+    }
+  }
   return out;
 }
 
@@ -292,6 +353,8 @@ export interface ActorStill {
   id: number;
   number: string;
   url: string;
+  /** 宽高比（w/h）：服务端量过就下发，客户端首帧就能按真实比例摆瀑布流。 */
+  ratio: number;
 }
 
 export interface ActorStillList {
@@ -312,7 +375,7 @@ export function safeActorStills(raw: ActorStillList): ActorStill[] {
     const id: number = Math.trunc(n(item.id));
     const url: string = s(item.url);
     if (id > 0 && url.length > 0) {
-      out.push({ id: id, number: s(item.number), url: url });
+      out.push({ id: id, number: s(item.number), url: url, ratio: n(item.ratio) });
     }
   }
   return out;

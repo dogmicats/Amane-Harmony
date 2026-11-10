@@ -4,8 +4,8 @@ title: "Amane-Harmony"
 abstract: "Unofficial HarmonyOS native client and companion service for a self-hosted Amane media library."
 type: software
 license: MIT
-version: 2.2.0
-date-released: 2026-11-09
+version: 2.3.0
+date-released: 2026-11-10
 repository-code: "https://github.com/dogmicats/Amane-Harmony"
 authors:
   - name: "dogmicats"

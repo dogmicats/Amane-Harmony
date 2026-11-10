@@ -9,8 +9,16 @@ export interface FacetItem {
   id: number;
   name: string;
   count: number;
-  /** 系列封面：系列内最近几部的海报，客户端拼四宫格；其他分类为空数组。 */
+  /** 系列 / 标签封面：最近几部的海报，客户端拼四宫格；其他分类为空数组。 */
   posters: string[];
+  /** 分类自己的收藏位。与「影片收藏」无关：不写收藏表、不触发入库。 */
+  isFavorite: boolean;
+  /** 分类内最晚的发行日，YYYY-MM-DD；没有影片时为空。 */
+  lastRelease: string;
+  /** 分类内最新一条媒体文件的入库日，YYYY-MM-DD。 */
+  lastAdded: string;
+  /** 是否被用户隐藏（只在分类浏览列表里过滤，不影响影片与刮削）。 */
+  isHidden: boolean;
 }
 
 export interface FacetList {
@@ -19,6 +27,12 @@ export interface FacetList {
   total: number;
   offset: number;
   limit: number;
+  /** 随机排序的种子：翻页必须带回去，否则每页重摇会重复。 */
+  seed: number;
+  /** 当前是否把隐藏项也列出来了。 */
+  includeHidden: boolean;
+  /** 这个分类一共隐藏了多少条（按钮上显示数字）。 */
+  hiddenCount: number;
 }
 
 export interface FacetMediaItem {
@@ -35,10 +49,19 @@ export interface FacetMediaItem {
 export interface FacetMediaList {
   kind: string;
   id: number;
+  /** 分类头部：名字 / 收藏位 / 缩略图。影片墙标题栏与收藏按钮用。 */
+  facet: FacetItem;
   items: FacetMediaItem[];
   total: number;
   offset: number;
   limit: number;
+}
+
+/** 分类收藏的返回：favorite 是写入后的目标值。 */
+export interface FacetFavoriteResult {
+  kind: string;
+  id: number;
+  favorite: boolean;
 }
 
 /** 影片详情的分类归属：系列 / 制片商 / 标签 / 用户标签 / 导演。 */
@@ -72,7 +95,10 @@ function n(v: number): number {
 }
 
 export function emptyFacet(): FacetItem {
-  const f: FacetItem = { id: 0, name: '', count: 0, posters: [] };
+  const f: FacetItem = {
+    id: 0, name: '', count: 0, posters: [], isFavorite: false,
+    lastRelease: '', lastAdded: '', isHidden: false
+  };
   return f;
 }
 
@@ -85,7 +111,7 @@ export function emptyItemFacets(): ItemFacets {
 }
 
 export function safeFacet(raw: FacetItem): FacetItem {
-  const f: FacetItem = { id: 0, name: '', count: 0, posters: [] };
+  const f: FacetItem = emptyFacet();
   if (raw === undefined || raw === null) {
     return f;
   }
@@ -93,6 +119,10 @@ export function safeFacet(raw: FacetItem): FacetItem {
   f.name = s(raw.name);
   f.count = Math.trunc(n(raw.count));
   f.posters = Array.isArray(raw.posters) ? raw.posters : [];
+  f.isFavorite = raw.isFavorite === true;
+  f.lastRelease = s(raw.lastRelease);
+  f.lastAdded = s(raw.lastAdded);
+  f.isHidden = raw.isHidden === true;
   return f;
 }
 
@@ -111,7 +141,10 @@ export function safeFacetArray(raw: FacetItem[]): FacetItem[] {
 }
 
 export function safeFacetList(raw: FacetList): FacetList {
-  const out: FacetList = { kind: '', items: [], total: 0, offset: 0, limit: 0 };
+  const out: FacetList = {
+    kind: '', items: [], total: 0, offset: 0, limit: 0,
+    seed: 0, includeHidden: false, hiddenCount: 0
+  };
   if (raw === undefined || raw === null) {
     return out;
   }
@@ -120,16 +153,22 @@ export function safeFacetList(raw: FacetList): FacetList {
   out.total = Math.trunc(n(raw.total));
   out.offset = Math.trunc(n(raw.offset));
   out.limit = Math.trunc(n(raw.limit));
+  out.seed = Math.trunc(n(raw.seed));
+  out.includeHidden = raw.includeHidden === true;
+  out.hiddenCount = Math.trunc(n(raw.hiddenCount));
   return out;
 }
 
 export function safeFacetMediaList(raw: FacetMediaList): FacetMediaList {
-  const out: FacetMediaList = { kind: '', id: 0, items: [], total: 0, offset: 0, limit: 0 };
+  const out: FacetMediaList = {
+    kind: '', id: 0, facet: emptyFacet(), items: [], total: 0, offset: 0, limit: 0
+  };
   if (raw === undefined || raw === null) {
     return out;
   }
   out.kind = s(raw.kind);
   out.id = Math.trunc(n(raw.id));
+  out.facet = safeFacet(raw.facet);
   out.total = Math.trunc(n(raw.total));
   out.offset = Math.trunc(n(raw.offset));
   out.limit = Math.trunc(n(raw.limit));

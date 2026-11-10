@@ -71,6 +71,16 @@ export class Store {
   libraries: LibraryInfo[] = [];
   favIds: Set<number> = new Set<number>();
   /**
+   * 分类页的「脏」标记：在分类影片墙里改了收藏 / 隐藏，返回列表时要知道该重拉。
+   * 只用一个布尔，不让每个页面各自维护一套回调。
+   */
+  facetDirty: boolean = false;
+  /**
+   * 影片被删掉的「脏」标记：详情页把某个条目的最后一份可播文件删掉后，
+   * 返回列表时媒体库/搜索里那张卡必须消失。与 facetDirty 分开，避免重拉标签列表。
+   */
+  itemRemoved: boolean = false;
+  /**
    * 详情页预取缓存：点剧照时先把 /api/user/item/{id} 拿到，
    * 详情页 `takeDetail` 命中就能立刻渲染，不再闪一次加载圈。
    * 一次性使用（取走即删），避免脏数据长期驻留。

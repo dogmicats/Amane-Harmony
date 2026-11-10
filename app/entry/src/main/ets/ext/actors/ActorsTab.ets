@@ -780,7 +780,7 @@ export struct ActorsTab {
         .columnsTemplate('1fr 1fr 1fr')
         .columnsGap(9)
         .rowsGap(12)
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 12 })
+        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 84 })
         .layoutWeight(1)
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)

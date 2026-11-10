@@ -24,6 +24,7 @@
   IMAGE_TOKEN       不给则读 {AMANE_DATA}/image_token（图片代理鉴权用）
   PUBLIC_AMANE_URL  写进图片 URL 的对外地址（可选，不填则由客户端自己拼）
   MEDIA_PATH_MAP    amane 内路径到本服务可见路径的映射，如 /media2=/mnt/media2,/media=/mnt/media
+  AMANE_PLAY_CACHE_MB  播放块缓存上限（MB），默认 320
   IMG_HOST_ALLOW_EXTRA  追加允许代理的图片主机（逗号分隔）
   IMG_REFERER       抓取外链图片时携带的 Referer（可选）
   EXTENSIONS_MANIFEST   扩展清单路径，默认 /app/extensions.json
@@ -38,11 +39,14 @@ import mimetypes
 import os
 import random
 import re
+import select
+import socket
 import sqlite3
 import sys
 import threading
 import time
 import traceback
+from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -50,7 +54,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, build_opener, ProxyHandler
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 AMANE_BASE = os.environ.get("AMANE_BASE", "http://127.0.0.1:8000").rstrip("/")
 AMANE_DATA = os.environ.get("AMANE_DATA", "/amane-data")
@@ -167,7 +171,9 @@ class ExtensionHost:
             user_db=user_db, amane_db=amane_db, log=log, now_iso=now_iso,
             os=os, json=json, datetime=datetime, timedelta=timedelta, timezone=timezone,
             # 通用上游能力：扩展不必自己读凭据文件 / 拼图片代理 URL
-            amane_get=amane_get, public_image=public_image,
+            amane_get=amane_get, amane_post=amane_post, public_image=public_image,
+            # 通用图片能力：量宽高（img_dims 缓存 + 只取头部 128KB）
+            image_dims=image_dims,
             # 上传类扩展要把文件落盘，统一走核心，别各写一套路径规则
             save_photo=save_photo, photo_dir=PHOTO_DIR,
         )
@@ -269,6 +275,20 @@ def init_user_db() -> None:
                 finished    INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_history_played ON history(played_at DESC);
+            -- 横幅图尺寸缓存：只下载校验一次，之后按 url 命中（含不合格的 0x0）
+            CREATE TABLE IF NOT EXISTS img_dims (
+                url        TEXT PRIMARY KEY,
+                w          INTEGER NOT NULL DEFAULT 0,
+                h          INTEGER NOT NULL DEFAULT 0,
+                checked_at TEXT
+            );
+            -- 横幅池：只存「已验证合格」的横图（宽≥720、宽高比≥1.25），每天洗牌取用
+            CREATE TABLE IF NOT EXISTS banner_ok (
+                metadata_id INTEGER PRIMARY KEY,
+                url         TEXT NOT NULL,
+                ratio       REAL NOT NULL DEFAULT 1.778,
+                updated_at  TEXT
+            );
             """
             + "\n".join(EXT.ddl)
         )
@@ -412,6 +432,8 @@ def attach_marks(conn: sqlite3.Connection, items: list) -> list:
     for it in items:
         if isinstance(it, dict):
             it["marks"] = got.get(it.get("id"), [])
+    # 私有扩展可以在这里追加自己的标记（例如「还行」评价）；核心不感知具体语义。
+    EXT.call("marks_extra", items)
     return items
 
 
@@ -548,6 +570,9 @@ def build_home() -> dict:
         "continue": build_continue(),
         "rows": rows_out,
         "recommend": recommend,
+        # 每日推荐横幅：只放「宽度 ≥720 且宽高比 ≥1.25」的真横图，并带上真实比例，
+        # 客户端按比例定宽（16:9 不是唯一答案：dmm 剧照多是 3:2）。
+        "banners": build_banners(12),
         "libraries": libs,
         "generated_at": now_iso(),
     }
@@ -596,7 +621,349 @@ def build_recommend(limit: int = 20) -> list[dict]:
         uniq.append(item)
     rng = random.Random(date.today().isoformat())
     rng.shuffle(uniq)
-    return attach_marks_auto(attach_progress(uniq[:limit]))
+    # 每日推荐用横幅展示，横图（剧照/封面 fanart）是硬需求：没有横图的往后排，
+    # 不足 limit 再用竖版海报补位，保证总数不变。
+    with_fan = [x for x in uniq if x["fanart"]]
+    out = with_fan[:limit]
+    if len(out) < limit:
+        out += [x for x in uniq if not x["fanart"]][:limit - len(out)]
+    return attach_marks_auto(attach_progress(out))
+
+
+# --------------------------------------------------------------------------- #
+# 每日推荐横幅：只挑「真横图」，并把真实宽高比带给客户端
+#
+# 为什么不能直接用 pick_fanart：它的候选里混着竖版样图（147x200、600x800），
+# 拉到 16:9 只裁中间一条，看起来又糊又不像横幅。这里逐张验证尺寸（结果落
+# user.db 的 img_dims，第二次起零下载），并让客户端按真实比例定宽。
+# --------------------------------------------------------------------------- #
+
+BANNER_TTL = 1800
+BANNER_POOL_TARGET = 60          # 池子里攒够这么多张就不再预热
+_banner_warm_lock = threading.Lock()
+_banner_warming = False
+_banner_daily_key = ""
+_banner_daily_rows: list = []
+
+
+def _image_size(data: bytes) -> tuple[int, int] | None:
+    """纯标准库读 JPEG / PNG / WebP 的宽高（容器里没有 Pillow）。"""
+    try:
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+        if data[:2] == b"\xff\xd8":
+            i, n = 2, len(data)
+            while i + 9 < n:
+                if data[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = data[i + 1]
+                if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+                              0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                    return (int.from_bytes(data[i + 7:i + 9], "big"),
+                            int.from_bytes(data[i + 5:i + 7], "big"))
+                if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                    i += 2
+                    continue
+                i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
+            return None
+        if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            fmt = data[12:16]
+            if fmt == b"VP8X":
+                return (1 + int.from_bytes(data[24:27], "little"),
+                        1 + int.from_bytes(data[27:30], "little"))
+            if fmt == b"VP8 ":
+                return (int.from_bytes(data[26:28], "little") & 0x3FFF,
+                        int.from_bytes(data[28:30], "little") & 0x3FFF)
+            if fmt == b"VP8L":
+                bits = int.from_bytes(data[21:25], "little")
+                return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+        return None
+    except (IndexError, ValueError):
+        return None
+
+
+def _dims_get(conn: sqlite3.Connection, url: str) -> tuple[int, int] | None:
+    try:
+        row = conn.execute("SELECT w, h FROM img_dims WHERE url = ?", (url,)).fetchone()
+    except sqlite3.Error:
+        return None
+    return (row["w"], row["h"]) if row else None
+
+
+def _dims_put(conn: sqlite3.Connection, url: str, w: int, h: int) -> None:
+    try:
+        conn.execute(
+            "INSERT INTO img_dims(url, w, h, checked_at) VALUES(?, ?, ?, ?) "
+            "ON CONFLICT(url) DO UPDATE SET w = excluded.w, h = excluded.h, "
+            "checked_at = excluded.checked_at",
+            (url, int(w), int(h), now_iso()),
+        )
+    except sqlite3.Error as exc:
+        log(f"WARN img_dims: {exc}")
+
+
+IMG_PROBE_BYTES = 131072
+
+
+def image_dims(url: str) -> tuple[int, int] | None:
+    """量一张图的宽高，结果落 img_dims（第二次起零网络）。
+
+    只取头部 128KB 就够读 JPEG/PNG/WebP 的尺寸信息，比整张下载快一个量级 ——
+    剧照墙「再抽一次」慢、横幅预热慢，都是因为以前每次都整张拉。
+
+    返回 None 表示取不到或不是图（同时把 0x0 记下来，避免反复重试）。
+    """
+    try:
+        with user_db() as conn:
+            dims = _dims_get(conn, url)
+    except sqlite3.Error:
+        dims = None
+    if dims is not None:
+        return (dims[0], dims[1]) if dims[0] > 0 and dims[1] > 0 else None
+    if not host_allowed(url):
+        return None
+    size: tuple[int, int] | None = None
+    try:
+        req = Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+            "Referer": os.environ.get("IMG_REFERER", ""),
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            "Range": f"bytes=0-{IMG_PROBE_BYTES - 1}",
+        })
+        with _opener.open(req, timeout=8) as resp:
+            blob = resp.read(IMG_PROBE_BYTES)
+        if blob:
+            size = _image_size(blob)
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+        size = None
+    w, h = size if size else (0, 0)
+    try:
+        with user_db() as conn:
+            _dims_put(conn, url, w, h)
+    except sqlite3.Error:
+        pass
+    return (w, h) if w > 0 and h > 0 else None
+
+
+# --------------------------------------------------------------------------- #
+# 剧照宽高比：详情页瀑布流的地基
+#
+# 剧照里横图竖图混着来（16:9 截图 + 竖版海报），详情页原来一律按 190x107 铺开，
+# 竖版就只剩中间一条。瀑布流要按真实比例各自定高，所以这里把比例一起下发。
+# 尺寸复用 img_dims（横幅预热已经在量），没量过的先给 0 让客户端自己量，
+# 同时后台补一刀，下次进同一部片子就准了。
+# --------------------------------------------------------------------------- #
+
+_still_dims_lock = threading.Lock()
+_still_dims_warming: set[str] = set()
+
+
+def _still_ratios(urls: list[str]) -> list[float]:
+    """返回与 urls 等长的宽高比；0.0 = 还没量过。"""
+    out: list[float] = []
+    missing: list[str] = []
+    try:
+        with user_db() as conn:
+            for url in urls:
+                dims = _dims_get(conn, url)
+                if dims and dims[0] > 0 and dims[1] > 0:
+                    out.append(round(dims[0] / dims[1], 3))
+                else:
+                    out.append(0.0)
+                    missing.append(url)
+    except sqlite3.Error as exc:
+        log(f"WARN still ratios: {exc}")
+        return [0.0] * len(urls)
+    if missing:
+        _warm_still_dims(missing)
+    return out
+
+
+def _warm_still_dims(urls: list[str]) -> None:
+    """后台把没量过的剧照尺寸补进 img_dims，别让详情页等下载。"""
+    todo: list[str] = []
+    with _still_dims_lock:
+        for url in urls:
+            if url not in _still_dims_warming:
+                _still_dims_warming.add(url)
+                todo.append(url)
+    if not todo:
+        return
+
+    def run() -> None:
+        try:
+            for url in todo:
+                # image_dims 自己会落库；命中缓存时零网络
+                image_dims(url)
+        except Exception as exc:  # noqa: BLE001
+            log(f"WARN still dims: {exc}")
+        finally:
+            with _still_dims_lock:
+                for url in todo:
+                    _still_dims_warming.discard(url)
+
+    try:
+        threading.Thread(target=run, daemon=True, name="still-dims").start()
+    except RuntimeError as exc:
+        log(f"WARN still dims thread: {exc}")
+        with _still_dims_lock:
+            for url in todo:
+                _still_dims_warming.discard(url)
+
+
+def _banner_candidates(row: sqlite3.Row, per_film: int = 5) -> list[str]:
+    urls: list[str] = []
+    for group in _json_dict(row["extrafanart_urls"]).values():
+        for url in _json_list(group):
+            if isinstance(url, str) and url.startswith("http"):
+                urls.append(url)
+    for url in _json_list(row["thumb_urls"]):
+        if isinstance(url, str) and url.startswith("http"):
+            urls.append(url)
+    return urls[:per_film]
+
+
+def _pick_banner(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[str, float]:
+    """在候选里找第一张合格横图：宽 ≥720、宽高比 ≥1.25。返回 (代理URL, 比例)。"""
+    for url in _banner_candidates(row):
+        if not host_allowed(url):
+            continue
+        dims = image_dims(url)          # 命中缓存零网络，未命中只取头部 128KB
+        if not dims:
+            continue
+        w, h = dims
+        if w >= 720 and h > 0 and w / h >= 1.25:
+            return _img_proxy(url), round(w / h, 3)
+    return "", 0.0
+
+
+def _scan_banners(seconds: float = 5.0, tries: int = 40) -> int:
+    """按当日种子扫一批候选，把合格的写进 banner_ok；返回本轮新增数。
+
+    只做「冷路径」：首页不直接等它，由后台预热线程调用。
+    """
+    added = 0
+    try:
+        with amane_db() as conn:
+            rows = conn.execute(
+                "SELECT " + META_COLUMNS + " FROM metadata m "
+                "JOIN (SELECT DISTINCT metadata_id FROM media_files) f ON f.metadata_id = m.id "
+                "WHERE m.extrafanart_urls IS NOT NULL "
+                "AND m.extrafanart_urls NOT IN ('', '{}', '[]') "
+                "ORDER BY m.updated_at DESC LIMIT 900"
+            ).fetchall()
+            rows = list(rows)
+            random.Random(date.today().isoformat()).shuffle(rows)
+            with user_db() as uconn:
+                done = {r["metadata_id"] for r in uconn.execute("SELECT metadata_id FROM banner_ok")}
+            deadline = time.monotonic() + seconds
+            checked = 0
+            with user_db() as uconn:
+                for row in rows:
+                    if checked >= tries or time.monotonic() > deadline:
+                        break
+                    if row["id"] in done:
+                        continue
+                    checked += 1
+                    url, ratio = _pick_banner(uconn, row)
+                    if not url:
+                        # 拒绝也落一条（url 为空）：下一轮直接跳过，不再重复探测
+                        uconn.execute(
+                            "INSERT INTO banner_ok(metadata_id, url, ratio, updated_at) "
+                            "VALUES(?, '', 0, ?) ON CONFLICT(metadata_id) DO UPDATE SET "
+                            "url = '', ratio = 0, updated_at = excluded.updated_at",
+                            (row["id"], now_iso()),
+                        )
+                        continue
+                    uconn.execute(
+                        "INSERT INTO banner_ok(metadata_id, url, ratio, updated_at) "
+                        "VALUES(?, ?, ?, ?) ON CONFLICT(metadata_id) DO UPDATE SET "
+                        "url = excluded.url, ratio = excluded.ratio, "
+                        "updated_at = excluded.updated_at",
+                        (row["id"], url, ratio, now_iso()),
+                    )
+                    added += 1
+        if added:
+            log(f"横幅池 +{added}")
+    except sqlite3.Error as exc:
+        log(f"WARN scan banners: {exc}")
+    return added
+
+
+def _kick_banner_warm() -> None:
+    """后台补池：首页只读池子，缺图时异步补，绝不阻塞首屏。"""
+    global _banner_warming
+    with _banner_warm_lock:
+        if _banner_warming:
+            return
+        _banner_warming = True
+
+    def worker() -> None:
+        global _banner_warming
+        try:
+            for _ in range(6):
+                with user_db() as conn:
+                    n = conn.execute(
+                        "SELECT COUNT(*) FROM banner_ok WHERE url <> ''"
+                    ).fetchone()[0]
+                if n >= BANNER_POOL_TARGET:
+                    break
+                if _scan_banners() == 0:
+                    break
+        except Exception as exc:  # noqa: BLE001
+            log(f"WARN banner warm: {exc}")
+        finally:
+            with _banner_warm_lock:
+                _banner_warming = False
+            # 池子变了，让当日缓存失效
+            _banner_daily_rows.clear()
+
+    threading.Thread(target=worker, name="banner-warm", daemon=True).start()
+
+
+def _banner_rows(limit: int) -> list[dict]:
+    """从已校验池里按日种子洗牌取前 N；洗牌结果当日缓存。
+
+    banner_ok 在 user.db、metadata 在 amane.db，跨库不能 JOIN：各自查再按 id 合并。
+    """
+    global _banner_daily_key, _banner_daily_rows
+    key = date.today().isoformat()
+    if _banner_daily_key != key or not _banner_daily_rows:
+        with amane_db() as conn:
+            metas = conn.execute(
+                "SELECT " + META_COLUMNS + " FROM metadata m "
+                "WHERE m.id IN (SELECT metadata_id FROM media_files) "
+                "ORDER BY m.updated_at DESC LIMIT 1200"
+            ).fetchall()
+        by_id = {r["id"]: r for r in metas}
+        with user_db() as conn:
+            pool = conn.execute(
+                "SELECT metadata_id, url, ratio FROM banner_ok WHERE url <> ''"
+            ).fetchall()
+        items = []
+        for p in pool:
+            row = by_id.get(p["metadata_id"])
+            if row is None:
+                continue
+            item = item_of(row)
+            item["fanart"] = p["url"]
+            item["fanart_ratio"] = p["ratio"]
+            items.append(item)
+        random.Random(key).shuffle(items)
+        _banner_daily_key = key
+        _banner_daily_rows = items
+    return list(_banner_daily_rows[:limit])
+
+
+def build_banners(limit: int = 12) -> list[dict]:
+    items = _banner_rows(limit)
+    if len(items) < limit:
+        _kick_banner_warm()
+    if items:
+        with amane_db() as conn:
+            attach_marks(conn, items)
+    return items
 
 
 def cached_home() -> dict:
@@ -656,6 +1023,21 @@ def amane_get(path: str, params: dict | None = None, timeout: int = 12) -> dict:
     req = Request(url, headers={"Authorization": f"Bearer {AMANE_TOKEN}"})
     with _opener.open(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def amane_post(path: str, payload: dict | None = None, timeout: int = 12) -> dict:
+    """带 Bearer 向上游提交 JSON（POST）；空响应体返回 {}。
+
+    写上游只能走这条路：扩展没有凭据访问面，核心也不希望每个扩展自己读 token 文件。
+    """
+    body = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
+    req = Request(AMANE_BASE + path, data=body, method="POST", headers={
+        "Authorization": f"Bearer {AMANE_TOKEN}",
+        "Content-Type": "application/json",
+    })
+    with _opener.open(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8")
+    return json.loads(raw) if raw.strip() else {}
 
 
 def public_image(url: str) -> str:
@@ -720,6 +1102,18 @@ def route(method: str, pattern: str):
         return fn
 
     return deco
+
+
+class _PlayJob:
+    """一块数据的下载任务：边下边用，下载完进 LRU 缓存。"""
+
+    __slots__ = ("data", "done", "failed", "cv")
+
+    def __init__(self) -> None:
+        self.data = bytearray()
+        self.done = False
+        self.failed = False
+        self.cv = threading.Condition()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -859,6 +1253,14 @@ class Handler(BaseHTTPRequestHandler):
         "ETag", "Last-Modified", "Cache-Control",
     )
 
+    # 同一部片的并发流登记簿（source/mid → 会话列表）。
+    #
+    # **只清理真正僵住的流**（客户端已经不再读、write 卡住），绝不按「同片只留一路」
+    # 来掐：mp4 的 moov 常常在文件尾部，mpv 正常播放就会另开一条连接读索引，
+    # 两条连接互掐会变成「永远建不完缓冲」（2026-11-10 实测把用户坑了一次）。
+    _stream_lock = threading.Lock()
+    _stream_sessions: dict[str, list] = {}
+
     @route("GET", r"/api/user/photo/([0-9a-f]{8,64}\.(?:jpg|png|webp|gif))")
     @route("HEAD", r"/api/user/photo/([0-9a-f]{8,64}\.(?:jpg|png|webp|gif))")
     def photo(self, query: dict, name: str) -> None:
@@ -951,6 +1353,302 @@ class Handler(BaseHTTPRequestHandler):
         out.sort(key=lambda x: (0 if x["available"] else 1, -x["size"]))
         self._json({"items": out, "source": source, "metadata_id": int(mid)})
 
+    def _client_gone(self) -> bool:
+        """非阻塞探测客户端是否已经断开（seek 后播放器会丢掉旧连接）。"""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            if not readable:
+                return False
+            return self.connection.recv(1, socket.MSG_PEEK) == b""
+        except (BlockingIOError, InterruptedError):
+            return False
+        except (OSError, ValueError):
+            return True
+
+    # ---- 网盘源块缓存 ---------------------------------------------------- #
+    #
+    # 为什么必须有它：像 MIDE-776 这种文件，**音轨和视频轨在文件里各占一大片**
+    # （1800s 处视频在 2.21GB、音频在 3.16GB），解复用器必须来回跳 —— ffmpeg 实测
+    # 8 秒里 seek 了 389 次，每次 seek 都是一条新的 Range 请求。每条都回源 CD2
+    # （冷区首字节 0.3~4.6s）的话，播放器永远填不满缓存（HUD 缓存秒数 0.1s 0.1s 爬）。
+    #
+    # 做法：块任务（_PlayJob）边下边用 —— 客户端不必等整块下完就能拿到开头的数据；
+    # 块按 1MiB 对齐存进 LRU，并**并行**预取后面若干块。这样 CD2 的冷启动延迟被
+    # 多个块同时摊掉，播放点前面始终有几秒到十几秒的余量。
+    PLAY_BLOCK = 1024 * 1024
+    PLAY_READAHEAD = 12
+    PLAY_MAX_JOBS = 16
+    PLAY_CACHE_BYTES = int(os.environ.get("AMANE_PLAY_CACHE_MB", "320")) * 1024 * 1024
+    _play_lock = threading.Lock()
+    _play_blocks: OrderedDict = OrderedDict()
+    _play_stat: dict = {"bytes": 0}
+    _play_jobs: dict = {}
+    _play_meta: dict[str, dict] = {}
+
+    def _play_cache_get(self, ck: str):
+        with self._play_lock:
+            data = self._play_blocks.get(ck)
+            if data is None:
+                return None
+            self._play_blocks.move_to_end(ck)
+            return data
+
+    def _play_cache_put(self, ck: str, data: bytes) -> None:
+        if not data:
+            return
+        with self._play_lock:
+            if ck in self._play_blocks:
+                return
+            self._play_blocks[ck] = data
+            self._play_stat["bytes"] += len(data)
+            while self._play_stat["bytes"] > self.PLAY_CACHE_BYTES and self._play_blocks:
+                _, old = self._play_blocks.popitem(last=False)
+                self._play_stat["bytes"] -= len(old)
+
+    def _play_job_for(self, upstream: str, ck: str, blk: int):
+        """取（或启动）一块的下载任务；已缓存则立刻是完成状态。"""
+        key = f"{ck}#{blk}"
+        cached = self._play_cache_get(key)
+        if cached is not None:
+            job = _PlayJob()
+            job.data = bytearray(cached)
+            job.done = True
+            return key, job
+        with self._play_lock:
+            job = self._play_jobs.get(key)
+            if job is not None:
+                return key, job
+            if len(self._play_jobs) >= self.PLAY_MAX_JOBS:
+                return key, None
+            job = _PlayJob()
+            self._play_jobs[key] = job
+
+        def run() -> None:
+            headers = {"Authorization": f"Bearer {AMANE_TOKEN}",
+                       "Range": f"bytes={blk * self.PLAY_BLOCK}-"
+                                f"{blk * self.PLAY_BLOCK + self.PLAY_BLOCK - 1}"}
+            try:
+                with _opener.open(Request(upstream, headers=headers), timeout=120) as resp:
+                    if resp.status not in (200, 206):
+                        job.failed = True
+                    else:
+                        read_once = getattr(resp, "read1", None) or resp.read
+                        while len(job.data) < self.PLAY_BLOCK:
+                            # 上游万一不认 Range（回 200 整文件），这里也必须停在块大小，
+                            # 否则会把整个 8GB 读进内存
+                            part = read_once(min(65536, self.PLAY_BLOCK - len(job.data)))
+                            if not part:
+                                break
+                            with job.cv:
+                                job.data += part
+                                job.cv.notify_all()
+            except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+                job.failed = True
+                log(f"play block {blk} failed: {exc}")
+            finally:
+                with job.cv:
+                    job.done = True
+                    job.cv.notify_all()
+                with self._play_lock:
+                    self._play_jobs.pop(key, None)
+                if job.data and not job.failed:
+                    self._play_cache_put(key, bytes(job.data))
+
+        try:
+            threading.Thread(target=run, daemon=True, name="play-block").start()
+        except RuntimeError:
+            with self._play_lock:
+                self._play_jobs.pop(key, None)
+            return key, None
+        return key, job
+
+    def _play_fetch(self, upstream: str, start: int, size: int):
+        """同步取一段（任务数到上限时的兜底）。"""
+        if size <= 0:
+            return None
+        headers = {"Authorization": f"Bearer {AMANE_TOKEN}",
+                   "Range": f"bytes={start}-{start + size - 1}"}
+        try:
+            with _opener.open(Request(upstream, headers=headers), timeout=120) as resp:
+                if resp.status not in (200, 206):
+                    return None
+                buf = bytearray()
+                while len(buf) < size:
+                    part = resp.read(min(65536, size - len(buf)))
+                    if not part:
+                        break
+                    buf += part
+                return bytes(buf) if buf else None
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+            log(f"play fetch {start}+{size} failed: {exc}")
+            return None
+
+    def _play_prefetch(self, upstream: str, ck: str, blocks: list) -> None:
+        """并行预取后续块（每个块一个任务，任务表里有去重与总量上限）。"""
+        for blk in blocks:
+            self._play_job_for(upstream, ck, blk)
+
+    def _play_meta_for(self, upstream: str, ck: str):
+        """拿总长度 / 类型（每个文件缓存 1 小时，只探 1 个字节）。"""
+        now = time.time()
+        with self._play_lock:
+            meta = self._play_meta.get(ck)
+            if meta is not None and now - meta["at"] < 3600:
+                return meta
+        headers = {"Authorization": f"Bearer {AMANE_TOKEN}", "Range": "bytes=0-0"}
+        try:
+            with _opener.open(Request(upstream, headers=headers), timeout=60) as resp:
+                total = 0
+                cr = resp.headers.get("Content-Range") or ""
+                m = re.search(r"/(\d+)\s*$", cr)
+                if m:
+                    total = int(m.group(1))
+                elif resp.status == 200:
+                    total = int(resp.headers.get("Content-Length") or 0)
+                if total <= 0:
+                    return None
+                meta = {
+                    "total": total,
+                    "ctype": resp.headers.get("Content-Type") or "video/mp4",
+                    "etag": resp.headers.get("ETag") or "",
+                    "lm": resp.headers.get("Last-Modified") or "",
+                    "cc": resp.headers.get("Cache-Control") or "",
+                    "at": time.time(),
+                }
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+            return None
+        with self._play_lock:
+            self._play_meta[ck] = meta
+        return meta
+
+    def _play_wait_writable(self, session: dict, session_key: str) -> bool:
+        """等 socket 可写；返回 False = 客户端已经走了。"""
+        while True:
+            try:
+                _, ready, _ = select.select([], [self.connection], [], 2.0)
+            except (OSError, ValueError):
+                ready = []
+            if ready:
+                if session["idle"] > 0:
+                    session["idle"] = 0.0
+                return True
+            if session["idle"] <= 0:
+                session["idle"] = time.time()
+            if self._client_gone():
+                log(f"play {session_key} client gone, abort upstream")
+                return False
+
+    def _play_write(self, session: dict, session_key: str, data: bytes) -> str:
+        """写一块给客户端；返回结束原因，空串表示继续。"""
+        if not self._play_wait_writable(session, session_key):
+            return "client-gone"
+        try:
+            self.wfile.write(data)
+        except Exception as exc:  # noqa: BLE001
+            log(f"play {session_key} client write failed after "
+                f"{session['sent'] / 1048576:.2f}MB: {exc}")
+            return f"client:{type(exc).__name__}"
+        session["sent"] += len(data)
+        return ""
+
+    def _play_serve_blocks(self, upstream: str, ck: str, start: int, limit: int,
+                           session: dict, session_key: str, total: int) -> str:
+        """按块服务 [start, limit)：块内数据边下边发，不等整块。"""
+        pos = start
+        counter = 0
+        while pos < limit:
+            if session["ev"].is_set():
+                return "stalled"
+            blk = pos // self.PLAY_BLOCK
+            off = pos - blk * self.PLAY_BLOCK
+            need = min(self.PLAY_BLOCK - off, limit - pos)
+            key, job = self._play_job_for(upstream, ck, blk)
+            if job is None:
+                # 并发任务到上限：同步取一块兜底，保证还能播
+                blob = self._play_fetch(upstream, blk * self.PLAY_BLOCK, self.PLAY_BLOCK)
+                if not blob:
+                    return "fetch-failed"
+                self._play_cache_put(key, blob)
+                piece = blob[off:off + need]
+                reason = self._play_write(session, session_key, piece)
+                if reason:
+                    return reason
+                pos += len(piece)
+                counter += len(piece)
+                continue
+
+            got = 0
+            while got < need:
+                with job.cv:
+                    while len(job.data) <= off + got and not job.done:
+                        job.cv.wait(0.4)
+                    avail = min(len(job.data) - (off + got), need - got)
+                    piece = bytes(job.data[off + got:off + got + avail]) if avail > 0 else b""
+                if not piece:
+                    break
+                reason = self._play_write(session, session_key, piece)
+                if reason:
+                    return reason
+                got += len(piece)
+                counter += len(piece)
+                if counter >= 1048576:
+                    counter = 0
+                    if self._client_gone():
+                        log(f"play {session_key} client gone, abort upstream")
+                        return "client-gone"
+            if got < need:
+                # 这块比预期短（文件尾或上游错误），收工
+                return "eof" if job.done and not job.failed else "block-short"
+            pos += need
+            # 播放点前面始终备着几块，CD2 的冷启动延迟被并行摊掉
+            last = (total - 1) // self.PLAY_BLOCK
+            self._play_prefetch(upstream, ck,
+                                [b for b in range(blk + 1, min(blk + 1 + self.PLAY_READAHEAD,
+                                                               last + 1))])
+        return "done"
+
+    def _play_passthrough(self, upstream: str, req_headers: dict, head_only: bool,
+                          session: dict, session_key: str) -> str:
+        """兜底：拿不到元信息（或 HEAD）时按原样透传。"""
+        resp = _opener.open(Request(upstream, headers=req_headers), timeout=180)
+        try:
+            self.send_response(resp.status)
+            for name in self.PLAY_HOP_HEADERS:
+                val = resp.headers.get(name)
+                if val:
+                    self.send_header(name, val)
+            if self.headers.get("Connection", "").lower() == "close":
+                self.send_header("Connection", "close")
+                self.close_connection = True
+            self.end_headers()
+            if head_only or resp.status not in (200, 206):
+                return "head" if head_only else f"status:{resp.status}"
+            read_once = getattr(resp, "read1", None) or resp.read
+            counter = 0
+            while True:
+                if session["ev"].is_set():
+                    return "stalled"
+                try:
+                    chunk = read_once(65536)
+                except Exception as exc:  # noqa: BLE001
+                    return f"upstream:{type(exc).__name__}"
+                if not chunk:
+                    return "upstream-eof"
+                reason = self._play_write(session, session_key, chunk)
+                if reason:
+                    return reason
+                counter += len(chunk)
+                if counter >= 1048576:
+                    counter = 0
+                    if self._client_gone():
+                        log(f"play {session_key} client gone, abort upstream")
+                        return "client-gone"
+        finally:
+            try:
+                resp.close()
+            except Exception:  # noqa: BLE001
+                pass
+
     @route("GET", r"/api/user/play/([^/]+)/(\d+)")
     @route("HEAD", r"/api/user/play/([^/]+)/(\d+)")
     def play(self, query: dict, source: str, mid: str) -> None:
@@ -962,31 +1660,85 @@ class Handler(BaseHTTPRequestHandler):
             suffix = f"/streams/{key}"
         upstream: str = f"{AMANE_BASE}/api/playback/{source}/{mid}{suffix}"
         req_headers: dict[str, str] = {"Authorization": f"Bearer {AMANE_TOKEN}"}
-        for key in ("Range", "If-Range", "If-Modified-Since", "If-None-Match"):
-            val = self.headers.get(key)
+        for name in ("Range", "If-Range", "If-Modified-Since", "If-None-Match"):
+            val = self.headers.get(name)
             if val:
-                req_headers[key] = val
+                req_headers[name] = val
 
-        log(f"play {source}/{mid}{suffix} range={self.headers.get('Range', '-')}")
-        resp = None
+        client_ip = (self.client_address[0] if self.client_address else "?")
+        log(f"play {source}/{mid}{suffix} from={client_ip} "
+            f"range={self.headers.get('Range', '-')} ua={(self.headers.get('User-Agent') or '')[:40]}")
+        # 写超时给宽一点：正常播放时 mpv 缓存满了会短时间不读，几十秒不读是正常的，
+        # 这时**不能**判死（否则播放器看到 EOF 就重连，缓存永远建不满）。
         try:
-            resp = _opener.open(Request(upstream, headers=req_headers), timeout=180)
-            self.send_response(resp.status)
-            for key in self.PLAY_HOP_HEADERS:
-                val = resp.headers.get(key)
-                if val:
-                    self.send_header(key, val)
+            self.connection.settimeout(60)
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+
+        session_key = f"{source}/{mid}{suffix}"
+        session: dict = {"ev": threading.Event(), "idle": 0.0, "sent": 0}
+        if not head_only:
+            now = time.time()
+            with self._stream_lock:
+                alive: list = []
+                for old in self._stream_sessions.get(session_key, []):
+                    # 只掐「已经卡住 1.5 秒以上」的旧流：那是客户端不读了的僵尸。
+                    # 正常在跑的连接（比如 mp4 读尾部索引那一路）一律留着。
+                    if old["idle"] > 0 and now - old["idle"] > 1.5:
+                        old["ev"].set()
+                        log(f"play {session_key} drop stalled stream "
+                            f"(idle {now - old['idle']:.1f}s)")
+                    else:
+                        alive.append(old)
+                alive.append(session)
+                self._stream_sessions[session_key] = alive
+
+        started_at = time.time()
+        reason = "eof"
+        try:
+            meta = None if head_only else self._play_meta_for(upstream, upstream)
+            if meta is None:
+                reason = self._play_passthrough(upstream, req_headers, head_only,
+                                                session, session_key)
+                return
+
+            total: int = meta["total"]
+            start = 0
+            end = total - 1
+            status = 200
+            m = re.match(r"bytes=(\d+)-(\d*)", self.headers.get("Range") or "")
+            if m:
+                start = int(m.group(1))
+                if m.group(2):
+                    end = min(int(m.group(2)), total - 1)
+                status = 206
+                if start >= total or end < start:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{total}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+            limit = end + 1
+            self.send_response(status)
+            self.send_header("Content-Type", meta["ctype"])
+            self.send_header("Content-Length", str(limit - start))
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+            self.send_header("Accept-Ranges", "bytes")
+            for field, header in (("etag", "ETag"), ("lm", "Last-Modified"), ("cc", "Cache-Control")):
+                if meta[field]:
+                    self.send_header(header, meta[field])
             if self.headers.get("Connection", "").lower() == "close":
                 self.send_header("Connection", "close")
                 self.close_connection = True
             self.end_headers()
-            if head_only or resp.status not in (200, 206):
+            if head_only:
+                reason = "head"
                 return
-            while True:
-                chunk = resp.read(65536)
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
+
+            reason = self._play_serve_blocks(upstream, upstream, start, limit,
+                                             session, session_key, total)
         except HTTPError as exc:
             # 上游 4xx/5xx：把状态码和响应体透传，别让客户端误以为流已建立
             try:
@@ -1000,19 +1752,26 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
             self.close_connection = True
+            reason = f"http:{exc.code}"
         except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError) as exc:
-            # 客户端 seek / 退出播放，正常收尾，不打错误日志
-            log(f"play {source}/{mid} client disconnected: {type(exc).__name__}")
+            reason = type(exc).__name__
             self.close_connection = True
         except Exception as exc:  # noqa: BLE001
             log(f"play {upstream} failed: {exc}\n{traceback.format_exc()}")
             self.close_connection = True
+            reason = "error"
         finally:
-            if resp is not None:
-                try:
-                    resp.close()
-                except Exception:  # noqa: BLE001
-                    pass
+            if not head_only:
+                spent = max(time.time() - started_at, 1e-6)
+                log(f"play {session_key} end {session['sent'] / 1048576:.2f}MB "
+                    f"in {spent:.1f}s = {session['sent'] / 1048576 / spent:.2f}MB/s "
+                    f"({reason})")
+            with self._stream_lock:
+                left = [s for s in self._stream_sessions.get(session_key, []) if s is not session]
+                if left:
+                    self._stream_sessions[session_key] = left
+                else:
+                    self._stream_sessions.pop(session_key, None)
 
     # -- 首页 / 浏览 -------------------------------------------------------
 
@@ -1047,6 +1806,15 @@ class Handler(BaseHTTPRequestHandler):
     def recommend(self, query, *_) -> None:
         limit = int((query.get("limit") or ["20"])[0])
         self._json({"items": build_recommend(limit)})
+
+    @route("GET", r"/api/user/banners")
+    def banners(self, query, *_) -> None:
+        """每日推荐横幅（只含真横图 + 真实比例）；给调试/客户端刷新留一个独立入口。"""
+        try:
+            limit = max(1, min(int((query.get("limit") or ["12"])[0]), 24))
+        except ValueError:
+            limit = 12
+        self._json({"items": build_banners(limit)})
 
     @route("GET", r"/api/user/libraries")
     def libs(self, query, *_) -> None:
@@ -1151,6 +1919,13 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 pass
 
+        # 私有扩展可以追加状态筛选（如「还行」/「已收藏」）：核心不感知具体语义，
+        # 只提供 where/params 拼接点，扩展自己读自己的表。
+        for extra in EXT.call("browse_where", query).get("clauses", []):
+            if isinstance(extra, (tuple, list)) and len(extra) == 2:
+                where.append(str(extra[0]))
+                params = (*params, *tuple(extra[1]))
+
         clause = " AND ".join(where)
         with amane_db() as conn:
             items = query_meta(conn, clause, params, order, limit, offset)
@@ -1165,6 +1940,60 @@ class Handler(BaseHTTPRequestHandler):
             "order": direction,
         })
 
+    @route("GET", r"/api/user/suggest")
+    def suggest(self, query, *_) -> None:
+        """搜索联想：输入即搜，准确优先、模糊递进。
+
+        三档递进（客户端按返回顺序直接渲染，tier 只是排序键）：
+          1 精确：番号去连字符后等于 / 前缀命中，或标题以关键词开头；
+          2 模糊：番号 / 标题包含关键词；
+          3 扩大：演员 / 系列 / 制片商命中，或拆词后任一词命中。
+        """
+        raw = ((query.get("q") or [""])[0]).strip()
+        if not raw:
+            return self._json({"items": [], "q": raw})
+        norm = re.sub(r"[\s\-_/]+", "", raw).upper()
+        tokens = [t for t in re.split(r"[\s\-_/]+", raw) if t][:6]
+        limit = 14
+        picked: dict[int, tuple] = {}
+
+        def grab(tier: int, where: str, params: tuple, cap: int) -> None:
+            if len(picked) >= limit or not params:
+                return
+            try:
+                with amane_db() as conn:
+                    rows = conn.execute(
+                        f"SELECT {META_COLUMNS} FROM metadata m "
+                        "JOIN (SELECT DISTINCT metadata_id FROM media_files) f ON f.metadata_id = m.id "
+                        f"WHERE {where} ORDER BY LENGTH(m.number), m.id LIMIT ?",
+                        (*params, cap),
+                    ).fetchall()
+            except sqlite3.Error as exc:
+                log(f"WARN suggest: {exc}")
+                return
+            for r in rows:
+                if r["id"] in picked:
+                    continue
+                picked[r["id"]] = (tier, len(picked), item_of(r))
+
+        if norm:
+            # 1) 番号精确 / 前缀；标题开头
+            grab(1, "REPLACE(UPPER(m.number), '-', '') LIKE ?", (norm + "%",), 8)
+            grab(1, "UPPER(m.title) LIKE ?", (raw.upper() + "%",), 4)
+            # 2) 番号 / 标题包含
+            grab(2, "(REPLACE(UPPER(m.number), '-', '') LIKE ? OR UPPER(m.title) LIKE ?)",
+                 (f"%{norm}%", f"%{raw.upper()}%"), 10)
+            # 3) 演员 / 系列 / 制片商，或拆词任一命中（扩大范围）
+            actor_likes = " OR ".join(["m.actors LIKE ?"] * len(tokens))
+            grab(3, f"(m.series LIKE ? OR m.studio LIKE ? OR {actor_likes})",
+                 (f"%{raw}%", f"%{raw}%", *[f"%{t}%" for t in tokens]), 10)
+
+        items = []
+        for _, (_, _, item) in sorted(picked.items(), key=lambda kv: (kv[1][0], kv[1][1]))[:limit]:
+            item["tier"] = picked[item["id"]][0]
+            items.append(item)
+        self._json({"items": items, "q": raw})
+
     @route("GET", r"/api/user/item/(\d+)")
     def item(self, query, metadata_id, *_) -> None:
         with amane_db() as conn:
@@ -1174,11 +2003,16 @@ class Handler(BaseHTTPRequestHandler):
             data = item_of(rows[0])
             extra = _json_dict(rows[0]["extrafanart_urls"])
             stills: list[str] = []
+            sources: list[str] = []
             for urls in extra.values():
                 for url in _json_list(urls):
                     if isinstance(url, str) and url.startswith("http") and len(stills) < 12:
+                        sources.append(url)
                         stills.append(_img_proxy(url))
             data["stills"] = stills
+            # 和 stills 等长的宽高比：详情页瀑布流要按真实比例各自定高，
+            # 否则竖版海报被塞进横框就只有「砍头」一个下场。量不出来给 0，客户端自己补。
+            data["still_ratios"] = _still_ratios(sources)
             files = conn.execute(
                 "SELECT id, path, size, duration, definition, mosaic, has_subtitle_in_name, "
                 "has_external_subtitle, library_id FROM media_files WHERE metadata_id = ? ORDER BY id",

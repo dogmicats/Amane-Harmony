@@ -16,7 +16,7 @@ import { util } from '@kit.ArkTS';
  */
 
 /** 播放参数版本：改默认值或字段含义时 +1，老配置会被重新生成。 */
-export const MPV_CONF_VERSION: string = 'amane-conf: 3';
+export const MPV_CONF_VERSION: string = 'amane-conf: 9';
 
 export interface PlayerTuning {
   /** 硬件解码（走 PlayerConfig，不进 conf）。 */
@@ -49,11 +49,32 @@ export const PRESETS: PresetOption[] = [
   { key: 'stable', label: '弱网优先', desc: '缓存大、多等一会儿，适合外网' }
 ];
 
+/**
+ * ★ 锁定的默认参数（CD2 网盘源真机验证过的那套，改动前先读下面这段）★
+ *
+ * `cache-pause-wait = 1.0`：
+ *   这是「缓存里有多少秒才恢复播放」的阈值。0.2 会让 mpv 一有数据就播、
+ *   播两帧又耗尽，于是「播一下→缓存一下」反复循环（用户原话「一下一缓存」）；
+ *   1.0 = mpv 自带默认值，等够一秒再开闸，一次播顺。
+ *   2.2.9 曾把这里改成 1.0 是对的，但 2.2.11 回滚「流互斥」时连带撤回成了 0.2，
+ *   于是卡顿复现 —— **这个值不要再随手改**。
+ *
+ * 其余：`readahead 20 / maxMiB 64 / backMiB 32 / hr-seek off + stream-buffer 4MiB`。
+ *   2.0.16 实测：缓存开大（256MiB）反而让 seek 到未缓存区更慢，别再调大。
+ *
+ * 改这个函数必须同时升 `TUNING_LOCK` 与 `MPV_CONF_VERSION`，否则老设备上
+ * 写脏的值会盖住新默认（`load()` 只在 lock 不匹配时整份重置）。
+ */
+export const TUNING_LOCK: string = 'lock-v9';
+
+/** 锁定值单独导出：设置页与自检都用它，避免两处写死后对不上。 */
+export const LOCKED_PAUSE_WAIT: number = 1.0;
+
 function baseTuning(): PlayerTuning {
   const t: PlayerTuning = {
     hwdec: true,
     preset: 'balanced',
-    pauseWait: 0.2,
+    pauseWait: LOCKED_PAUSE_WAIT,
     readahead: 20,
     maxMiB: 64,
     backMiB: 32,
@@ -82,13 +103,13 @@ export function presetTuning(key: string, current: PlayerTuning): PlayerTuning {
     t.backMiB = 16;
     t.hrSeek = false;
   } else if (key === 'stable') {
-    t.pauseWait = 1.0;
+    t.pauseWait = 1.5;
     t.readahead = 45;
     t.maxMiB = 192;
     t.backMiB = 64;
     t.hrSeek = false;
   } else {
-    t.pauseWait = 0.2;
+    t.pauseWait = LOCKED_PAUSE_WAIT;
     t.readahead = 20;
     t.maxMiB = 64;
     t.backMiB = 32;
@@ -111,6 +132,9 @@ export function confText(t: PlayerTuning): string {
     '',
     '# 缓存',
     'cache=yes',
+    // mpv 默认 128KiB：网盘源读取是「一阵一阵」的，底层缓冲太小会
+    // 把抖动直接暴露给 demuxer，拖动之后尤其明显（一秒一卡）。
+    'stream-buffer-size=4MiB',
     `demuxer-max-bytes=${t.maxMiB}MiB`,
     `demuxer-max-back-bytes=${t.backMiB}MiB`,
     `demuxer-readahead-secs=${t.readahead}`,
@@ -133,12 +157,13 @@ export function confText(t: PlayerTuning): string {
 const PREF_STORE: string = 'amane_player';
 const PREF_TUNING: string = 'tuning';
 const PREF_HWDEC: string = 'hwdec';
+const PREF_TUNING_LOCK: string = 'tuning_lock';
 
 /** 生成配置里已有的键，迁移老 conf 时用来识别「用户自己加的」。 */
 const KNOWN_KEYS: string[] = [
   'vo', 'osc', 'osd-level', 'cache', 'demuxer-max-bytes', 'demuxer-max-back-bytes',
   'demuxer-readahead-secs', 'cache-pause', 'cache-pause-wait', 'demuxer-seekable-cache',
-  'hr-seek', 'demuxer-lavf-probe-info', 'hwdec'
+  'hr-seek', 'demuxer-lavf-probe-info', 'hwdec', 'stream-buffer-size'
 ];
 
 export class PlayerPrefs {
@@ -196,13 +221,29 @@ export class PlayerPrefs {
   static load(ctx: common.UIAbilityContext): PlayerTuning {
     const t: PlayerTuning = baseTuning();
     let stored: string = '';
+    let lock: string = '';
     try {
       const store: preferences.Preferences =
         preferences.getPreferencesSync(ctx, { name: PREF_STORE });
       stored = store.getSync(PREF_TUNING, '') as string;
+      lock = store.getSync(PREF_TUNING_LOCK, '') as string;
       t.hwdec = store.getSync(PREF_HWDEC, true) === true;
     } catch (e) {
       console.error(`[amane] load tuning: ${JSON.stringify(e)}`);
+    }
+    // 默认参数锁定：版本不符说明设备上还留着旧值（可能是历史调参/别的版本写脏的），
+    // 直接回到 baseTuning，并把锁版本记下来。以后真要改默认，就升 TUNING_LOCK。
+    if (lock !== TUNING_LOCK) {
+      try {
+        const store: preferences.Preferences =
+          preferences.getPreferencesSync(ctx, { name: PREF_STORE });
+        store.putSync(PREF_TUNING_LOCK, TUNING_LOCK);
+        store.putSync(PREF_TUNING, JSON.stringify(t));
+        store.flush();
+      } catch (e) {
+        console.error(`[amane] lock tuning: ${JSON.stringify(e)}`);
+      }
+      return t;
     }
     if (stored === undefined || stored === null || stored.length === 0) {
       // 首次升级：把老 mpv.conf 里用户手写的行保留成「额外参数」
@@ -219,6 +260,10 @@ export class PlayerPrefs {
         t.backMiB = raw.backMiB === undefined || raw.backMiB === null ? t.backMiB : Number(raw.backMiB);
         t.hrSeek = raw.hrSeek === true;
         t.extra = raw.extra === undefined || raw.extra === null ? '' : raw.extra;
+        // 均衡档就是锁定值：设备上残留的 0.2 之类一律拉回，防止「改对了又被顶掉」
+        if (t.preset === 'balanced' && t.pauseWait < LOCKED_PAUSE_WAIT) {
+          t.pauseWait = LOCKED_PAUSE_WAIT;
+        }
       }
     } catch (e) {
       console.error(`[amane] parse tuning: ${JSON.stringify(e)}`);

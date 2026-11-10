@@ -1,7 +1,12 @@
 import { router } from '@kit.ArkUI';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
-import { FacetItem, FacetParams, facetLabel } from './FacetTypes';
+import { FacetItem, emptyFacet, FacetParams, facetLabel } from './FacetTypes';
+
+/** @Prop 的默认值必须是完整字面量：FacetItem 新增字段时只改这里，别散落在组件里。 */
+function emptyItemSeries(): FacetItem {
+  return emptyFacet();
+}
 
 function openFacet(kind: string, item: FacetItem): void {
   if (item.id <= 0) {
@@ -21,7 +26,7 @@ function openFacet(kind: string, item: FacetItem): void {
  */
 @Component
 export struct SeriesCard {
-  @Prop series: FacetItem = { id: 0, name: '', count: 0, posters: [] };
+  @Prop series: FacetItem = emptyItemSeries();
   @Prop studioName: string = '';
 
   private posterAt(i: number): string {
@@ -30,64 +35,31 @@ export struct SeriesCard {
 
   @Builder
   Cover() {
-    Stack() {
-      if (this.series.posters.length <= 1) {
-        if (this.series.posters.length === 1) {
-          Image(Store.I.img(this.series.posters[0]))
-            .width('100%')
-            .height('100%')
+    // 三张海报横向并列，按 2:3 原比例展示，不裁剪（旧版四宫格截图式裁切看不出海报原貌）
+    Row({ space: 2 }) {
+      if (this.series.posters.length === 0) {
+        Column() {
+          Text('系')
+            .fontSize(16)
+            .fontColor(Theme.TEXT_FAINT)
+        }
+        .width(40)
+        .height(46)
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor(Theme.CARD_HI)
+      } else {
+        ForEach([0, 1, 2], (i: number) => {
+          Image(i < this.series.posters.length ? Store.I.img(this.series.posters[i]) : '')
+            .width(this.series.posters.length >= 2 ? 31 : 40)
+            .height(46)
             .objectFit(ImageFit.Cover)
             .backgroundColor(Theme.CARD_HI)
             .alt($r('app.media.placeholder'))
-        } else {
-          Column() {
-            Text('系')
-              .fontSize(18)
-              .fontColor(Theme.TEXT_FAINT)
-          }
-          .width('100%')
-          .height('100%')
-          .justifyContent(FlexAlign.Center)
-          .backgroundColor(Theme.CARD_HI)
-        }
-      } else {
-        // 四宫格：不足四张时用底色补齐，不留破图
-        if (this.posterAt(0).length > 0) {
-          Image(Store.I.img(this.posterAt(0)))
-            .width(30)
-            .height(30)
-            .objectFit(ImageFit.TOP)
-            .position({ x: 0, y: 0 })
-            .backgroundColor(Theme.CARD_HI)
-        }
-        if (this.posterAt(1).length > 0) {
-          Image(Store.I.img(this.posterAt(1)))
-            .width(30)
-            .height(30)
-            .objectFit(ImageFit.TOP)
-            .position({ x: 32, y: 0 })
-            .backgroundColor(Theme.CARD_HI)
-        }
-        if (this.posterAt(2).length > 0) {
-          Image(Store.I.img(this.posterAt(2)))
-            .width(30)
-            .height(30)
-            .objectFit(ImageFit.TOP)
-            .position({ x: 0, y: 32 })
-            .backgroundColor(Theme.CARD_HI)
-        }
-        if (this.posterAt(3).length > 0) {
-          Image(Store.I.img(this.posterAt(3)))
-            .width(30)
-            .height(30)
-            .objectFit(ImageFit.TOP)
-            .position({ x: 32, y: 32 })
-            .backgroundColor(Theme.CARD_HI)
-        }
+            .visibility(i < this.series.posters.length ? Visibility.Visible : Visibility.None)
+        }, (i: number) => `scv-${i}`)
       }
     }
-    .width(62)
-    .height(62)
+    .height(46)
     .borderRadius(8)
     .clip(true)
     .backgroundColor(Theme.CARD_HI)

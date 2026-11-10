@@ -168,7 +168,7 @@ export struct ProfileTab {
         .padding({ top: 10, bottom: 24 })
       }
       .width('100%')
-      .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+      .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 84 })
       // Scroll 会把内容竖向居中，撑满最小高度才能贴顶
       .constraintSize({ minHeight: '100%' })
       .justifyContent(FlexAlign.Start)

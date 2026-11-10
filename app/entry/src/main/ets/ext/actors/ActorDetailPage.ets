@@ -9,6 +9,7 @@ import { Theme } from '../../common/Theme';
 import { DetailParams, ItemDetail } from '../../common/Types';
 import { posterItem } from '../../common/Util';
 import { PosterCard } from '../../view/PosterCard';
+import { StillsWall } from '../../view/StillsWall';
 import { safeDetail } from '../../common/Safe';
 import {
   ActorDetail, ActorMediaItem, ActorMediaList, ActorParams, ActorStill, ActorStillList,
@@ -16,6 +17,10 @@ import {
 } from './ActorTypes';
 
 const WORK_PAGE: number = 18;
+/** 一屏摆几张剧照（两列 × 5 行）。 */
+const STILL_COUNT: number = 10;
+/** 一次抓一批存本地：换一批先轮换这批，不用等网络（服务端上限 36）。 */
+const STILL_POOL: number = 30;
 
 interface FetchResult {
   ok: boolean;
@@ -51,6 +56,15 @@ struct ActorDetailPage {
   @State loadingMore: boolean = false;
   @State expanded: boolean = false;
   @State stills: ActorStill[] = [];
+  // 剧照瀑布流只吃 url 数组；点第 i 张要回到 stills[i]，所以两份同步维护
+  @State stillUrls: string[] = [];
+  // 比例必须走 @State：以前是普通字段，传给 StillsWall 的永远是空数组，
+  // 于是首帧全按 3:2 铺、图片加载完再重排 —— 用户看到的就是「先方块后瀑布流」。
+  @State stillRatios: number[] = [];
+  /** 一次抓一批（STILL_POOL 张）存在本地，换一批先在这批里轮换 → 瞬时，不等网络。 */
+  private pool: ActorStill[] = [];
+  private poolRatios: number[] = [];
+  private poolCursor: number = 0;
   @State zoomOn: boolean = false;
   @State zoomUrl: string = '';
   @State zoomScale: number = 0.94;
@@ -97,21 +111,62 @@ struct ActorDetailPage {
     this.loadStills();
   }
 
-  /** 随机剧照墙：每张图带影片 id，点图直接跳对应影片详情。 */
-  private async loadStills(): Promise<void> {
+  /**
+   * 随机剧照墙：每张图带影片 id，点图直接跳对应影片详情。
+   *
+   * 「再抽一次」不再每次都等网络：一次抓 STILL_POOL 张（服务端连真实比例一起给），
+   * 之后每点一次就在本地池里往后挪一格窗口，瞬时出图；池子用完才去抓下一批。
+   * 因为比例是现成的，瀑布流首帧就是最终版式，不会先方块再跳位。
+   */
+  private async loadStills(fromRefresh: boolean = false): Promise<void> {
     if (this.actorId <= 0 || this.stillsLoading) {
+      return;
+    }
+    // 池子里还有余量：直接轮换，零网络
+    if (fromRefresh && this.pool.length >= this.poolCursor + STILL_COUNT) {
+      this.showSlice(this.poolCursor);
+      this.poolCursor += STILL_COUNT;
       return;
     }
     this.stillsLoading = true;
     try {
       const text: string = await httpGet(
-        `${Store.I.user}/api/user/actors/${this.actorId}/stills?limit=6`, Store.I.token);
-      this.stills = safeActorStills(JSON.parse(text) as ActorStillList);
+        `${Store.I.user}/api/user/actors/${this.actorId}/stills?limit=${STILL_POOL}`, Store.I.token);
+      const list: ActorStill[] = safeActorStills(JSON.parse(text) as ActorStillList);
+      if (list.length > 0) {
+        const ratios: number[] = [];
+        for (let i = 0; i < list.length; i++) {
+          ratios.push(list[i].ratio);
+        }
+        this.pool = list;
+        this.poolRatios = ratios;
+        this.poolCursor = 0;
+        this.showSlice(0);
+        this.poolCursor = STILL_COUNT;
+      }
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] actor stills: ${e.code} ${e.message}`);
     }
     this.stillsLoading = false;
+  }
+
+  /** 把池子里从 start 开始的 STILL_COUNT 张摆上来（不足就少摆几张）。 */
+  private showSlice(start: number): void {
+    const end: number = Math.min(this.pool.length, start + STILL_COUNT);
+    if (start >= end) {
+      return;
+    }
+    const slice: ActorStill[] = this.pool.slice(start, end);
+    const urls: string[] = [];
+    const ratios: number[] = [];
+    for (let i = 0; i < slice.length; i++) {
+      urls.push(slice[i].url);
+      ratios.push(this.poolRatios[i + start]);
+    }
+    this.stills = slice;
+    this.stillUrls = urls;
+    this.stillRatios = ratios;
   }
 
   /**
@@ -346,34 +401,8 @@ struct ActorDetailPage {
   }
 
   @Builder
-  StillCell(x: ActorStill) {
-    Stack() {
-      // 底层：同一张图铺满并模糊，填掉竖屏的上下黑边
-      Image(Store.I.img(x.url))
-        .width('100%')
-        .height('100%')
-        .objectFit(ImageFit.Cover)
-        .blur(28)
-        .opacity(0.45)
-      // 上层：完整显示，不裁掉任何构图
-      Image(Store.I.img(x.url))
-        .width('100%')
-        .height('100%')
-        .objectFit(ImageFit.Contain)
-    }
-    .width('100%')
-    .aspectRatio(1.78)
-    .borderRadius(12)
-    .clip(true)
-    .backgroundColor(Theme.CARD)
-    .onClick(() => {
-      this.openStill(x);
-    })
-  }
-
-  @Builder
   Stills() {
-    Column({ space: 8 }) {
+    Column({ space: 10 }) {
       Row({ space: 6 }) {
         Text('盲盒')
           .fontSize(15)
@@ -398,15 +427,22 @@ struct ActorDetailPage {
             .backgroundColor(Theme.CARD)
             .borderRadius(10)
             .onClick(() => {
-              this.loadStills();
+              this.loadStills(true);
             })
         }
       }
       .width('100%')
 
-      ForEach(this.stills, (x: ActorStill) => {
-        this.StillCell(x)
-      }, (x: ActorStill) => `still-${x.url}`)
+      // 和影片详情页同一套瀑布流：横竖版各按原比例占位，不裁构图
+      StillsWall({
+        urls: this.stillUrls,
+        ratios: this.stillRatios,
+        onPick: (i: number) => {
+          if (i >= 0 && i < this.stills.length) {
+            this.openStill(this.stills[i]);
+          }
+        }
+      })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)

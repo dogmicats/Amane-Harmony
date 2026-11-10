@@ -1,13 +1,14 @@
 import { router } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { httpGet } from '../../common/Http';
+import { httpGet, httpPost } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
 import { DetailParams, MediaItem } from '../../common/Types';
 import { posterItem } from '../../common/Util';
 import { PosterCard } from '../../view/PosterCard';
 import {
-  FacetMediaItem, FacetMediaList, FacetParams, facetLabel, safeFacetMediaList
+  FacetFavoriteResult, FacetItem, FacetMediaItem, FacetMediaList, FacetParams,
+  emptyFacet, facetLabel, safeFacetMediaList
 } from './FacetTypes';
 
 const PAGE_SIZE: number = 30;
@@ -58,9 +59,14 @@ struct FacetPage {
   @State error: string = '';
   @State sortBy: string = 'release';
   @State order: string = 'desc';
+  /** 随机排序时服务端随机开的窗口起点：翻页要续接这个窗口，而不是从 0 重新数。 */
+  @State baseOffset: number = 0;
   @State subOnly: boolean = false;
   @State mosaic: string = '';
   @State def: string = '';
+  /** 分类自己的收藏位：只写 amane 的 is_favorite，与「影片收藏 → 自动入库」无关。 */
+  @State facet: FacetItem = emptyFacet();
+  @State tip: string = '';
   private kind: string = 'tag';
   private facetId: number = 0;
   private title: string = '';
@@ -68,7 +74,8 @@ struct FacetPage {
     { key: 'release', label: '发行时间' },
     { key: 'number', label: '番号' },
     { key: 'score', label: '评分' },
-    { key: 'runtime', label: '时长' }
+    { key: 'runtime', label: '时长' },
+    { key: 'random', label: '随机' }
   ];
   private mosaics: Choice[] = [
     { key: '', label: '不限' },
@@ -117,6 +124,8 @@ struct FacetPage {
     try {
       const text: string = await httpGet(url, Store.I.token);
       const r: FacetMediaList = safeFacetMediaList(JSON.parse(text) as FacetMediaList);
+      this.baseOffset = r.offset;
+      this.facet = r.facet;
       this.items = append ? this.items.concat(r.items) : r.items;
       this.total = r.total;
       this.error = '';
@@ -143,7 +152,8 @@ struct FacetPage {
       return;
     }
     this.loadingMore = true;
-    this.load(this.items.length, true).catch(() => {
+    // 随机排序时 items 是「随机窗口」里的一段，绝对 offset = 窗口起点 + 已加载数
+    this.load(this.baseOffset + this.items.length, true).catch(() => {
       this.loadingMore = false;
     });
   }
@@ -151,6 +161,84 @@ struct FacetPage {
   private open(item: FacetMediaItem): void {
     const params: DetailParams = { id: item.id };
     router.pushUrl({ url: 'pages/DetailPage', params: params });
+  }
+
+  /**
+   * 收藏这个分类。乐观更新 + 失败回滚：服务端动作是「置为」而不是「取反」，
+   * 所以每次都把目标值显式带上。
+   */
+  private async toggleFav(): Promise<void> {
+    const id: number = this.facet.id > 0 ? this.facet.id : this.facetId;
+    if (id <= 0) {
+      return;
+    }
+    const want: boolean = !this.facet.isFavorite;
+    this.setFav(want);
+    try {
+      const text: string = await httpPost(
+        `${Store.I.user}/api/user/facets/${this.kind}/${id}/favorite`,
+        Store.I.token, JSON.stringify({ favorite: want }));
+      const r: FacetFavoriteResult = JSON.parse(text) as FacetFavoriteResult;
+      this.setFav(r.favorite === true);
+      Store.I.facetDirty = true;
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error(`[amane] facet favorite: ${e.code} ${e.message}`);
+      this.setFav(!want);
+      this.tip = e.code === 404 ? `服务端未启用分类收藏（${Store.I.user}，需 1.3.3+）` : '收藏失败，请重试';
+    }
+  }
+
+  private setFav(fav: boolean): void {
+    this.facet = {
+      id: this.facet.id, name: this.facet.name, count: this.facet.count,
+      posters: this.facet.posters, isFavorite: fav,
+      lastRelease: this.facet.lastRelease, lastAdded: this.facet.lastAdded,
+      isHidden: this.facet.isHidden
+    };
+  }
+
+  /**
+   * 隐藏 / 恢复这个标签。写旁挂服务的 facet_hidden 表，与 amane 的库和刮削规则无关；
+   * 成功后打 Store.I.facetDirty，返回列表时那一页会自动重拉。
+   */
+  private async toggleHide(): Promise<void> {
+    const id: number = this.facet.id > 0 ? this.facet.id : this.facetId;
+    if (id <= 0) {
+      return;
+    }
+    const want: boolean = !this.facet.isHidden;
+    this.setHidden(want);
+    try {
+      await httpPost(`${Store.I.user}/api/user/facets/${this.kind}/${id}/hide`,
+        Store.I.token, JSON.stringify({ hidden: want }));
+      Store.I.facetDirty = true;
+      this.tip = want ? '已隐藏，标签列表里不再显示' : '已恢复显示';
+      this.clearTipLater();
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error(`[amane] facet hide: ${e.code} ${e.message}`);
+      this.setHidden(!want);
+      // 404 有两种可能：服务端太旧，或者 App 连错端口（测试版 8771 / 正式版 8770）——
+      // 把实际连的地址打出来，一眼能看出是哪个
+      this.tip = e.code === 404 ? `服务端未启用隐藏（${Store.I.user}，需 1.3.5+）` : '操作失败，请重试';
+      this.clearTipLater();
+    }
+  }
+
+  private clearTipLater(): void {
+    setTimeout(() => {
+      this.tip = '';
+    }, 2600);
+  }
+
+  private setHidden(hidden: boolean): void {
+    this.facet = {
+      id: this.facet.id, name: this.facet.name, count: this.facet.count,
+      posters: this.facet.posters, isFavorite: this.facet.isFavorite,
+      lastRelease: this.facet.lastRelease, lastAdded: this.facet.lastAdded,
+      isHidden: hidden
+    };
   }
 
   private posterAt(i: number): string {
@@ -171,39 +259,24 @@ struct FacetPage {
     return n;
   }
 
-  /** 系列页标题左侧的四宫格封面：直接拿当前页前四张海报拼，不再多发请求。 */
+  /**
+   * 系列页标题左侧的封面：三张海报横向并列、不裁剪（2:3 原比例）。
+   * 之前是四宫格截图式裁切，看不出海报原貌，换掉。
+   */
   @Builder
   Cover() {
-    Stack() {
-      if (this.items.length >= 2) {
-        if (this.posterAt(0).length > 0) {
-          Image(Store.I.img(this.posterAt(0)))
-            .width(30).height(30).objectFit(ImageFit.TOP)
-            .position({ x: 0, y: 0 }).backgroundColor(Theme.CARD_HI)
-        }
-        if (this.posterAt(1).length > 0) {
-          Image(Store.I.img(this.posterAt(1)))
-            .width(30).height(30).objectFit(ImageFit.TOP)
-            .position({ x: 32, y: 0 }).backgroundColor(Theme.CARD_HI)
-        }
-        if (this.posterAt(2).length > 0) {
-          Image(Store.I.img(this.posterAt(2)))
-            .width(30).height(30).objectFit(ImageFit.TOP)
-            .position({ x: 0, y: 32 }).backgroundColor(Theme.CARD_HI)
-        }
-        if (this.posterAt(3).length > 0) {
-          Image(Store.I.img(this.posterAt(3)))
-            .width(30).height(30).objectFit(ImageFit.TOP)
-            .position({ x: 32, y: 32 }).backgroundColor(Theme.CARD_HI)
-        }
-      } else if (this.posterAt(0).length > 0) {
-        Image(Store.I.img(this.posterAt(0)))
-          .width('100%').height('100%').objectFit(ImageFit.TOP)
+    Row({ space: 2 }) {
+      ForEach([0, 1, 2], (i: number) => {
+        Image(this.posterAt(i).length > 0 ? Store.I.img(this.posterAt(i)) : '')
+          .width(this.items.length >= 2 ? 31 : 40)
+          .height(46)
+          .objectFit(ImageFit.Cover)
           .backgroundColor(Theme.CARD_HI)
-      }
+          .alt($r('app.media.placeholder'))
+          .visibility(this.posterAt(i).length > 0 ? Visibility.Visible : Visibility.None)
+      }, (i: number) => `cv-${i}`)
     }
-    .width(62)
-    .height(62)
+    .height(46)
     .borderRadius(8)
     .clip(true)
     .backgroundColor(Theme.CARD_HI)
@@ -240,6 +313,41 @@ struct FacetPage {
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
+
+      // 分类收藏：与详情页的影片收藏是两条链路，这里只写 amane 的 is_favorite 位
+      if (this.kind !== 'user_tag') {
+        Column({ space: 1 }) {
+          Text(this.facet.isFavorite ? '♥' : '♡')
+            .fontSize(17)
+            .fontColor(this.facet.isFavorite ? Theme.ACCENT : Theme.TEXT_DIM)
+          Text(this.facet.isFavorite ? '已收藏' : '收藏')
+            .fontSize(8)
+            .fontColor(Theme.TEXT_FAINT)
+        }
+        .width(40)
+        .justifyContent(FlexAlign.Center)
+        .onClick(() => {
+          this.toggleFav();
+        })
+      }
+
+      // 隐藏：只在标签上开。隐藏只是不在「标签」列表里列出来，
+      // 不删标签、不动刮削规则 —— 用户明确说懒得因此改刮削设置。
+      if (this.kind === 'tag') {
+        Column({ space: 1 }) {
+          Text(this.facet.isHidden ? '⊘' : '◎')
+            .fontSize(16)
+            .fontColor(this.facet.isHidden ? Theme.GOLD : Theme.TEXT_DIM)
+          Text(this.facet.isHidden ? '已隐藏' : '隐藏')
+            .fontSize(8)
+            .fontColor(Theme.TEXT_FAINT)
+        }
+        .width(40)
+        .justifyContent(FlexAlign.Center)
+        .onClick(() => {
+          this.toggleHide();
+        })
+      }
     }
     .width('100%')
     .padding({ left: 10, right: Theme.PAGE_PAD, top: 10, bottom: 8 })
@@ -256,7 +364,10 @@ struct FacetPage {
             current: this.sortBy,
             onPick: (key: string) => {
               if (this.sortBy === key) {
-                this.order = this.order === 'desc' ? 'asc' : 'desc';
+                // 随机排序重复点同一个 chip = 重新开一扇随机窗口
+                if (key !== 'random') {
+                  this.order = this.order === 'desc' ? 'asc' : 'desc';
+                }
               } else {
                 this.sortBy = key;
                 this.order = key === 'number' ? 'asc' : 'desc';
@@ -279,6 +390,7 @@ struct FacetPage {
           .textAlign(TextAlign.Center)
           .backgroundColor(this.order === 'desc' ? Theme.ACCENT : Theme.CARD_HI)
           .borderRadius(13)
+          .visibility(this.sortBy === 'random' ? Visibility.None : Visibility.Visible)
           .onClick(() => {
             this.order = this.order === 'desc' ? 'asc' : 'desc';
             this.reload();
@@ -356,6 +468,14 @@ struct FacetPage {
   build() {
     Column() {
       this.Header()
+
+      if (this.tip.length > 0) {
+        Text(this.tip)
+          .fontSize(10)
+          .fontColor(Theme.DANGER)
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
+      }
 
       if (this.loading) {
         Column() {

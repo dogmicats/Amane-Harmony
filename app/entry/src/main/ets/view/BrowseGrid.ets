@@ -5,6 +5,7 @@ import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { BrowseResult, DetailParams, MediaItem } from '../common/Types';
 import { safeItems } from '../common/Safe';
+import { BuildConfig } from '../common/BuildConfig';
 import { PosterCard } from './PosterCard';
 
 const PAGE_SIZE: number = 45;
@@ -135,6 +136,7 @@ export struct BrowseGrid {
   @State fSub: string = '';
   @State fScore: string = '';
   @State fYear: string = '';
+  @State fState: string = '';
   @State showSort: boolean = false;
   @State showFilter: boolean = false;
 
@@ -163,6 +165,9 @@ export struct BrowseGrid {
     if (this.fYear.length > 0) {
       n++;
     }
+    if (this.fState.length > 0) {
+      n++;
+    }
     return n;
   }
 
@@ -189,6 +194,9 @@ export struct BrowseGrid {
       parts.push('year_to=2023');
     } else if (this.fYear.length > 0) {
       parts.push(`year_from=${this.fYear}`);
+    }
+    if (this.fState.length > 0) {
+      parts.push(`state=${this.fState}`);
     }
     return `${Store.I.user}/api/user/browse?${parts.join('&')}`;
   }
@@ -241,6 +249,7 @@ export struct BrowseGrid {
     this.fSub = '';
     this.fScore = '';
     this.fYear = '';
+    this.fState = '';
   }
 
   @Builder
@@ -523,7 +532,7 @@ export struct BrowseGrid {
           .columnsTemplate('1fr 1fr 1fr')
           .columnsGap(9)
           .rowsGap(14)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 12 })
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 84 })
           .layoutWeight(1)
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)

@@ -21,6 +21,12 @@
       {
         "name": "ohos.net.network_config",
         "resource": "$profile:network_config"
+      },
+      {
+        // 沉浸光感（API 26）：应用级开启，系统材质随深浅色与设备算力自适应。
+        // 组件级仍可用 .systemMaterial() 单独覆盖（播放器控制层/面板就走组件级）。
+        "name": "ohos.arkui.UIMaterial.state",
+        "value": "enable"
       }
     ],
     "abilities": [

@@ -1,6 +1,6 @@
 import {
   CommentItem, HistoryItem, HomeData, HomeRow, ItemDetail, LibraryInfo, MediaFile, MediaItem,
-  StreamItem, StreamList
+  StreamItem, StreamList, SuggestItem, SuggestResult
 } from './Types';
 
 /**
@@ -63,6 +63,9 @@ export function safeItem(raw: MediaItem): MediaItem {
   // 服务端已经算好「无码/破解/流出/中字」，这里必须原样带过来，
   // 否则卡片拿到了数据也不显示（之前收藏页就没标签）。
   item.marks = Array.isArray(raw.marks) ? raw.marks : [];
+  // 横幅按真实比例定宽，这个字段必须接住（marks 就踩过一次）
+  item.fanart_ratio = num(raw.fanart_ratio === undefined || raw.fanart_ratio === null
+    ? 0 : raw.fanart_ratio);
   return item;
 }
 
@@ -102,7 +105,7 @@ export function safeDetail(raw: ItemDetail): ItemDetail {
     id: 0, number: '', title: '', plot: '', actors: [], tags: [], studio: '', series: '',
     release: '', runtime: 0, content_type: '', score: 0, poster: '', fanart: '',
     favorite: false, position: 0, duration: 0, finished: false, files: [], marks: [], stills: [],
-    comments: []
+    still_ratios: [], comments: []
   };
   if (raw === undefined || raw === null) {
     return d;
@@ -161,6 +164,15 @@ export function safeDetail(raw: ItemDetail): ItemDetail {
     }
   }
   d.stills = stills;
+  // 剧照宽高比：瀑布流靠它给每张图定高，丢了就只能一律按横图排（竖版会被砍头）
+  const ratios: number[] = [];
+  if (raw.still_ratios !== undefined && raw.still_ratios !== null && Array.isArray(raw.still_ratios)) {
+    for (let i = 0; i < raw.still_ratios.length; i++) {
+      const r: number = num(raw.still_ratios[i]);
+      ratios.push(isFinite(r) && r > 0 ? r : 0);
+    }
+  }
+  d.still_ratios = ratios;
   return d;
 }
 
@@ -191,13 +203,14 @@ export function safeHistory(list: HistoryItem[]): HistoryItem[] {
   return out;
 }
 
-export function safeHome(raw: HomeData): HomeData {  const home: HomeData = { hero: [], continue: [], recommend: [], rows: [], libraries: [], generated_at: '' };
+export function safeHome(raw: HomeData): HomeData {  const home: HomeData = { hero: [], continue: [], recommend: [], banners: [], rows: [], libraries: [], generated_at: '' };
   if (raw === undefined || raw === null) {
     return home;
   }
   home.hero = safeItems(raw.hero);
   home.continue = safeItems(raw.continue);
   home.recommend = safeItems(raw.recommend);
+  home.banners = safeItems(raw.banners === undefined || raw.banners === null ? [] : raw.banners);
   home.generated_at = str(raw.generated_at);
 
   const rows: HomeRow[] = [];
@@ -234,6 +247,32 @@ export function safeHome(raw: HomeData): HomeData {  const home: HomeData = { he
   }
   home.libraries = libs;
   return home;
+}
+
+export function safeSuggest(raw: SuggestResult): SuggestItem[] {
+  const out: SuggestItem[] = [];
+  if (raw === undefined || raw === null || !Array.isArray(raw.items)) {
+    return out;
+  }
+  for (let i = 0; i < raw.items.length; i++) {
+    const m = raw.items[i];
+    if (m === undefined || m === null) {
+      continue;
+    }
+    const id: number = Math.trunc(Number(m.id)) || 0;
+    if (id <= 0) {
+      continue;
+    }
+    out.push({
+      id: id,
+      number: m.number === undefined || m.number === null ? '' : m.number,
+      title: m.title === undefined || m.title === null ? '' : m.title,
+      poster: m.poster === undefined || m.poster === null ? '' : m.poster,
+      release: m.release === undefined || m.release === null ? '' : m.release,
+      tier: Math.trunc(Number(m.tier)) || 0
+    });
+  }
+  return out;
 }
 
 export function safeStreams(raw: StreamList): StreamItem[] {

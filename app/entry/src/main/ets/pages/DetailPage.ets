@@ -1,10 +1,10 @@
-import { router } from '@kit.ArkUI';
+import { router, uiMaterial } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import {
-  CommentItem, DetailParams, ItemDetail, MediaFile, PlayerParams, StreamItem, StreamList
+  CommentItem, DetailParams, ItemDetail, LibraryInfo, MediaFile, PlayerParams, StreamItem, StreamList
 } from '../common/Types';
 import { clock, runtimeText, scoreText, sizeText, dateText } from '../common/Util';
 import { safeDetail, safeStreams } from '../common/Safe';
@@ -13,6 +13,7 @@ import { ActorChips } from '../ext/actors/ActorChips';
 import { FacetTagChips, SeriesCard } from '../ext/facets/ItemFacetBlocks';
 import { ItemFacets, emptyItemFacets, safeItemFacets } from '../ext/facets/FacetTypes';
 import { MarkBadges } from '../view/MarkBadges';
+import { StillsWall } from '../view/StillsWall';
 
 /** 剧照查看器入参（pages/ImageViewerPage）。 */
 interface StillParams {
@@ -26,7 +27,7 @@ function emptyDetail(): ItemDetail {
     id: 0, number: '', title: '', plot: '', actors: [], tags: [], studio: '', series: '',
     release: '', runtime: 0, content_type: '', score: 0, poster: '', fanart: '',
     favorite: false, position: 0, duration: 0, finished: false, files: [], marks: [], stills: [],
-    comments: []
+    still_ratios: [], comments: []
   };
   return d;
 }
@@ -159,6 +160,88 @@ struct DetailPage {
       out.push('中字');
     }
     return out;
+  }
+
+  /**
+   * 换掉文件列表后重建整个 detail 对象。
+   * 只写 `this.detail.files = xxx` 在某些 ArkUI 版本上不会触发重绘，
+   * 详情页这类 @State 对象统一走「整对象替换」最稳（见 FacetPage.setFav）。
+   */
+  private withFiles(files: MediaFile[]): ItemDetail {
+    const d: ItemDetail = {
+      id: this.detail.id, number: this.detail.number, title: this.detail.title,
+      plot: this.detail.plot, actors: this.detail.actors, tags: this.detail.tags,
+      studio: this.detail.studio, series: this.detail.series,
+      release: this.detail.release, runtime: this.detail.runtime,
+      content_type: this.detail.content_type, score: this.detail.score,
+      poster: this.detail.poster, fanart: this.detail.fanart,
+      favorite: this.detail.favorite, position: this.detail.position,
+      duration: this.detail.duration, finished: this.detail.finished,
+      files: files, marks: this.detail.marks, stills: this.detail.stills,
+      still_ratios: this.detail.still_ratios, comments: this.detail.comments
+    };
+    return d;
+  }
+
+  /** 文件所在目录（用于判断「删整个目录」时同目录还有哪些行）。 */
+  private folderOf(path: string): string {    const index: number = path.lastIndexOf('/');
+    return index > 0 ? path.substring(0, index) : '';
+  }
+
+  /** 文件属于哪个库：详情页文件行要显示来源（Store 里已有库 id → 名称）。 */
+  private libraryName(id: number): string {
+    const libs: LibraryInfo[] = Store.I.libraries;
+    for (let i = 0; i < libs.length; i++) {
+      if (libs[i].id === id) {
+        return libs[i].name;
+      }
+    }
+    return id > 0 ? `库 ${id}` : '';
+  }
+
+  /** 一行文件：文件名 + 清晰度 / 所在库 / 体积，点一下直接播这个版本。 */
+  @Builder
+  FileRow(file: MediaFile) {
+    Row({ space: 8 }) {
+      Column({ space: 3 }) {
+        Text(this.fileName(file.path))
+          .fontSize(11)
+          .fontColor(Theme.TEXT)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+        Row({ space: 5 }) {
+          Text(file.definition.length > 0 ? file.definition : '视频')
+            .fontSize(9)
+            .fontColor(Theme.TEXT)
+            .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+            .backgroundColor(Theme.ACCENT_SOFT)
+            .borderRadius(4)
+          if (this.libraryName(file.library_id).length > 0) {
+            Text(this.libraryName(file.library_id))
+              .fontSize(9)
+              .fontColor(Theme.GOLD)
+              .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+              .backgroundColor('#2AF2C14E')
+              .borderRadius(4)
+          }
+          Text(sizeText(file.size))
+            .fontSize(9)
+            .fontColor(Theme.TEXT_FAINT)
+        }
+        .width('100%')
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+
+      Text('▶')
+        .fontSize(9)
+        .fontColor(Theme.ACCENT)
+    }
+    .width('100%')
+    .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+    .backgroundColor(Theme.BG_RAISED)
+    .borderRadius(6)
   }
 
   /** 评价正文是 markdown，列表里只做轻量清理（去掉 ** > 与链接语法）。 */
@@ -463,19 +546,14 @@ struct DetailPage {
       .margin({ right: 6, bottom: 6 })
   }
 
-  build() {
-    Stack({ alignContent: Alignment.TopStart }) {
-      if (this.loading) {
-        Column() {
-          LoadingProgress()
-            .width(30)
-            .height(30)
-            .color(Theme.ACCENT)
-        }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-      } else {
+  /**
+   * 详情页主体（顶部大图 + 全部信息块）。
+   *
+   * 抽成 @Builder 是为了让私有扩展「右滑删除」能把它整体包一层；
+   * public 通道没有这个扩展，直接渲染同一份内容，行为与之前完全一致。
+   */
+  @Builder
+  Body() {
         Scroll() {
           Column() {
             // 顶部大图
@@ -573,6 +651,7 @@ struct DetailPage {
                 .onClick(() => {
                   this.toggleFav();
                 })
+
               }
               .width('100%')
               .margin({ top: 16 })
@@ -655,9 +734,36 @@ struct DetailPage {
                 .margin({ top: 14 })
               }
 
-              // 剧照：点开进全屏查看器（可左右翻页）
-              if (this.detail.stills.length > 0) {
+              // 文件：排在剧照前面 —— 瀑布流一铺就是好几屏，把「选版本直接播」顶到墙底下太难受
+              if (this.detail.files.length > 0) {
                 Column({ space: 8 }) {
+                  Row({ space: 8 }) {
+                    Text(this.detail.files.length > 1
+                      ? `版本（${this.detail.files.length}）· 点一行播这个文件`
+                      : `文件（${this.detail.files.length}）`)
+                      .fontSize(12)
+                      .fontColor(Theme.TEXT_FAINT)
+                    Blank()
+                  }
+                  .width('100%')
+
+                  ForEach(this.detail.files, (file: MediaFile) => {
+                    Column() {
+                      this.FileRow(file)
+                    }
+                    .width('100%')
+                    .onClick(() => {
+                      this.playFile(`f${file.id}`, this.fileName(file.path));
+                    })
+                  }, (file: MediaFile) => `file-${file.id}`)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .margin({ top: 16 })
+              }
+
+              // 剧照：两列瀑布流，横竖版各按原比例占位（不再一刀切成 16:9），点开进全屏查看器
+              if (this.detail.stills.length > 0) {
+                Column({ space: 10 }) {
                   Row({ space: 8 }) {
                     Text('剧照')
                       .fontSize(12)
@@ -671,65 +777,13 @@ struct DetailPage {
                       .fontColor(Theme.ACCENT)
                   }
                   .width('100%')
-                  Scroll() {
-                    Row({ space: 8 }) {
-                      ForEach(this.detail.stills, (url: string, index: number) => {
-                        Image(Store.I.img(url))
-                          .width(190)
-                          .height(107)
-                          .objectFit(ImageFit.Cover)
-                          .borderRadius(8)
-                          .backgroundColor(Theme.CARD)
-                          .onClick(() => {
-                            this.openStills(index);
-                          })
-                      }, (url: string, index: number) => `still-${index}`)
+                  StillsWall({
+                    urls: this.detail.stills,
+                    ratios: this.detail.still_ratios,
+                    onPick: (index: number) => {
+                      this.openStills(index);
                     }
-                  }
-                  .scrollable(ScrollDirection.Horizontal)
-                  .scrollBar(BarState.Off)
-                  .width('100%')
-                }
-                .alignItems(HorizontalAlign.Start)
-                .margin({ top: 16 })
-              }
-
-              // 文件
-              if (this.detail.files.length > 0) {
-                Column({ space: 8 }) {
-                  Text(this.detail.files.length > 1
-                    ? `版本（${this.detail.files.length}）· 点一行直接播这个文件`
-                    : `文件（${this.detail.files.length}）`)
-                    .fontSize(12)
-                    .fontColor(Theme.TEXT_FAINT)
-                    .width('100%')
-                  ForEach(this.detail.files, (file: MediaFile) => {
-                    Row({ space: 8 }) {
-                      Text(file.definition.length > 0 ? file.definition : '视频')
-                        .fontSize(10)
-                        .fontColor(Theme.TEXT)
-                        .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                        .backgroundColor(Theme.ACCENT_SOFT)
-                        .borderRadius(4)
-                      Text(this.fileName(file.path))
-                        .fontSize(11)
-                        .fontColor(Theme.TEXT_DIM)
-                        .maxLines(1)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                        .layoutWeight(1)
-                      Text(sizeText(file.size))
-                        .fontSize(10)
-                        .fontColor(Theme.TEXT_FAINT)
-                      Text('▶')
-                        .fontSize(9)
-                        .fontColor(Theme.ACCENT)
-                    }
-                    .width('100%')
-                    .onClick(() => {
-                      // 上游流 key 就是 f<media_file_id>，直接按文件播这个版本
-                      this.playFile(`f${file.id}`, this.fileName(file.path));
-                    })
-                  }, (file: MediaFile) => `file-${file.id}`)
+                  })
                 }
                 .alignItems(HorizontalAlign.Start)
                 .margin({ top: 16 })
@@ -796,6 +850,23 @@ struct DetailPage {
         .height('100%')
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
+  }
+
+  build() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      if (this.loading) {
+        Column() {
+          LoadingProgress()
+            .width(30)
+            .height(30)
+            .color(Theme.ACCENT)
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+      } else {
+        // 私有扩展「右滑删除」现在挂在每个文件行上（见 FileRow），页面本身不再包一层
+        this.Body()
 
         // 返回按钮
         Text('‹')
@@ -805,8 +876,13 @@ struct DetailPage {
           .height(36)
           .textAlign(TextAlign.Center)
           .borderRadius(18)
+          // 沉浸光感：用系统材质替掉手写的半透明底 + 模糊，边缘会带流光；
+          // 老设备不支持材质时退回半透明底（材质生效时会接管 backgroundColor）
           .backgroundColor('#40000000')
-          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
+          .systemMaterial(new uiMaterial.ImmersiveMaterial({
+            style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+            materialColor: '#26000000'
+          }))
           .margin({ left: 12, top: 8 })
           .onClick(() => {
             router.back();

@@ -6,8 +6,8 @@
  */
 export class BuildConfig {
   static readonly CHANNEL: string = 'public';
-  static readonly APP_VERSION: string = '2.2.0';
-  static readonly MIN_SERVER: string = '2.2.0';
+  static readonly APP_VERSION: string = '2.3.0';
+  static readonly MIN_SERVER: string = '2.3.0';
   static readonly DEFAULT_AMANE: string = '';
   static readonly DEFAULT_USER: string = '';
   static readonly DEFAULT_WAN: string = '';

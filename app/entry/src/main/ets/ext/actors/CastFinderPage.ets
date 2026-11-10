@@ -6,8 +6,8 @@ import { Theme } from '../../common/Theme';
 import { DetailParams } from '../../common/Types';
 import { MarkBadges } from '../../view/MarkBadges';
 import {
-  ActorItem, ActorList, CastFindItem, CastFindList, CastMember,
-  safeActorList, safeCastFindList, safeCastMember
+  ActorItem, ActorList, CastFindItem, CastFindList, CastMember, DirectorHit,
+  DirectorHitList, safeActorList, safeCastFindList, safeCastMember, safeDirectorHits
 } from './ActorTypes';
 
 const PAGE: number = 24;
@@ -42,8 +42,120 @@ struct PickChips {
   }
 }
 
-/** 把 min2 / eq2 这类标识解析成 [min, max]。 */
-function band(minKey: string): number[] {
+/**
+ * 人数选择条。
+ *
+ * 形状就是语义，别再靠颜色区分（颜色已经被「选中/未选中」占了）：
+ *  - **方形 = 多选**：「1女 / 2女 / 3女 / 4女」可以同时勾，表示「这几个数量里的任意一个」；
+ *  - **圆形 = 单选**：「≥5女」是一个阈值，勾上会自动清空前面的方形多选。
+ * 菜单也不再一个数量列一个 chip（以前 ≥1/≥2/≥3/≥5/=2/=3 七个挤成两行，还是看不全）。
+ */
+@Component
+struct CountPicker {
+  @Prop label: string = '女';
+  @Prop unit: string = '女';
+  /** 多选从几开始：女是 1（0 个女演员没有意义），男是 0（单人片很常见）。 */
+  @Prop floor: number = 1;
+  @Prop multi: number[] = [];
+  @Prop radioOn: boolean = false;
+  onToggle: (v: number) => void = () => {};
+  onRadio: () => void = () => {};
+  onClear: () => void = () => {};
+
+  private has(v: number): boolean {
+    return this.multi.indexOf(v) >= 0;
+  }
+
+  private list(): number[] {
+    const out: number[] = [];
+    for (let i = this.floor; i <= 4; i++) {
+      out.push(i);
+    }
+    return out;
+  }
+
+  build() {
+    // 整行必须放得进一屏：chip 里只放数字（行首已有「女演员 / 男演员」），
+    // 否则「0男 … 4男 + ≥5男」六个 chip 一定会折行，最后那个圆形单选掉到下一行
+    // 看起来就像「≥5」是个孤立的选项。
+    Flex({ wrap: FlexWrap.Wrap }) {
+      Text(this.label)
+        .fontSize(10)
+        .fontColor(Theme.TEXT_FAINT)
+        .margin({ right: 6, bottom: 6 })
+
+      Text(`不限`)
+        .fontSize(10)
+        .fontColor(this.multi.length === 0 && !this.radioOn ? '#FFFFFF' : Theme.TEXT_DIM)
+        .padding({ left: 8, right: 8, top: 5, bottom: 5 })
+        .backgroundColor(this.multi.length === 0 && !this.radioOn ? Theme.ACCENT : Theme.CARD_HI)
+        .borderRadius(12)
+        .margin({ right: 4, bottom: 6 })
+        .onClick(() => {
+          this.onClear();
+        })
+
+      // 方形多选
+      ForEach(this.list(), (v: number) => {
+        Row({ space: 3 }) {
+          Stack() {
+            if (this.has(v)) {
+              Text('✓')
+                .fontSize(7)
+                .fontColor('#FFFFFF')
+            }
+          }
+          .width(10)
+          .height(10)
+          .borderRadius(2)
+          .border({ width: 1, color: this.has(v) ? '#FFFFFF' : Theme.TEXT_FAINT })
+
+          Text(`${v}`)
+            .fontSize(10)
+            .fontColor(this.has(v) ? '#FFFFFF' : Theme.TEXT_DIM)
+        }
+        .padding({ left: 6, right: 7, top: 5, bottom: 5 })
+        .backgroundColor(this.has(v) ? Theme.ACCENT : Theme.CARD_HI)
+        .borderRadius(4)
+        .margin({ right: 4, bottom: 6 })
+        .onClick(() => {
+          this.onToggle(v);
+        })
+      }, (v: number) => `cp-${this.unit}-${v}`)
+
+      // 圆形单选：≥5
+      Row({ space: 3 }) {
+        Stack() {
+          if (this.radioOn) {
+            Column()
+              .width(4)
+              .height(4)
+              .borderRadius(2)
+              .backgroundColor('#FFFFFF')
+          }
+        }
+        .width(10)
+        .height(10)
+        .borderRadius(5)
+        .border({ width: 1, color: this.radioOn ? '#FFFFFF' : Theme.TEXT_FAINT })
+
+        Text(`≥5`)
+          .fontSize(10)
+          .fontColor(this.radioOn ? '#FFFFFF' : Theme.TEXT_DIM)
+      }
+      .padding({ left: 6, right: 8, top: 5, bottom: 5 })
+      .backgroundColor(this.radioOn ? Theme.ACCENT : Theme.CARD_HI)
+      .borderRadius(12)
+      .margin({ right: 4, bottom: 6 })
+      .onClick(() => {
+        this.onRadio();
+      })
+    }
+    .width('100%')
+  }
+}
+
+/** 把 min2 / eq2 这类标识解析成 [min, max]。 */function band(minKey: string): number[] {
   const out: number[] = [0, 99];
   if (minKey.length < 3) {
     return out;
@@ -84,9 +196,20 @@ struct CastFinderPage {
   @State loading: boolean = false;
   @State loadingMore: boolean = false;
   @State error: string = '';
-  @State female: string = '';
-  @State male: string = '';
+  @State femaleN: number[] = [];
+  @State female5: boolean = false;
+  @State maleN: number[] = [];
+  @State male5: boolean = false;
   @State castN: string = '';
+  /** 导演筛选：默认「只看这几位」，可切成「排除这几位」。 */
+  @State dirs: DirectorHit[] = [];
+  @State dirExclude: boolean = false;
+  @State dirPicking: boolean = false;
+  @State dirHits: DirectorHit[] = [];
+  @State dirQuery: string = '';
+  /** 服务端版本不够时的提示：旧服务端会静默忽略导演 / 人数集合参数。 */
+  @State capsWarn: string = '';
+  private dirTimer: number = -1;
   @State sortBy: string = 'release';
   @State order: string = 'desc';
   @State onlySub: boolean = false;
@@ -96,22 +219,6 @@ struct CastFinderPage {
   @State genderFilter: string = 'all';
   @State hits: ActorItem[] = [];
   private searchTimer: number = -1;
-  private females: Choice[] = [
-    { key: '', label: '女演员不限' },
-    { key: 'min1', label: '≥1 女' },
-    { key: 'min2', label: '≥2 女' },
-    { key: 'min3', label: '≥3 女' },
-    { key: 'min5', label: '≥5 女' },
-    { key: 'eq2', label: '=2 女' },
-    { key: 'eq3', label: '=3 女' }
-  ];
-  private males: Choice[] = [
-    { key: '', label: '男演员不限' },
-    { key: 'eq0', label: '=0 男' },
-    { key: 'min1', label: '≥1 男' },
-    { key: 'eq1', label: '=1 男' },
-    { key: 'min2', label: '≥2 男' }
-  ];
   private sorts: Choice[] = [
     { key: 'release', label: '发行时间' },
     { key: 'number', label: '番号' },
@@ -146,6 +253,19 @@ struct CastFinderPage {
       clearTimeout(this.searchTimer);
       this.searchTimer = -1;
     }
+    if (this.dirTimer >= 0) {
+      clearTimeout(this.dirTimer);
+      this.dirTimer = -1;
+    }
+  }
+
+  /** 女/男人数条件：多选集合走 female_n/male_n（「或」），≥5 走区间。 */
+  private hasFemale(): boolean {
+    return this.femaleN.length > 0 || this.female5;
+  }
+
+  private hasMale(): boolean {
+    return this.maleN.length > 0 || this.male5;
   }
 
   private buildUrl(offset: number): string {
@@ -166,17 +286,27 @@ struct CastFinderPage {
       }
       parts.push(`actor_id=${ids.join(',')}`);
     }
-    const f: number[] = band(this.female);
-    const m: number[] = band(this.male);
+    // 导演：包含 / 排除二选一，多选用「或」（选两个导演 = 这两人的片子合集）
+    if (this.dirs.length > 0) {
+      const ids: string[] = [];
+      for (let i = 0; i < this.dirs.length; i++) {
+        ids.push(`${this.dirs[i].id}`);
+      }
+      parts.push(`${this.dirExclude ? 'exclude_director_id' : 'director_id'}=${ids.join(',')}`);
+    }
+    if (this.female5) {
+      parts.push('female_min=5');
+      parts.push('female_max=99');
+    } else if (this.femaleN.length > 0) {
+      parts.push(`female_n=${this.femaleN.join(',')}`);
+    }
+    if (this.male5) {
+      parts.push('male_min=5');
+      parts.push('male_max=99');
+    } else if (this.maleN.length > 0) {
+      parts.push(`male_n=${this.maleN.join(',')}`);
+    }
     const c: number[] = band(this.castN);
-    if (f[0] > 0 || f[1] < 99) {
-      parts.push(`female_min=${f[0]}`);
-      parts.push(`female_max=${f[1]}`);
-    }
-    if (m[0] > 0 || m[1] < 99) {
-      parts.push(`male_min=${m[0]}`);
-      parts.push(`male_max=${m[1]}`);
-    }
     if (c[0] > 0 || c[1] < 99) {
       parts.push(`cast_min=${c[0]}`);
       parts.push(`cast_max=${c[1]}`);
@@ -200,6 +330,7 @@ struct CastFinderPage {
       this.results = append ? this.results.concat(r.items) : r.items;
       this.rows = this.chunk(this.results);
       this.total = r.total;
+      this.checkCaps(r);
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] cast find: ${e.code} ${e.message}`);
@@ -209,6 +340,21 @@ struct CastFinderPage {
     }
     this.loading = false;
     this.loadingMore = false;
+  }
+
+  /**
+   * 老服务端（< 1.3.8）不认识 `director_id` / `female_n` / `male_n`，
+   * 不会报错、也不会回显，只会把条件丢掉返回全库 —— 页面看起来就像「筛选没生效」。
+   * 用回显字段判断一次，直接把话说清楚，别让人怀疑是客户端坏了。
+   */
+  private checkCaps(r: CastFindList): void {
+    const needDir: boolean = this.dirs.length > 0;
+    const needSet: boolean = this.femaleN.length > 0 || this.maleN.length > 0;
+    const dirIgnored: boolean = needDir && r.director_id.length === 0;
+    const setIgnored: boolean = needSet && r.female_n.length === 0 && r.male_n.length === 0;
+    this.capsWarn = (dirIgnored || setIgnored)
+      ? '当前服务端 < 1.3.8：导演筛选与人数多选被忽略了，下面是全库结果（升级服务端后自动生效）'
+      : '';
   }
 
   private loadMore(): void {
@@ -254,8 +400,8 @@ struct CastFinderPage {
   }
 
   private castToShow(x: CastFindItem): CastMember[] {
-    const wantFemale: boolean = this.female.length > 0 && this.male.length === 0;
-    const wantMale: boolean = this.male.length > 0 && this.female.length === 0;
+    const wantFemale: boolean = this.hasFemale() && !this.hasMale();
+    const wantMale: boolean = this.hasMale() && !this.hasFemale();
     const out: CastMember[] = [];
     for (let i = 0; i < x.cast.length; i++) {
       const c: CastMember = x.cast[i];
@@ -283,19 +429,23 @@ struct CastFinderPage {
       }
       parts.push(names.join('+'));
     }
-    if (this.female.length > 0) {
-      for (let i = 0; i < this.females.length; i++) {
-        if (this.females[i].key === this.female) {
-          parts.push(this.females[i].label);
-        }
+    if (this.female5) {
+      parts.push('≥5女');
+    } else if (this.femaleN.length > 0) {
+      const nums: string[] = [];
+      for (let i = 0; i < this.femaleN.length; i++) {
+        nums.push(`${this.femaleN[i]}女`);
       }
+      parts.push(nums.join('/'));
     }
-    if (this.male.length > 0) {
-      for (let i = 0; i < this.males.length; i++) {
-        if (this.males[i].key === this.male) {
-          parts.push(this.males[i].label);
-        }
+    if (this.male5) {
+      parts.push('≥5男');
+    } else if (this.maleN.length > 0) {
+      const nums: string[] = [];
+      for (let i = 0; i < this.maleN.length; i++) {
+        nums.push(`${this.maleN[i]}男`);
       }
+      parts.push(nums.join('/'));
     }
     if (this.castN.length > 0) {
       for (let i = 0; i < this.casts.length; i++) {
@@ -304,7 +454,114 @@ struct CastFinderPage {
         }
       }
     }
+    if (this.dirs.length > 0) {
+      const names: string[] = [];
+      for (let i = 0; i < this.dirs.length; i++) {
+        names.push(this.dirs[i].name);
+      }
+      parts.push(`${this.dirExclude ? '排除导演' : '只看导演'} ${names.join('/')}`);
+    }
     return parts.length > 0 ? parts.join(' · ') : '全部作品';
+  }
+
+  /** 方形多选：勾上就加，再点取消；勾多选时 ≥5 的圆形会自动弹起。 */
+  private toggleSize(list: number[], v: number): number[] {
+    const next: number[] = [];
+    let found: boolean = false;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] === v) {
+        found = true;
+      } else {
+        next.push(list[i]);
+      }
+    }
+    if (!found) {
+      next.push(v);
+    }
+    next.sort((a: number, b: number) => a - b);
+    return next;
+  }
+
+  private pickFemale(v: number): void {
+    this.femaleN = this.toggleSize(this.femaleN, v);
+    this.female5 = false;
+    this.runQuery();
+  }
+
+  private pickMale(v: number): void {
+    this.maleN = this.toggleSize(this.maleN, v);
+    this.male5 = false;
+    this.runQuery();
+  }
+
+  private pickFemale5(): void {
+    this.female5 = !this.female5;
+    if (this.female5) {
+      this.femaleN = [];
+    }
+    this.runQuery();
+  }
+
+  private pickMale5(): void {
+    this.male5 = !this.male5;
+    if (this.male5) {
+      this.maleN = [];
+    }
+    this.runQuery();
+  }
+
+  private isDirPicked(id: number): boolean {
+    for (let i = 0; i < this.dirs.length; i++) {
+      if (this.dirs[i].id === id) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private toggleDir(d: DirectorHit): void {
+    if (this.isDirPicked(d.id)) {
+      const next: DirectorHit[] = [];
+      for (let i = 0; i < this.dirs.length; i++) {
+        if (this.dirs[i].id !== d.id) {
+          next.push(this.dirs[i]);
+        }
+      }
+      this.dirs = next;
+    } else {
+      if (this.dirs.length >= 8) {
+        return;
+      }
+      this.dirs = this.dirs.concat([d]);
+    }
+    this.runQuery();
+  }
+
+  /** 导演候选来自分类接口（/api/user/facets/director），演员接口里没有导演。 */
+  private async doDirSearch(): Promise<void> {
+    const kw: string = this.dirQuery.trim();
+    const url: string = `${Store.I.user}/api/user/facets/director` +
+      `?limit=20&sort_by=count&order=desc&search=${encodeURIComponent(kw)}`;
+    try {
+      const text: string = await httpGet(url, Store.I.token);
+      this.dirHits = safeDirectorHits(JSON.parse(text) as DirectorHitList);
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error(`[amane] director picker: ${e.code} ${e.message}`);
+    }
+  }
+
+  private onDirSearch(value: string): void {
+    if (this.dirTimer >= 0) {
+      clearTimeout(this.dirTimer);
+      this.dirTimer = -1;
+    }
+    const q: string = value;
+    this.dirTimer = setTimeout(() => {
+      this.dirTimer = -1;
+      this.dirQuery = q;
+      this.doDirSearch();
+    }, 320);
   }
 
   private isPicked(id: number): boolean {
@@ -551,26 +808,55 @@ struct CastFinderPage {
   @Builder
   Conditions() {
     Column({ space: 8 }) {
-      Text('按人数找（不看具体是谁）')
-        .fontSize(10)
-        .fontColor(Theme.TEXT_FAINT)
-        .width('100%')
-      PickChips({
-        options: this.females,
-        current: this.female,
-        onPick: (key: string) => {
-          this.female = key;
+      Row({ space: 6 }) {
+        Text('按人数找（不看具体是谁）')
+          .fontSize(10)
+          .fontColor(Theme.TEXT_FAINT)
+        Blank()
+        Text('□ 多选 · ○ 单选')
+          .fontSize(9)
+          .fontColor(Theme.TEXT_FAINT)
+      }
+      .width('100%')
+
+      CountPicker({
+        label: '女演员',
+        unit: '女',
+        floor: 1,
+        multi: this.femaleN,
+        radioOn: this.female5,
+        onToggle: (v: number) => {
+          this.pickFemale(v);
+        },
+        onRadio: () => {
+          this.pickFemale5();
+        },
+        onClear: () => {
+          this.femaleN = [];
+          this.female5 = false;
           this.runQuery();
         }
       })
-      PickChips({
-        options: this.males,
-        current: this.male,
-        onPick: (key: string) => {
-          this.male = key;
+
+      CountPicker({
+        label: '男演员',
+        unit: '男',
+        floor: 0,
+        multi: this.maleN,
+        radioOn: this.male5,
+        onToggle: (v: number) => {
+          this.pickMale(v);
+        },
+        onRadio: () => {
+          this.pickMale5();
+        },
+        onClear: () => {
+          this.maleN = [];
+          this.male5 = false;
           this.runQuery();
         }
       })
+
       PickChips({
         options: this.casts,
         current: this.castN,
@@ -641,6 +927,121 @@ struct CastFinderPage {
           this.runQuery();
         }
       })
+    }
+    .alignItems(HorizontalAlign.Start)
+    .width('100%')
+    .padding(12)
+    .backgroundColor(Theme.CARD)
+    .borderRadius(Theme.RADIUS)
+  }
+
+  /**
+   * 导演筛选栏。
+   *
+   * 两种模式，默认**只看**（收窄），可一键切成**排除**（减法）：
+   *  - 只看：这批结果里只保留这几位导演的片子（选两位 = 两人的片子合集）；
+   *  - 排除：把这几位导演的片子整片剔掉 —— 同一位导演一个月出十部一样的片子，
+   *    配上「n女n男」会占满第一屏，所以要能把他剔出去。
+   * 文案必须把两种模式都说到，不能只写「排除」（默认明明是只看，只说排除会误导）。
+   */
+  @Builder
+  DirectorBar() {
+    Column({ space: 8 }) {
+      Row({ space: 8 }) {
+        Text('导演')
+          .fontSize(10)
+          .fontColor(Theme.TEXT_FAINT)
+        if (this.dirs.length > 0) {
+          Text(this.dirExclude ? '✕ 排除这几位' : '✓ 只看这几位')
+            .fontSize(10)
+            .fontColor('#FFFFFF')
+            .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+            .backgroundColor(this.dirExclude ? Theme.DANGER : Theme.ACCENT)
+            .borderRadius(11)
+            .onClick(() => {
+              this.dirExclude = !this.dirExclude;
+              this.runQuery();
+            })
+        }
+        Blank()
+        Text(this.dirPicking ? '收起' : '+ 添加导演')
+          .fontSize(11)
+          .fontColor('#FFFFFF')
+          .padding({ left: 12, right: 12, top: 4, bottom: 4 })
+          .backgroundColor(Theme.ACCENT)
+          .borderRadius(11)
+          .onClick(() => {
+            this.dirPicking = !this.dirPicking;
+            if (this.dirPicking && this.dirHits.length === 0) {
+              this.doDirSearch();
+            }
+          })
+      }
+      .width('100%')
+
+      if (this.dirs.length > 0) {
+        Flex({ wrap: FlexWrap.Wrap }) {
+          ForEach(this.dirs, (d: DirectorHit) => {
+            Text(`${d.name} ×`)
+              .fontSize(11)
+              .fontColor('#FFFFFF')
+              .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+              .backgroundColor(this.dirExclude ? '#8C3A1414' : Theme.CARD_HI)
+              .borderRadius(11)
+              .margin({ right: 6, bottom: 6 })
+              .onClick(() => {
+                this.toggleDir(d);
+              })
+          }, (d: DirectorHit) => `dir-${d.id}`)
+        }
+        .width('100%')
+      } else if (!this.dirPicking) {
+        // 默认是「只看」，所以说明里必须先说只看、再说可切成排除 ——
+        // 只写「排除」会让用户以为选了导演就是把它们剔掉。
+        Text('选导演后可只看这几位，也可切成排除（把「n女n男 + 导演」的组合整片剔掉）')
+          .fontSize(9)
+          .fontColor(Theme.TEXT_FAINT)
+          .width('100%')
+      }
+
+      if (this.dirPicking) {
+        TextInput({ placeholder: '搜索导演名', text: this.dirQuery })
+          .height(34)
+          .fontSize(12)
+          .fontColor(Theme.TEXT)
+          .placeholderColor(Theme.TEXT_FAINT)
+          .placeholderFont({ size: 11 })
+          .backgroundColor(Theme.CARD_HI)
+          .borderRadius(8)
+          .padding({ left: 10, right: 10 })
+          .width('100%')
+          .onChange((v: string) => {
+            this.onDirSearch(v);
+          })
+
+        Scroll() {
+          Flex({ wrap: FlexWrap.Wrap }) {
+            ForEach(this.dirHits, (d: DirectorHit) => {
+              Text(d.count > 0 ? `${d.name} · ${d.count}` : d.name)
+                .fontSize(11)
+                .fontColor(this.isDirPicked(d.id) ? '#FFFFFF' : Theme.TEXT_DIM)
+                .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+                .backgroundColor(this.isDirPicked(d.id) ? Theme.ACCENT : Theme.CARD_HI)
+                .borderRadius(11)
+                .margin({ right: 6, bottom: 6 })
+                .maxLines(1)
+                .onClick(() => {
+                  this.toggleDir(d);
+                })
+            }, (d: DirectorHit) => `dhit-${d.id}`)
+          }
+          .width('100%')
+        }
+        .scrollable(ScrollDirection.Vertical)
+        .scrollBar(BarState.Off)
+        .constraintSize({ maxHeight: 150 })
+        .width('100%')
+      }
     }
     .alignItems(HorizontalAlign.Start)
     .width('100%')
@@ -762,6 +1163,16 @@ struct CastFinderPage {
         .fontColor(Theme.TEXT_FAINT)
         .maxLines(1)
         .width('100%')
+
+      // 导演名：排除导演时得看得见「这部是谁拍的」，否则不知道排除有没有生效
+      if (x.directors.length > 0) {
+        Text(`导 ${x.directors.join(' / ')}`)
+          .fontSize(9)
+          .fontColor(Theme.TEXT_FAINT)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+      }
     }
     .alignItems(HorizontalAlign.Start)
     .layoutWeight(1)
@@ -793,6 +1204,19 @@ struct CastFinderPage {
         Column({ space: 10 }) {
           this.Picked()
           this.Conditions()
+          this.DirectorBar()
+
+          // 旧服务端把导演/人数集合参数静默丢掉时，必须显式说出来 ——
+          // 否则「只看导演 X 却出现全库 5000 多部」会被当成功能坏了。
+          if (this.capsWarn.length > 0) {
+            Text(this.capsWarn)
+              .fontSize(10)
+              .fontColor('#FFB74D')
+              .padding({ left: 10, right: 10, top: 7, bottom: 7 })
+              .backgroundColor('#26FFB74D')
+              .borderRadius(8)
+              .width('100%')
+          }
 
           if (this.loading) {
             Column() {
@@ -817,8 +1241,8 @@ struct CastFinderPage {
               Text('◎')
                 .fontSize(30)
                 .fontColor(Theme.TEXT_FAINT)
-              Text(this.picked.length === 0 && this.female.length === 0
-                && this.male.length === 0 && this.castN.length === 0
+              Text(this.picked.length === 0 && !this.hasFemale()
+                && !this.hasMale() && this.castN.length === 0 && this.dirs.length === 0
                 ? '先选人或选一个条件'
                 : '没有符合的共演作品')
                 .fontSize(12)

@@ -101,7 +101,8 @@ struct ActorWorksPage {
     { key: 'release', label: '发行日期' },
     { key: 'score', label: '评分' },
     { key: 'number', label: '番号' },
-    { key: 'updated_at', label: '更新' }
+    { key: 'updated_at', label: '更新' },
+    { key: 'random', label: '随机' }
   ];
   private mosaics: Choice[] = [
     { key: '', label: '不限' },
@@ -398,7 +399,9 @@ struct ActorWorksPage {
             current: this.sortBy,
             onPick: (key: string) => {
               if (this.sortBy === key) {
-                this.order = this.order === 'desc' ? 'asc' : 'desc';
+                if (key !== 'random') {
+                  this.order = this.order === 'desc' ? 'asc' : 'desc';
+                }
               } else {
                 this.sortBy = key;
                 this.order = key === 'number' ? 'asc' : 'desc';
@@ -421,6 +424,7 @@ struct ActorWorksPage {
           .textAlign(TextAlign.Center)
           .backgroundColor(this.order === 'desc' ? Theme.ACCENT : Theme.CARD_HI)
           .borderRadius(13)
+          .visibility(this.sortBy === 'random' ? Visibility.None : Visibility.Visible)
           .onClick(() => {
             this.order = this.order === 'desc' ? 'asc' : 'desc';
             this.reload();

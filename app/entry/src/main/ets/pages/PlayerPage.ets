@@ -8,7 +8,8 @@ import { PlayerParams } from '../common/Types';
 import { clock } from '../common/Util';
 import { common } from '@kit.AbilityKit';
 import { SubtitleClient, SubtitleItem, LocalCandidate } from '../common/Subtitles';
-import { PlayerPrefs } from '../common/PlayerPrefs';
+import { PlayerPrefs, PlayerTuning } from '../common/PlayerPrefs';
+import { PlayerChrome } from '../view/PlayerChrome';
 
 const SPEEDS: number[] = [0.75, 1.0, 1.25, 1.5, 2.0];
 
@@ -46,6 +47,9 @@ struct PlayerPage {
   @Local buffering: boolean = false;
   @Local bitrate: number = 0;
   @Local bufPct: number = 0;
+  /** mpv 真正缓存了多少秒画面（demuxer-cache-duration）。卡顿时看这个最直接：
+   *  在 0 附近跳＝网络跟不上；稳定在几秒以上还卡＝解码/渲染的问题。 */
+  @Local cacheSec: number = 0;
   @Local bandwidthWarn: boolean = false;
   @Local speed: number = 1.0;
   @Local showControls: boolean = true;
@@ -98,7 +102,12 @@ struct PlayerPage {
         hwdec: tuning.hwdec,
         vo: 'gpu-next',
         osc: false,
-        osd: false
+        osd: false,
+        // 内核就绪后回读一遍真正生效的缓存参数：mpv.conf 有没有被读到、
+        // 有没有被别的版本写脏，一看日志就知道（用户报「设置没生效」时全靠这行）。
+        onReady: () => {
+          this.verifyTuning(tuning);
+        }
       }));
       this.surfaceReady = true;
     } catch (error) {
@@ -202,6 +211,13 @@ struct PlayerPage {
       this.bitrate = st.videoBitrate > 0 ? st.videoBitrate : 0;
       this.bandwidthWarn = Store.I.onWan && this.bitrate > 10000000;
       this.bufPct = st.bufferingPercentage >= 0 ? st.bufferingPercentage : 0;
+      // 缓存秒数只有 mpv 属性里给得准（PlayerState.buffer 语义含糊）
+      try {
+        const sec: number = this.player.native.getProperty('demuxer-cache-duration');
+        this.cacheSec = sec > 0 && sec < 600 ? sec : 0;
+      } catch (e) {
+        this.cacheSec = 0;
+      }
       this.speed = st.speed;
       if (st.eof && !this.completed) {
         this.completed = true;
@@ -506,10 +522,55 @@ struct PlayerPage {
 
   /** 一眼分辨「请求没成功」和「带宽不够」：码率长期高于链路能力就会反复缓冲。 */
   private diagnostics(): string {
-    const state: string = this.buffering ? '缓冲中' : (this.playing ? '播放中' : '等待数据');
+    const state: string = this.buffering ? '缓冲' : (this.playing ? '播放' : '等待');
     const rate: string = this.bitrate > 0 ? (this.bitrate / 1000000).toFixed(1) : '--';
-    const cache: number = Math.round(this.bufPct);
-    return `${state} · 码率 ${rate} Mbps · 缓存 ${cache}%`;
+    const cache: string = this.cacheSec > 0 ? `${this.cacheSec.toFixed(1)}s` : `${Math.round(this.bufPct)}%`;
+    return `${state} · ${rate}M · 缓存${cache}`;
+  }
+
+  /**
+   * 回读 mpv 真正生效的缓存参数，对不上就现改一次。
+   *
+   * 用户报「设置没生效」时很难从外部验证，这里把 mpv.conf 是否被读到、
+   * 有没有被旧版本写脏一次性打成一行日志；顺带自愈（setProperty 立即生效）。
+   */
+  private verifyTuning(t: PlayerTuning): void {
+    if (this.player === undefined || this.player === null) {
+      return;
+    }
+    let line: string = '';
+    try {
+      const lib = this.player.native;
+      const maxBytes: number = t.maxMiB * 1024 * 1024;
+      const backBytes: number = t.backMiB * 1024 * 1024;
+      const keys: string[] = ['demuxer-max-bytes', 'demuxer-max-back-bytes',
+        'demuxer-readahead-secs', 'cache-pause-wait'];
+      const wants: number[] = [maxBytes, backBytes, t.readahead, t.pauseWait];
+      for (let i = 0; i < keys.length; i++) {
+        const key: string = keys[i];
+        const want: number = wants[i];
+        let actual: number = -1;
+        try {
+          actual = lib.getProperty(key);
+        } catch (e) {
+          actual = -1;
+        }
+        line += `${key}=${actual}`;
+        if (!(actual > 0) || Math.abs(actual - want) > Math.max(0.02, want * 0.02)) {
+          try {
+            lib.setProperty(key, want);
+            line += `→${want}`;
+          } catch (e) {
+            line += '→改不动';
+          }
+        }
+        line += ' ';
+      }
+      console.info(`[amane] mpv 生效参数: ${line}`);
+    } catch (error) {
+      const e = error as BusinessError;
+      console.error(`[amane] verify tuning: ${e.code} ${e.message}`);
+    }
   }
 
   /** 外网链路余量小：码率超过警戒值给一条可操作提示，不阻断播放。 */
@@ -528,170 +589,56 @@ struct PlayerPage {
 
   build() {
     Stack({ alignContent: Alignment.Center }) {
+      // 视频铺满，控件浮在上面（顶部胶囊 + 底部面板，见 view/PlayerChrome）
       if (this.surfaceReady && this.player !== undefined) {
         PlayerSurface({ player: this.player as Player })
           .width('100%')
           .height('100%')
       }
 
-      // 控件层
+      // 控件层：顶部悬浮胶囊 + 底部悬浮面板（view/PlayerChrome，纯 ArkUI）
       if (this.showControls) {
-        Column() {
-          Row({ space: 10 }) {
-            Text('‹')
-              .fontSize(26)
-              .fontColor('#FFFFFF')
-              .width(40)
-              .height(40)
-              .textAlign(TextAlign.Center)
-              .onClick(() => {
-                router.back();
-              })
-            Column({ space: 1 }) {
-              Text(this.metaNumber)
-                .fontSize(13)
-                .fontColor('#FFFFFF')
-                .fontWeight(FontWeight.Medium)
-              Text(Store.I.onWan ? '外网' : '局域网')
-                .fontSize(9)
-                .fontColor(Store.I.onWan ? '#FFB454' : '#7FE3C0')
-                .padding({ left: 5, right: 5, top: 1, bottom: 1 })
-                .backgroundColor('#59000000')
-                .borderRadius(4)
-                .margin({ bottom: 3 })
-              if (this.fileName.length > 0) {
-                Text(`版本 · ${this.fileName}`)
-                  .fontSize(10)
-                  .fontColor('#B9B9C4')
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .width('100%')
-              }
-              Text(this.metaTitle)
-                .fontSize(10)
-                .fontColor('#B3FFFFFF')
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .width('58%')
-            }
-            .alignItems(HorizontalAlign.Start)
-            .layoutWeight(1)
-            Text(`${this.speed}x`)
-              .fontSize(12)
-              .fontColor('#FFFFFF')
-              .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-              .backgroundColor('#33000000')
-              .borderRadius(12)
-              .onClick(() => {
-                this.cycleSpeed();
-              })
+        PlayerChrome({
+          number: this.metaNumber,
+          title: this.metaTitle,
+          fileName: this.fileName,
+          onAir: Store.I.onWan,
+          speed: this.speed,
+          playing: this.playing,
+          pos: this.pos,
+          duration: this.duration,
+          seekPreview: this.seekPreview,
+          volume: this.volume,
+          diagnostics: this.diagnostics(),
+          bandwidthText: this.bandwidthText(),
+          onBack: () => {
+            router.back();
+          },
+          onPlayPause: () => {
+            this.togglePlay();
+          },
+          onSpeed: () => {
+            this.cycleSpeed();
+          },
+          onSeekMoving: (value: number) => {
+            this.seekPreview = value;
+          },
+          onSeekEnd: (value: number) => {
+            this.seekTo(value);
+            this.seekPreview = -1;
+          },
+          onSubs: () => {
+            this.toggleSubs();
+          },
+          onAudio: () => {
+            this.panelKind = 'audio';
+            this.toggleSubs();
+            this.panelKind = 'audio';
+          },
+          onMute: () => {
+            this.volume = this.volume > 0 ? 0 : 100;
+            this.applyVolume(this.volume);
           }
-          .width('100%')
-          .padding({ left: 16, right: 16, top: 10 })
-
-          Text(this.diagnostics())
-            .fontSize(10)
-            .fontColor('#99FFFFFF')
-            .width('100%')
-            .padding({ left: 16, right: 16, top: 2 })
-
-          if (this.bandwidthText().length > 0) {
-            Text(this.bandwidthText())
-              .fontSize(10)
-              .fontColor(Theme.GOLD)
-              .width('100%')
-              .padding({ left: 16, right: 16, top: 4, bottom: 2 })
-          }
-
-          Blank()
-
-          Column({ space: 6 }) {
-            Row({ space: 10 }) {
-              Text(clock(this.seekPreview >= 0 ? this.seekPreview : this.pos))
-                .fontSize(11)
-                .fontColor('#FFFFFF')
-                .width(52)
-              Slider({
-                value: this.seekPreview >= 0 ? this.seekPreview : this.pos,
-                min: 0,
-                max: this.duration > 0 ? this.duration : 1,
-                step: 1
-              })
-                .layoutWeight(1)
-                .selectedColor(Theme.ACCENT)
-                .trackColor('#4DFFFFFF')
-                .trackThickness(3)
-                .blockColor('#FFFFFF')
-                .blockSize({ width: 12, height: 12 })
-                .onChange((value: number, mode: SliderChangeMode) => {
-                  if (mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving) {
-                    this.seekPreview = value;
-                  } else if (mode === SliderChangeMode.End) {
-                    this.seekTo(value);
-                    this.seekPreview = -1;
-                  }
-                })
-              Text(clock(this.duration))
-                .fontSize(11)
-                .fontColor('#B3FFFFFF')
-                .width(52)
-                .textAlign(TextAlign.End)
-            }
-            .width('100%')
-
-            Row({ space: 22 }) {
-              Text(this.playing ? '❚❚' : '▶')
-                .fontSize(16)
-                .fontColor('#FFFFFF')
-                .width(34)
-                .height(30)
-                .textAlign(TextAlign.Center)
-                .onClick(() => {
-                  this.togglePlay();
-                })
-              Text('字幕')
-                .fontSize(12)
-                .fontColor('#FFFFFF')
-                .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-                .backgroundColor('#33000000')
-                .borderRadius(12)
-                .onClick(() => {
-                  this.toggleSubs();
-                })
-              Text('音轨')
-                .fontSize(12)
-                .fontColor('#FFFFFF')
-                .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-                .backgroundColor('#33000000')
-                .borderRadius(12)
-                .onClick(() => {
-                  this.panelKind = 'audio';
-                  this.toggleSubs();
-                  this.panelKind = 'audio';
-                })
-              Blank()
-              Text(this.volume > 0 ? '🔊' : '🔇')
-                .fontSize(14)
-                .fontColor('#FFFFFF')
-                .onClick(() => {
-                  this.volume = this.volume > 0 ? 0 : 100;
-                  this.applyVolume(this.volume);
-                })
-            }
-            .width('100%')
-          }
-          .width('100%')
-          .padding({ left: 16, right: 16, bottom: 14, top: 10 })
-          .linearGradient({
-            angle: 0,
-            colors: [['#00000000', 0.0], ['#CC000000', 1.0]]
-          })
-        }
-        .width('100%')
-        .height('100%')
-        .linearGradient({
-          angle: 180,
-          colors: [['#99000000', 0.0], ['#00000000', 0.35], ['#CC000000', 1.0]]
         })
       }
 
@@ -861,10 +808,14 @@ struct PlayerPage {
             }
             Blank().height(12)
           }
-          .width('46%')
-          .backgroundColor('#E614141A')
-          .borderRadius({ topLeft: 14, topRight: 14 })
-          .margin({ bottom: 16 })
+          .width('48%')
+          // 面板同样是悬浮玻璃：毛玻璃 + 细边 + 投影，四周留 14vp 让视频透出来
+          .backgroundColor('#66000000')
+          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
+          .border({ width: 0.5, color: '#26FFFFFF' })
+          .borderRadius(22)
+          .shadow({ radius: 26, color: '#73000000', offsetY: 10 })
+          .margin({ bottom: 14, right: 14 })
           .onClick(() => {
             // 吞掉点击：不然会冒泡到下面的遮罩层，面板刚点就关了
           })

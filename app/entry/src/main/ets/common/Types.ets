@@ -20,6 +20,8 @@ export interface MediaItem {
   duration: number;
   /** 无码 / 破解 / 流出 / 中字，服务端汇总好直接给。 */
   marks?: string[];
+  /** 横图真实宽高比（宽/高）：每日推荐桶幅按它定宽，不再强行 16:9。 */
+  fanart_ratio?: number;
 }
 
 export interface MediaFile {
@@ -79,6 +81,8 @@ export interface ItemDetail {
   /** 无码 / 破解 / 流出 / 中字，服务端按文件汇总，详情页头部直接画。 */
   marks: string[];
   stills: string[];
+  /** 与 stills 等长的宽高比（w/h）；0 = 服务端也没量过，由详情页按图片实测补。 */
+  still_ratios: number[];
   comments: CommentItem[];
 }
 
@@ -101,6 +105,8 @@ export interface HomeData {
   hero: MediaItem[];
   continue: MediaItem[];
   recommend: MediaItem[];
+  /** 每日推荐桶幅：服务端已校验过的真横图（宽≥720、宽高比≥1.25），带 fanart_ratio。 */
+  banners: MediaItem[];
   rows: HomeRow[];
   libraries: LibraryInfo[];
   generated_at: string;
@@ -179,4 +185,19 @@ export interface PlayerParams {
 export interface BrowseParams {
   libraryId: number;
   title: string;
+}
+
+/** 搜索联想里的一条（/api/user/suggest，tier：1 精确 / 2 相关 / 3 扩大）。 */
+export interface SuggestItem {
+  id: number;
+  number: string;
+  title: string;
+  poster: string;
+  release: string;
+  tier: number;
+}
+
+export interface SuggestResult {
+  items: SuggestItem[];
+  q: string;
 }

@@ -121,7 +121,7 @@ export struct FavoritesTab {
         .columnsTemplate('1fr 1fr 1fr')
         .columnsGap(10)
         .rowsGap(14)
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 84 })
         .layoutWeight(1)
         .scrollBar(BarState.Off)
       }

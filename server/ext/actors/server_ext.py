@@ -22,6 +22,7 @@ import json
 import os
 import random
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
@@ -413,6 +414,28 @@ def _cast_rows(metadata_ids: list[int]) -> dict:
     return out
 
 
+def _director_names(metadata_ids: list[int]) -> dict:
+    """一次查出这些影片的导演名（结果卡上要写「导演：xxx」，方便判断要不要排除）。"""
+    if not metadata_ids:
+        return {}
+    ph = ",".join("?" * len(metadata_ids))
+    out: dict = {}
+    try:
+        with A.amane_db() as conn:
+            rows = conn.execute(
+                "SELECT md.metadata_id, d.name FROM metadata_directors md "
+                "JOIN directors d ON d.id = md.director_id "
+                f"WHERE md.metadata_id IN ({ph}) ORDER BY d.id", metadata_ids).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"WARN 取导演名失败: {exc}")
+        return {}
+    for r in rows:
+        name = (r["name"] or "").strip()
+        if name:
+            out.setdefault(r["metadata_id"], []).append(name)
+    return out
+
+
 def item_cast(handler, query, metadata_id, *_):
     """GET /api/user/item/{id}/cast —— 影片出演阵容（带头像）。
 
@@ -435,6 +458,7 @@ CAST_SORT = {
     "updated_at": "m.updated_at",
     "runtime": "m.runtime",
     "score": "CAST(json_extract(m.scores, '$.javdb') AS REAL)",
+    "random": "RANDOM()",
 }
 
 
@@ -450,6 +474,24 @@ def _ids(query: dict, key: str) -> list[int]:
     return out[:20]
 
 
+def _sizes(query: dict, key: str) -> list[int]:
+    """人数离散集合：`female_n=1,2` = 「1 个女演员 或 2 个女演员」。
+
+    和 `_ids` 的区别是**允许 0**（`male_n=0` 就是「这部片没有男演员」），
+    而 `_ids` 会把 0 当无效值丢掉。
+    """
+    out: list[int] = []
+    for raw in (query.get(key) or []):
+        for part in str(raw).split(","):
+            part = part.strip()
+            if not part.isdigit():
+                continue
+            n = int(part)
+            if 0 <= n <= 99 and n not in out:
+                out.append(n)
+    return out[:8]
+
+
 def cast_find(handler, query, *_):
     """GET /api/user/cast/find —— 按演员阵容找片（共演 / 女演员人数）。
 
@@ -459,7 +501,11 @@ def cast_find(handler, query, *_):
       * `actor_id=1&actor_id=2`  这些演员必须同时出现（具体 N 男 N 女共演）
       * `female_min/female_max`  女演员人数区间
       * `male_min/male_max`      男演员人数区间
+      * `female_n=1,2` / `male_n=0,1` 人数离散集合（客户端「1女 2女 3女 4女」
+        方形多选就是它：勾了几个就是「这几个数量里的任意一个」，不是区间）
       * `cast_min/cast_max`      总人数区间
+      * `director_id=…` / `exclude_director_id=…` 按导演收窄 / 排除
+        （「n女n男 + 某导演」的组合可以从结果里整片剔掉）
 
     只返回有文件的条目，默认按发行日期倒序。
     """
@@ -476,6 +522,12 @@ def cast_find(handler, query, *_):
         mmin, mmax = mmax, mmin
     if cmin > cmax:
         cmin, cmax = cmax, cmin
+    # 离散人数集合（「1 女 或 2 女」）：非空时在 HAVING 里再加一条 IN，
+    # 与上面的 BETWEEN 并存（区间保持 0~99 时两者不会互相打架）。
+    female_n = _sizes(query, "female_n")
+    male_n = _sizes(query, "male_n")
+    director_ids = _ids(query, "director_id")
+    skip_dirs = _ids(query, "exclude_director_id")
 
     sort_by = _one(query, "sort_by", "release")
     if sort_by not in CAST_SORT:
@@ -495,6 +547,21 @@ def cast_find(handler, query, *_):
         params.extend(actor_ids)
 
     # 与影片库同口径的附加筛选：标签（AND）/ 字幕 / 马赛克 / 年份区间
+    # 导演：包含=只要这几位（多选为「或」，与「演员必须同时出现」不同 ——
+    # 导演栏是用来收窄/剔除流水线厂的，选两个导演想看的是这两人的片子合集）；
+    # 排除=这几位导演的片子整片剔掉，正好用来干掉「n女n男 + 某导演」的固定搭配。
+    if director_ids:
+        ph = ",".join("?" * len(director_ids))
+        where.append(
+            "m.id IN (SELECT metadata_id FROM metadata_directors "
+            f"WHERE director_id IN ({ph}))")
+        params.extend(director_ids)
+    if skip_dirs:
+        ph = ",".join("?" * len(skip_dirs))
+        where.append(
+            "m.id NOT IN (SELECT metadata_id FROM metadata_directors "
+            f"WHERE director_id IN ({ph}))")
+        params.extend(skip_dirs)
     tag_ids = _ids(query, "tag_id")
     if tag_ids:
         ph = ",".join("?" * len(tag_ids))
@@ -534,16 +601,23 @@ def cast_find(handler, query, *_):
     # "no such column"，所以条件写完整聚合表达式。
     female_sum = "SUM(CASE WHEN LOWER(a.gender) = 'female' THEN 1 ELSE 0 END)"
     male_sum = "SUM(CASE WHEN LOWER(a.gender) = 'male' THEN 1 ELSE 0 END)"
+    having = [f"{female_sum} BETWEEN ? AND ?", f"{male_sum} BETWEEN ? AND ?",
+              "COUNT(ma.actor_id) BETWEEN ? AND ?"]
+    extra = [fmin, fmax, mmin, mmax, cmin, cmax]
+    if female_n:
+        having.append(f"{female_sum} IN ({','.join('?' * len(female_n))})")
+        extra.extend(female_n)
+    if male_n:
+        having.append(f"{male_sum} IN ({','.join('?' * len(male_n))})")
+        extra.extend(male_n)
     body = (
         "FROM metadata m "
         "JOIN metadata_actors ma ON ma.metadata_id = m.id "
         "JOIN actors a ON a.id = ma.actor_id "
         "WHERE " + " AND ".join(where) + " "
         "GROUP BY m.id "
-        f"HAVING {female_sum} BETWEEN ? AND ? AND {male_sum} BETWEEN ? AND ? "
-        "AND COUNT(ma.actor_id) BETWEEN ? AND ?"
+        "HAVING " + " AND ".join(having)
     )
-    extra = [fmin, fmax, mmin, mmax, cmin, cmax]
 
     try:
         with A.amane_db() as conn:
@@ -564,6 +638,7 @@ def cast_find(handler, query, *_):
     marks_map = _marks_of(mids)
     cast_map = _cast_rows(mids)
     avatars = _avatars_for(sorted({c["id"] for lst in cast_map.values() for c in lst}))
+    dir_map = _director_names(mids)
 
     items = []
     for r in rows:
@@ -588,6 +663,7 @@ def cast_find(handler, query, *_):
             "male_count": _num(r["male_count"]),
             "cast_total": _num(r["cast_total"]),
             "cast": cast[:8],
+            "directors": dir_map.get(r["id"], [])[:3],
         })
     handler._json({
         "items": items,
@@ -597,34 +673,22 @@ def cast_find(handler, query, *_):
         "female_min": fmin, "female_max": fmax,
         "male_min": mmin, "male_max": mmax,
         "cast_min": cmin, "cast_max": cmax,
+        "female_n": female_n, "male_n": male_n,
+        "director_id": director_ids, "exclude_director_id": skip_dirs,
     })
-
-
-def _head_alive(url: str, min_bytes: int = 10240) -> bool:
-    """HEAD 一下，用来丢掉 "now printing" 占位图。
-
-    dmm 在片子还没出 sample 时会返回一张固定的小图（实测 2732 字节），
-    而真剧照通常 60KB 以上。拿不到 Content-Length 就放行，避免误杀。
-    """
-    try:
-        req = urllib.request.Request(
-            url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            raw = resp.headers.get("Content-Length")
-            if not raw:
-                return True
-            return int(raw) >= min_bytes
-    except Exception:  # noqa: BLE001
-        return True
 
 
 def actors_stills(handler, query, actor_id, *_):
     """GET /api/user/actors/{id}/stills —— 该演员作品的随机剧照墙。
 
-    两步随机：先随机挑若干部片子，再**在每部片子内部随机挑一张**。
-    以前固定取每部的第一张，结果一屏八张全是各片的第 1 张，很单调。
+    两条硬要求（用户实测反馈）：
+      1. **首帧就要摆对**：以前不下发比例，客户端只能先按 3:2 铺、图片加载完再重排，
+         看到的就是「先方块罗列、再变成瀑布流」。现在每条带 `ratio`（核心的
+         img_dims 缓存，命中零网络；没量过只取图片头 128KB）。
+      2. **「再抽一次」要快**：一次多给（limit 的 3 倍，上限 36），客户端自己轮换池子，
+         换一批不再等网络。
 
-    另外会 HEAD 校验一次，把 dmm 的 "now printing" 占位小图丢掉。
+    随机口径不变：先随机挑若干部片，再在每部片内部随机挑一张，避免一屏全是同一部。
     """
     aid = _int(actor_id, 0, 1, 10 ** 9)
     limit = _int(_one(query, "limit", "12"), 12, 1, 36)
@@ -637,13 +701,14 @@ def actors_stills(handler, query, actor_id, *_):
                 "AND m.extrafanart_urls IS NOT NULL "
                 "AND m.extrafanart_urls NOT IN ('', '[]', '{}') "
                 "ORDER BY RANDOM() LIMIT ?",
-                (aid, max(limit * 2, 12)),
+                (aid, max(limit * 3, 24)),
             ).fetchall()
     except Exception as exc:  # noqa: BLE001
         A.log(f"ERROR actors 取剧照失败: {exc}")
         return handler._error(500, f"剧照查询失败: {exc}")
 
-    picks: list = []
+    # 每部片一组候选 URL（打乱），按「轮转」方式各取一张，保证一屏里片名分散
+    lanes: list[tuple[dict, list[str]]] = []
     for r in rows:
         raw = r["extrafanart_urls"]
         try:
@@ -656,26 +721,82 @@ def actors_stills(handler, query, actor_id, *_):
                 urls.extend([u for u in (group or []) if isinstance(u, str) and u.startswith("http")])
         elif isinstance(extra, list):
             urls = [u for u in extra if isinstance(u, str) and u.startswith("http")]
+        urls = list(dict.fromkeys(urls))
         if not urls:
             continue
-        picks.append((r, random.choice(urls)))
-
-    alive: list = []
-    if picks:
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            flags = list(pool.map(lambda pr: _head_alive(pr[1]), picks))
-        for (r, u), ok in zip(picks, flags):
-            if ok:
-                alive.append((r, u))
+        random.shuffle(urls)
+        lanes.append(({"id": _num(r["id"]), "number": _text(r["number"])}, urls))
 
     items: list = []
-    for r, u in alive:
-        proxied = A.public_image(u)
-        if not proxied:
-            continue
-        items.append({"id": _num(r["id"]), "number": _text(r["number"]), "url": proxied})
+    used: set[str] = set()
+
+    deadline = time.time() + 2.0   # 全局预算：别每轮各算一次，否则 4 轮能拖到 6 秒
+
+    def measure(pairs: list[tuple[dict, str]], cap: int) -> None:
+        """并行量尺寸并把合格的收进 items。
+
+        只量「还需要的那几张」：以前每轮都把整池（90 部）全量一遍，limit=1 也要
+        量 90 张 → 3.7 秒。现在按需取，全程共用 2 秒预算，超时先返回已有的，
+        剩下交给后台预热，下次直接命中缓存。
+        """
+        if not pairs:
+            return
+        chunk = 20
+        for start in range(0, len(pairs), chunk):
+            if len(items) >= cap or time.time() > deadline:
+                break
+            part = pairs[start:start + chunk]
+            with ThreadPoolExecutor(max_workers=16) as pool:
+                sizes = list(pool.map(lambda pair: A.image_dims(pair[1]), part))
+            for (row, url), size in zip(part, sizes):
+                if len(items) >= cap or not size:
+                    continue
+                if url in used:
+                    continue
+                proxied = A.public_image(url)
+                if not proxied:
+                    continue
+                used.add(url)
+                w, h = size
+                items.append({
+                    "id": row["id"],
+                    "number": row["number"],
+                    "url": proxied,
+                    "ratio": round(w / h, 3),
+                })
+
+    # 第一轮：每部片各取第一张，按需（limit + 余量）量
+    for round_no in range(4):
         if len(items) >= limit:
             break
+        pairs: list[tuple[dict, str]] = []
+        for row, urls in lanes:
+            if len(urls) <= round_no:
+                continue
+            pairs.append((row, urls[round_no]))
+        need = limit - len(items)
+        measure(pairs[:max(need + 4, 8)], limit)
+
+    # 没量到比例的先照样返回（客户端会自己量），后台补进 img_dims，下一批就准了
+    leftover: list[str] = []
+    for _row, urls in lanes:
+        for url in urls:
+            if url not in used:
+                leftover.append(url)
+                break
+    if leftover and len(items) < limit:
+        def warm() -> None:
+            for url in leftover[:40]:
+                try:
+                    A.image_dims(url)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        try:
+            threading.Thread(target=warm, daemon=True, name="still-warm").start()
+        except RuntimeError:
+            pass
+
     handler._json({"items": items, "actor_id": aid})
 
 

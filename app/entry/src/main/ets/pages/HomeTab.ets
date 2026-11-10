@@ -8,10 +8,11 @@ import { safeHome } from '../common/Safe';
 import { BuildConfig } from '../common/BuildConfig';
 import { HeroBanner } from '../view/HeroBanner';
 import { MediaRow } from '../view/MediaRow';
+import { BannerRow } from '../view/BannerRow';
 
 export function emptyHome(): HomeData {
   const data: HomeData = {
-    hero: [], continue: [], recommend: [], rows: [], libraries: [], generated_at: ''
+    hero: [], continue: [], recommend: [], banners: [], rows: [], libraries: [], generated_at: ''
   };
   return data;
 }
@@ -209,10 +210,12 @@ export struct HomeTab {
           }
 
           ListItem() {
-            MediaRow({
+            // 每日推荐用高清横幅：优先用服务端校验过的真横图（带真实比例），
+            // 没有时才退回推荐列表（按 16:9 裁切）。
+            BannerRow({
               title: '每日推荐',
-              subtitle: '每天换一批',
-              items: this.home.recommend,
+              subtitle: '每天换一批 · 高清横幅',
+              items: this.home.banners.length > 0 ? this.home.banners : this.home.recommend,
               onTap: (item: MediaItem) => {
                 this.openDetail(item);
               },
@@ -244,7 +247,7 @@ export struct HomeTab {
               .fontColor(Theme.TEXT_FAINT)
               .width('100%')
               .textAlign(TextAlign.Center)
-              .padding({ top: 8, bottom: 28 })
+              .padding({ top: 8, bottom: 96 })
           }
         }
         .width('100%')
