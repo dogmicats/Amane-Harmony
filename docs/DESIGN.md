@@ -14,8 +14,9 @@
 1. **Hero**：`assets/hero-banner.png`，1600×650，左侧品牌与一句话价值，右侧三张真实界面。
 2. **Badges**：Releases / HarmonyOS / ArkTS / mpv / Python / License，六个以内。
 3. **一句话定位 + 截图声明**：客户端做什么、旁挂服务补什么；紧跟一行「截图取自作者自建库，封面、横幅与剧照已打码」。
-4. **独有的四个功能**（2026-11-10 起取代原「界面预览」）：**①②③④ 编号**，前三条「图 + 一句」横向排列、
-   亮点用一张宽幅特写独占一行。**开头不要铺垫段落**，标题下面直接进 ①。
+4. **独有的四个功能**（2026-11-10 起取代原「界面预览」）：**①②③④ 编号** —— 共演检索 / 抽卡 / 分类体系 / 亮点。
+   前三条「图 + 一句」横向排列、亮点用一张宽幅特写独占一行。**开头不要铺垫段落**，标题下面直接进 ①。
+   同一机制只占一个名额（抽卡与演员页「盲盒」是同一个随机剧照墙，合并为一条，盲盒放到「其他功能」当入口）。
 5. **其余能力**：两行各四张小图（首页 / 媒体库 / 分类 / 演员 / 详情 / 剧照 / 搜索 / 播放器设置），
    标题下面只给一个短语（≤ 10 字），不写解释句。
 6. **播放链路**：`assets/architecture.png` + 4–6 条短句（块缓存、并行预取、硬解、玻璃控制层、参数锁定、外挂字幕）。
@@ -48,12 +49,12 @@
 | `docs/screenshots/library.png` | 其余能力 |
 | `docs/screenshots/actors.png` | 其余能力 |
 | `docs/screenshots/detail.png` | 其余能力（系列卡） |
-| `docs/screenshots/cast-finder.png` | **四件别处没有的**（共演检索）+ Hero |
-| `docs/screenshots/gacha.png` | **四件别处没有的**（抽卡） |
-| `docs/screenshots/highlights.png` | **四件别处没有的**（亮点，宽幅特写） |
-| `docs/screenshots/blindbox.png` | **四件别处没有的**（剧照盲盒） |
-| `docs/screenshots/facets.png` | 其余能力（分类） |
-| `docs/screenshots/detail-stills.png` | 其余能力（剧照瀑布流） |
+| `docs/screenshots/cast-finder.png` | **独有的四个功能**（① 共演检索）+ Hero |
+| `docs/screenshots/gacha.png` | **独有的四个功能**（② 抽卡，演员页盲盒是同一入口） |
+| `docs/screenshots/facets.png` | **独有的四个功能**（③ 分类体系） |
+| `docs/screenshots/highlights.png` | **独有的四个功能**（④ 亮点，宽幅特写） |
+| `docs/screenshots/blindbox.png` | 其他功能（盲盒 = 抽卡的演员入口） |
+| `docs/screenshots/detail-stills.png` | 其他功能（剧照瀑布流） |
 | `docs/screenshots/search.png` | 其余能力（搜索） |
 | `docs/screenshots/player-settings.png` | 其余能力（播放器设置） |
 | `docs/screenshots/library-filter.png` · `facet-media.png` · `favorites.png` | Wiki |

@@ -33,14 +33,14 @@
     <td width="170" valign="top"><img src="docs/screenshots/gacha.png" width="150"></td>
     <td valign="top">
       <strong>② 抽卡</strong><br>
-      <sub>一键把列表换成当前范围的随机剧照，改筛选即重抽，点图进详情。媒体库、收藏、分类墙、共演结果都能开。</sub>
+      <sub>一键把列表换成当前范围的随机剧照，改筛选即重抽，点图进详情。媒体库、收藏、分类墙、共演结果都能开，演员页的「盲盒」是同一个入口。</sub>
     </td>
   </tr>
   <tr>
-    <td width="170" valign="top"><img src="docs/screenshots/blindbox.png" width="150"></td>
+    <td width="170" valign="top"><img src="docs/screenshots/facets.png" width="150"></td>
     <td valign="top">
-      <strong>③ 剧照盲盒</strong><br>
-      <sub>按演员随机铺剧照，点图直达对应影片；「再抽一次」在本地池里瞬时换一批，不等网络。</sub>
+      <strong>③ 分类体系</strong><br>
+      <sub>标签、系列、制片商、发行商、导演五类都是能直接翻的入口；可收藏、可隐藏，导演与厂牌一行一条长图，靠作品认人。</sub>
     </td>
   </tr>
   <tr>
@@ -58,12 +58,12 @@
   <tr>
     <td width="25%" align="center" valign="top"><img src="docs/screenshots/home.png" width="120"><br><strong>首页</strong><br><sub>轮播、继续观看、每日推荐</sub></td>
     <td width="25%" align="center" valign="top"><img src="docs/screenshots/library.png" width="120"><br><strong>媒体库</strong><br><sub>7 种排序、5 类叠加筛选</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/facets.png" width="120"><br><strong>分类</strong><br><sub>五类入口，可收藏、可隐藏</sub></td>
     <td width="25%" align="center" valign="top"><img src="docs/screenshots/actors.png" width="120"><br><strong>演员</strong><br><sub>9 种排序、身材段筛选</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/detail.png" width="120"><br><strong>详情</strong><br><sub>版本前置、系列卡、标记</sub></td>
   </tr>
   <tr>
-    <td align="center" valign="top"><img src="docs/screenshots/detail.png" width="120"><br><strong>详情</strong><br><sub>版本前置、系列卡、标记</sub></td>
     <td align="center" valign="top"><img src="docs/screenshots/detail-stills.png" width="120"><br><strong>剧照</strong><br><sub>两列瀑布流、全屏浏览</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/blindbox.png" width="120"><br><strong>盲盒</strong><br><sub>抽卡的演员入口</sub></td>
     <td align="center" valign="top"><img src="docs/screenshots/search.png" width="120"><br><strong>搜索</strong><br><sub>三档联想、别名、历史</sub></td>
     <td align="center" valign="top"><img src="docs/screenshots/player-settings.png" width="120"><br><strong>播放器</strong><br><sub>结构化参数生成 mpv.conf</sub></td>
   </tr>
