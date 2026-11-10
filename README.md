@@ -1,86 +1,90 @@
-# Amane-Harmony
-
-自建 [Amane](https://github.com/sqzw-x/amane) 媒体库的**鸿蒙原生客户端**：媒体库与分类浏览、共演检索、收藏续播、网盘源流畅播放、外挂字幕——核心体验都在手机上完成。附带辅助用的旁挂服务：一个纯标准库的单文件服务，负责补齐筛选、字幕与播放代理这些 Amane 本体没有的能力。
-
 <p align="center">
-  <img src="docs/screenshots/home.png" width="196" alt="首页">
-  <img src="docs/screenshots/library.png" width="196" alt="媒体库">
-  <img src="docs/screenshots/detail.png" width="196" alt="详情">
-  <img src="docs/screenshots/actors.png" width="196" alt="演员">
+  <img src="assets/hero-banner.png" alt="Amane-Harmony" width="100%">
 </p>
 
-> 截图来自程序生成的虚构演示库（抽象海报、假番号、假人名），不含真实媒体。
+<p align="center">
+  <a href="https://github.com/dogmicats/Amane-Harmony/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/dogmicats/Amane-Harmony?style=flat-square&color=8b5cf6"></a>
+  <img alt="HarmonyOS" src="https://img.shields.io/badge/HarmonyOS-native-536dfe?style=flat-square">
+  <img alt="ArkTS" src="https://img.shields.io/badge/ArkTS-client-8b5cf6?style=flat-square">
+  <img alt="mpv" src="https://img.shields.io/badge/Player-mpv-7c3aed?style=flat-square">
+  <img alt="Python" src="https://img.shields.io/badge/Sidecar-Python-3776ab?style=flat-square">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/dogmicats/Amane-Harmony?style=flat-square"></a>
+</p>
 
-## 功能
+<p align="center">
+  <strong>把 Amane 媒体库带到 HarmonyOS。</strong><br>
+  原生媒体库浏览、演员 / 共演检索、收藏续播与 mpv 播放；<br>
+  轻量 Python 旁挂服务补齐扩展 API、字幕与播放代理。
+</p>
 
-**演员**
+自建 [Amane](https://github.com/sqzw-x/amane) 媒体库的**鸿蒙原生客户端**，媒体库与分类浏览、共演检索、收藏续播、外挂字幕都在手机上完成；附带辅助用的旁挂服务：一个纯标准库的单文件服务，负责补齐筛选、字幕与播放代理这些 Amane 本体没有的能力。
 
-- 网格筛选：性别、有头像、有资料、年龄段、身高段、罩杯段、胸围段、出生地，9 种排序
-- 演员详情：资料、别名、写真、作品墙（可随机洗牌）
-- 共演检索：指定最多 6 位演员，或按女 / 男 / 总人数区间找片；人数可离散多选（如「1 女或 2 女」），
-  还能按导演「只看 / 排除」筛选，结果卡直接显示导演名
-- 剧照盲盒：随机抽该演员作品的剧照（两列瀑布流按原图比例展示），点图直达对应影片；
-  「再抽一次」本地池子瞬时换一批，不用等网络
+> 截图取自作者自建媒体库，代表界面与真实数据；封面、横幅与剧照已统一打码处理。
 
-**浏览**
+## 界面预览
 
-- 首页：海报轮播、继续观看、每日推荐（真横图横幅，按原图比例展示）、每个库一行
-- 媒体库：7 种排序、5 类筛选可叠加、三列网格滚动加载
-- 分类：标签 / 系列 / 制片商 / 发行商 / 导演；缩略图铺卡（标签 / 系列三列瀑布，
-  导演 / 制片商一行一条 8 张长图）；可收藏、标签可隐藏（数据不动，随时恢复）；
-  排序含最近更新 / 最新发布（空值沉底）与随机（翻页顺序稳定，刷新才重摇）
-- 搜索：输入即搜，联想三档递进（番号 / 标题精确 → 包含 → 演员 / 系列 / 制片商扩大），
-  联想行直接进详情，也可进完整结果网格
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/home.png" width="180"><br><sub>首页</sub></td>
+    <td align="center"><img src="docs/screenshots/library.png" width="180"><br><sub>媒体库</sub></td>
+    <td align="center"><img src="docs/screenshots/actors.png" width="180"><br><sub>演员</sub></td>
+    <td align="center"><img src="docs/screenshots/detail.png" width="180"><br><sub>详情</sub></td>
+  </tr>
+</table>
 
-**详情**
+## 核心能力
 
-- 出演阵容、可点标签、所属系列（同系列作品可视化 + 3 张海报横排）
-- 文件 / 版本区上移到剧照之前：多版本（4K / 1080p / 分段）选完直接播，不用滚几屏
-- 剧照两列瀑布流（按真实宽高比占位，竖版海报不裁切、全量铺开）与全屏浏览、评价
-- 列表与详情标注无码 / 破解 / 流出 / 中字
+<table>
+  <tr>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/screenshots/library.png" width="150"><br>
+      <strong>媒体库与分类浏览</strong><br>
+      <sub>多库入口、7 种排序、5 类可叠加筛选与滚动加载；标签、系列、制片商、发行商、导演同一套分类页，导演 / 制片商一行一条长图。</sub>
+    </td>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/screenshots/cast-finder.png" width="150"><br>
+      <strong>演员与共演检索</strong><br>
+      <sub>演员按性别、有头像、有资料、身高罩杯胸围段筛选；共演检索支持最多 6 位演员、女 / 男 / 总人数离散多选与导演只看 / 排除。</sub>
+    </td>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/screenshots/detail.png" width="150"><br>
+      <strong>详情与续播</strong><br>
+      <sub>版本选择前置、剧照瀑布流、亮点抽帧、共演阵容与外挂字幕；列表与详情标注无码 / 破解 / 流出 / 中字，退出记进度。</sub>
+    </td>
+  </tr>
+</table>
 
-**播放**
+**其他**：搜索输入即联想（番号精确 → 包含 → 演员 / 系列 / 制片商扩大）；首页轮播、继续观看、每日推荐与每个库一行；收藏跨设备一致、历史可续播可左滑删除；列表页「抽卡」把整页换成随机剧照瀑布流。
 
-- mpv 内核硬解；拖拽调进度、竖直调亮度音量、双击暂停、0.75–2x 倍速、音轨字幕切换、退出记进度
-- 网盘 / 冷区源播放优化：块缓存 + 并行预取，拖动回看不回源，seek 风暴型文件也能连续播放
-- 悬浮玻璃控制层与底部玻璃胶囊标签栏，视频从栏下透出；播放页两侧以封面高斯模糊晕出光晕
-- 播放参数内置锁定：设备上的旧配置自动重置为可用默认，不被历史调参顶掉；
-  诊断行显示缓存秒数（贴 0 = 网络跟不上，有积压还卡 = 解码跟不上）
-- 外挂字幕：视频同目录、手机导入、手动 URL、记住每部片的选择
-- 播放器设置：缓存、硬解、渲染选项生成 `mpv.conf`
+<p align="center">
+  <img src="docs/screenshots/search.png" width="150">
+  <img src="docs/screenshots/facets.png" width="150">
+  <img src="docs/screenshots/actor-detail.png" width="150">
+  <img src="docs/screenshots/player-settings.png" width="150">
+</p>
 
-**其他**
+## 为网盘与冷区资源优化的播放链路
 
-- 收藏跨设备一致；历史显示进度与剩余时长、点击续播、左滑删除
-- 内嵌 Amane 网页，刮削与入库仍在原处完成
+<p align="center"><img src="assets/architecture.png" width="100%" alt="系统架构"></p>
 
-## 安装
+- **块缓存**：缓存已读取的数据块，拖动回看不重新回源。
+- **并行预取**：后台提前读取后续分段，连续播放不断流。
+- **mpv 内核硬解**：拖拽调进度、竖直调亮度音量、0.75–2x 倍速、音轨字幕切换，参数内置锁定不被历史调参顶掉。
+- **轻量旁挂服务**：Python 标准库实现，Docker Compose 或纯 Python 都能起。
 
-**1. 部署旁挂服务**
+## 快速开始
 
-在运行 Amane 的那台机器上（或能访问同一个 data 目录的机器）：
+| 01 · 部署旁挂服务 | 02 · 安装客户端 | 03 · 连接媒体库 |
+|---|---|---|
+| 在运行 Amane 的机器上 `cp deploy/.env.example .env` 填好 `AMANE_DATA` 与 `MEDIA_PATH_MAP`，`docker compose -f deploy/compose.example.yml up -d` | 从 [Releases](../../releases) 下载 HAP，用你自己的证书签名后安装，或用 Hokit 等侧载工具 | 「我的 → 连接设置」填 Amane 地址 `:8000`、用户服务地址 `:8770` 与 API token |
 
-```sh
-cp deploy/.env.example .env    # 填 AMANE_DATA 与 MEDIA_PATH_MAP
-docker compose -f deploy/compose.example.yml up -d
-curl http://127.0.0.1:8770/api/user/ping
-```
-
-不想手写配置，就把 [docs/DEPLOY.md](docs/DEPLOY.md) 开头那段话发给 AI 助手，它会用 `tools/agentctl.py` 带你部署并验证。
-
-**2. 装 App**
-
-从 [Releases](../../releases) 下载 `Amane-2.3.0-unsigned.hap`，用你自己的证书签名后安装，或用 Hokit、小白调试助手等侧载工具。步骤见 [docs/BUILD_HAP.md](docs/BUILD_HAP.md)。
-
-**3. 填连接信息**
-
-「我的 → 连接设置」：Amane 地址 `:8000`、用户服务地址 `:8770`、API token。
+详细步骤见 [部署指南](docs/DEPLOY.md) 与 [签名安装](docs/BUILD_HAP.md)；不想手写配置，就把部署指南开头那段话发给 AI 助手，它会用 `tools/agentctl.py` 带你部署并验证。
 
 ## 文档
 
 功能细节、逐项配置、排障都在 **[Wiki](https://github.com/dogmicats/Amane-Harmony/wiki)**。
 
-仓库内另有：[部署](docs/DEPLOY.md)、[签名安装](docs/BUILD_HAP.md)、[字幕](docs/SUBTITLES.md)、[兼容性](docs/COMPATIBILITY.md)、[排障](docs/TROUBLESHOOTING.md)、[非鸿蒙设备](docs/ANDROID.md)、[AI 助手约定](AGENTS.md)。
+仓库内另有：[部署](docs/DEPLOY.md) · [签名安装](docs/BUILD_HAP.md) · [字幕](docs/SUBTITLES.md) · [兼容性](docs/COMPATIBILITY.md) · [排障](docs/TROUBLESHOOTING.md) · [非鸿蒙设备](docs/ANDROID.md) · [README 设计规范](docs/DESIGN.md) · [AI 助手约定](AGENTS.md)。
 
 ## 许可
 
