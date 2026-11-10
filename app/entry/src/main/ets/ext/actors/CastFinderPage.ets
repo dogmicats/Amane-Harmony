@@ -5,6 +5,9 @@ import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
 import { DetailParams } from '../../common/Types';
 import { MarkBadges } from '../../view/MarkBadges';
+import { BuildConfig } from '../../common/BuildConfig';
+import { GachaSwitch } from '../stills/GachaSwitch';
+import { GachaWall } from '../stills/GachaWall';
 import {
   ActorItem, ActorList, CastFindItem, CastFindList, CastMember, DirectorHit,
   DirectorHitList, safeActorList, safeCastFindList, safeCastMember, safeDirectorHits
@@ -218,6 +221,8 @@ struct CastFinderPage {
   @State query: string = '';
   @State genderFilter: string = 'all';
   @State hits: ActorItem[] = [];
+  /** 抽卡模式：按当前这套筛选条件抽随机剧照，替代结果列表。 */
+  @State gachaOn: boolean = false;
   private searchTimer: number = -1;
   private sorts: Choice[] = [
     { key: 'release', label: '发行时间' },
@@ -246,6 +251,9 @@ struct CastFinderPage {
 
   aboutToAppear(): void {
     // 不预跑：无条件的全表聚合没意义，还会白等一次
+    // 抽卡模式默认关（设置页开了「默认开启」才进）：这页本来就靠条件筛，
+    // 无条件时抽卡等于抽全库，不适合当默认视图。
+    this.gachaOn = BuildConfig.ENABLE_GACHA && Store.I.gachaAuto;
   }
 
   aboutToDisappear(): void {
@@ -268,11 +276,12 @@ struct CastFinderPage {
     return this.maleN.length > 0 || this.male5;
   }
 
-  private buildUrl(offset: number): string {
-    const parts: string[] = [
-      `offset=${offset}`, `limit=${PAGE}`,
-      `sort_by=${this.sortBy}`, `order=${this.order}`
-    ];
+  /**
+   * 只拼筛选条件（不含分页 / 排序）。
+   * 结果列表与抽卡墙共用这一份 —— 页面上筛了什么，抽卡就抽什么。
+   */
+  private filterQuery(): string {
+    const parts: string[] = [];
     if (this.onlySub) {
       parts.push('has_subtitle=true');
     }
@@ -310,6 +319,18 @@ struct CastFinderPage {
     if (c[0] > 0 || c[1] < 99) {
       parts.push(`cast_min=${c[0]}`);
       parts.push(`cast_max=${c[1]}`);
+    }
+    return parts.join('&');
+  }
+
+  private buildUrl(offset: number): string {
+    const parts: string[] = [
+      `offset=${offset}`, `limit=${PAGE}`,
+      `sort_by=${this.sortBy}`, `order=${this.order}`
+    ];
+    const filter: string = this.filterQuery();
+    if (filter.length > 0) {
+      parts.push(filter);
     }
     return `${Store.I.user}/api/user/cast/find?${parts.join('&')}`;
   }
@@ -460,6 +481,18 @@ struct CastFinderPage {
         names.push(this.dirs[i].name);
       }
       parts.push(`${this.dirExclude ? '排除导演' : '只看导演'} ${names.join('/')}`);
+    }
+    // 字幕 / 版本也是筛选条件，摘要里必须出现：
+    // 抽卡墙把这段文字当范围标题，漏了就会「明明勾了有字幕，标题只写 1女/2女」
+    if (this.onlySub) {
+      parts.push('有字幕');
+    }
+    if (this.mosaic.length > 0) {
+      for (let i = 0; i < this.mosaics.length; i++) {
+        if (this.mosaics[i].key === this.mosaic) {
+          parts.push(this.mosaics[i].label);
+        }
+      }
     }
     return parts.length > 0 ? parts.join(' · ') : '全部作品';
   }
@@ -644,6 +677,16 @@ struct CastFinderPage {
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
+
+      // 抽卡：按当前这套筛选条件抽随机剧照（服务端 scope=cast 走 actors 的筛选 SQL）
+      if (BuildConfig.ENABLE_GACHA) {
+        GachaSwitch({
+          on: this.gachaOn,
+          onToggle: (v: boolean) => {
+            this.gachaOn = v;
+          }
+        })
+      }
     }
     .width('100%')
     .padding({ left: 10, right: Theme.PAGE_PAD, top: 10, bottom: 6 })
@@ -1218,7 +1261,17 @@ struct CastFinderPage {
               .width('100%')
           }
 
-          if (this.loading) {
+          if (this.gachaOn) {
+            // 抽卡墙按同一套筛选条件抽片：extra 就是上面那串条件，
+            // 条件一变（字符串变了）GachaWall 会自己重抽。
+            GachaWall({
+              scope: 'cast',
+              scopeId: 0,
+              label: this.conditionText(),
+              count: 0,
+              extra: this.filterQuery()
+            })
+          } else if (this.loading) {
             Column() {
               LoadingProgress()
                 .width(26)

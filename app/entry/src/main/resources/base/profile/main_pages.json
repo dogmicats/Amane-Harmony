@@ -8,6 +8,8 @@
     "pages/HistoryPage",
     "pages/SettingsPage",
     "pages/PlayerSettingsPage",
+    "pages/ChangelogPage",
+    "pages/AboutPage",
     "pages/WebPage",
     "pages/ImageViewerPage",
     "ext/actors/ActorDetailPage",

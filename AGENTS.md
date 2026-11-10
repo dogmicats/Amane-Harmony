@@ -55,7 +55,3 @@ curl -s "http://127.0.0.1:8770/api/user/subtitles/providers"  # providers 必须
 ## 代码风格
 
 服务端只用 Python 标准库，不引入第三方依赖；路由通过模块级 `ROUTES` 列表注册，新增端点优先放在独立模块里用 `install(ROUTES, ...)` 挂载，不要膨胀 `server.py`。客户端是 ArkTS/ArkUI，所有 `player.*` 原生调用必须包 `try-catch`。
-
-## README 与配图
-
-改 README、换截图、做 Hero 图之前先读 `docs/DESIGN.md`。界面截图必须是真实运行的程序，封面 / 横幅 / 剧照一律打码，**不要**用抽象占位图或 AI 生成的假 UI；截图里不允许出现真实地址、token 或凭据。

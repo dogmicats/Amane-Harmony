@@ -1,6 +1,7 @@
 import {
   CommentItem, HistoryItem, HomeData, HomeRow, ItemDetail, LibraryInfo, MediaFile, MediaItem,
-  StreamItem, StreamList, SuggestItem, SuggestResult
+  StreamItem, StreamList, SuggestItem, SuggestResult, SuggestTotals, emptySuggestTotals,
+  SearchHistoryItem, SearchHistoryList
 } from './Types';
 
 /**
@@ -263,14 +264,70 @@ export function safeSuggest(raw: SuggestResult): SuggestItem[] {
     if (id <= 0) {
       continue;
     }
+    // 老服务端不发 type：那是影片，别当成空类型在 UI 里消失
+    const type: string = str(m.type).length > 0 ? str(m.type) : 'film';
     out.push({
+      type: type,
       id: id,
-      number: m.number === undefined || m.number === null ? '' : m.number,
-      title: m.title === undefined || m.title === null ? '' : m.title,
-      poster: m.poster === undefined || m.poster === null ? '' : m.poster,
-      release: m.release === undefined || m.release === null ? '' : m.release,
+      number: str(m.number),
+      title: str(m.title),
+      poster: str(m.poster),
+      release: str(m.release),
+      name: str(m.name),
+      count: Math.trunc(num(m.count)),
+      image: str(m.image),
+      gender: str(m.gender),
+      alias: str(m.alias),
       tier: Math.trunc(Number(m.tier)) || 0
     });
+  }
+  return out;
+}
+
+/** 联想结果的完整解析：带 supported / totals，并判断服务端是否认识 types 参数。 */
+export function safeSuggestResult(raw: SuggestResult): SuggestResult {
+  const out: SuggestResult = {
+    items: [], q: '', types: [], supported: [], totals: emptySuggestTotals(), legacy: true
+  };
+  if (raw === undefined || raw === null) {
+    return out;
+  }
+  out.items = safeSuggest(raw);
+  out.q = str(raw.q);
+  out.types = strList(raw.types);
+  // supported 缺席 = 老服务端把 types 当陌生参数丢了，只可能回影片
+  if (Array.isArray(raw.supported)) {
+    out.supported = strList(raw.supported);
+    out.legacy = false;
+  }
+  if (raw.totals !== undefined && raw.totals !== null) {
+    const t: SuggestTotals = emptySuggestTotals();
+    t.actor = Math.trunc(num(raw.totals.actor));
+    t.director = Math.trunc(num(raw.totals.director));
+    t.tag = Math.trunc(num(raw.totals.tag));
+    t.series = Math.trunc(num(raw.totals.series));
+    t.studio = Math.trunc(num(raw.totals.studio));
+    out.totals = t;
+  }
+  return out;
+}
+
+/** 搜索历史：空关键词的条目直接丢掉（服务端不该写进来，客户端也别画出一颗空胶囊）。 */
+export function safeSearchHistory(raw: SearchHistoryList): SearchHistoryItem[] {
+  const out: SearchHistoryItem[] = [];
+  if (raw === undefined || raw === null || !Array.isArray(raw.items)) {
+    return out;
+  }
+  for (let i = 0; i < raw.items.length; i++) {
+    const it = raw.items[i];
+    if (it === undefined || it === null) {
+      continue;
+    }
+    const q: string = str(it.q).trim();
+    if (q.length === 0) {
+      continue;
+    }
+    out.push({ q: q, hits: Math.trunc(num(it.hits)), usedAt: str(it.usedAt) });
   }
   return out;
 }

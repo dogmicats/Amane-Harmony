@@ -7,6 +7,8 @@ import { BrowseResult, DetailParams, MediaItem } from '../common/Types';
 import { safeItems } from '../common/Safe';
 import { BuildConfig } from '../common/BuildConfig';
 import { PosterCard } from './PosterCard';
+import { GachaSwitch } from '../ext/stills/GachaSwitch';
+import { GachaWall } from '../ext/stills/GachaWall';
 
 const PAGE_SIZE: number = 45;
 
@@ -139,8 +141,11 @@ export struct BrowseGrid {
   @State fState: string = '';
   @State showSort: boolean = false;
   @State showFilter: boolean = false;
+  /** 抽卡模式：把这个库里的影片剧照随机铺成瀑布流，替代海报网格。 */
+  @State gachaOn: boolean = false;
 
   aboutToAppear(): void {
+    this.gachaOn = BuildConfig.ENABLE_GACHA && Store.I.gachaAuto;
     this.reload();
   }
 
@@ -252,6 +257,19 @@ export struct BrowseGrid {
     this.fState = '';
   }
 
+  /** 抽卡空墙文案里用的库名（0 = 全部库）。 */
+  private scopeLabel(): string {
+    if (this.libraryId <= 0) {
+      return '全部影片';
+    }
+    for (let i = 0; i < Store.I.libraries.length; i++) {
+      if (Store.I.libraries[i].id === this.libraryId) {
+        return Store.I.libraries[i].name;
+      }
+    }
+    return '';
+  }
+
   @Builder
   Toolbar() {
     Row({ space: 8 }) {
@@ -259,6 +277,16 @@ export struct BrowseGrid {
         .fontSize(11)
         .fontColor(Theme.TEXT_FAINT)
         .layoutWeight(1)
+
+      // 抽卡模式：换一种看法，不改筛选/排序
+      if (BuildConfig.ENABLE_GACHA) {
+        GachaSwitch({
+          on: this.gachaOn,
+          onToggle: (v: boolean) => {
+            this.gachaOn = v;
+          }
+        })
+      }
 
       Text(`⇅ ${sortLabelOf(this.sort)}${this.sort === 'random' ? '' : (this.order === 'asc' ? ' ↑' : ' ↓')}`)
         .fontSize(12)
@@ -282,6 +310,25 @@ export struct BrowseGrid {
     }
     .width('100%')
     .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4, bottom: 8 })
+  }
+
+  /** 抽卡模式下的精简工具条：开关必须一直看得见，否则退不出抽卡模式。 */
+  @Builder
+  GachaBar() {
+    Row({ space: 8 }) {
+      GachaSwitch({
+        on: this.gachaOn,
+        onToggle: (v: boolean) => {
+          this.gachaOn = v;
+        }
+      })
+      Blank()
+      Text('随机剧照 · 点图看详情')
+        .fontSize(10)
+        .fontColor(Theme.TEXT_FAINT)
+    }
+    .width('100%')
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 6 })
   }
 
   /**
@@ -449,9 +496,30 @@ export struct BrowseGrid {
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       Column() {
-        this.Toolbar()
+        if (this.gachaOn) {
+          this.GachaBar()
+        } else {
+          this.Toolbar()
+        }
 
-        if (this.loading) {
+        if (this.gachaOn) {
+          Scroll() {
+            Column() {
+              GachaWall({
+                scope: this.libraryId > 0 ? 'library' : 'all',
+                scopeId: this.libraryId,
+                label: this.scopeLabel(),
+                count: 0
+              })
+            }
+            .width('100%')
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 84 })
+          }
+          .layoutWeight(1)
+          .align(Alignment.Top)
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring)
+        } else if (this.loading) {
           Column() {
             LoadingProgress()
               .width(28)

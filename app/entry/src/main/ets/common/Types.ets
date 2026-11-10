@@ -187,17 +187,76 @@ export interface BrowseParams {
   title: string;
 }
 
-/** 搜索联想里的一条（/api/user/suggest，tier：1 精确 / 2 相关 / 3 扩大）。 */
+/**
+ * 搜索联想里的一条（/api/user/suggest，tier：1 精确 / 2 相关 / 3 扩大）。
+ *
+ * `type` 决定这一行是什么、点了去哪：
+ *   film     影片 —— number/title/poster 有值，点进详情页
+ *   actor    演员 —— name/count/image，点进演员作品列表
+ *   director / tag / series / studio —— 分类，点进分类影片墙
+ * 老服务端（< 1.3.11）只会给影片，`type` 缺失时一律按 film 处理。
+ */
 export interface SuggestItem {
+  type: string;
   id: number;
   number: string;
   title: string;
   poster: string;
   release: string;
+  /** 实体（演员/标签/…）的名字；影片行为空。 */
+  name: string;
+  /** 实体的影片数，卡片上用来判断「值不值得点进去」；影片行为 0。 */
+  count: number;
+  /** 实体的头像 / 封面；影片行用 poster。 */
+  image: string;
+  /** 仅演员有：female / male / unknown（服务端已统一小写）。 */
+  gender: string;
+  /**
+   * 仅演员有：这次是按「别名」命中的才带出来（如搜「蕾」命中「つぼみ」）。
+   * 名字自己命中时为空，卡片上就不写「别名 xxx」。
+   */
+  alias: string;
   tier: number;
 }
 
+/** 各类型命中总数：联想每类只回几条，结果页的「共 N 个」靠它。 */
+export interface SuggestTotals {
+  actor: number;
+  director: number;
+  tag: number;
+  series: number;
+  studio: number;
+}
+
+export function emptySuggestTotals(): SuggestTotals {
+  const t: SuggestTotals = { actor: 0, director: 0, tag: 0, series: 0, studio: 0 };
+  return t;
+}
+
+/**
+ * `supported` 缺失 = 老服务端（不认识 types 参数，只会回影片）。
+ * 客户端据此提示「升级服务端才能按类型搜」，而不是假装筛过了。
+ */
 export interface SuggestResult {
   items: SuggestItem[];
   q: string;
+  types: string[];
+  supported: string[];
+  totals: SuggestTotals;
+  legacy: boolean;
+}
+
+/** 搜索历史里的一条（/api/user/search/history）。服务端按「最近使用」倒序给。 */
+export interface SearchHistoryItem {
+  /** 关键词原文（最后一次输入的写法）。 */
+  q: string;
+  /** 搜过几次。 */
+  hits: number;
+  /** 最近一次搜索时间，ISO 字符串；客户端只用来排序，不展示。 */
+  usedAt: string;
+}
+
+export interface SearchHistoryList {
+  items: SearchHistoryItem[];
+  total: number;
 }

@@ -9,9 +9,17 @@ const PREF_NAME: string = 'amane_pref';
 const KEY_LAN_AMANE: string = 'amane_base';
 const KEY_LAN_USER: string = 'user_base';
 const KEY_WAN: string = 'wan_base';
+/**
+ * 外网「用户数据」单独一个地址：外网是一个域名、Caddy 内部按路径分流，
+ * 想在外网连另一台（比如测试实例 8771）时，域名 + 端口是唯一能表达的方式。
+ * 留空 = 沿用外网主地址（旧行为）。
+ */
+const KEY_WAN_USER: string = 'wan_user_base';
 const KEY_TOKEN: string = 'api_token';
 const KEY_LEGACY: string = 'server_url';
 const KEY_MODE: string = 'net_mode';
+const KEY_GACHA_COUNT: string = 'gacha_count';
+const KEY_GACHA_AUTO: string = 'gacha_auto';
 
 /**
  * 默认值由 tools/version.py sync --channel <self|public> 生成，不写在源码里：
@@ -62,6 +70,8 @@ export class Store {
   lanAmane: string = DEFAULT_AMANE;
   lanUser: string = DEFAULT_USER;
   wanAmane: string = DEFAULT_WAN_AMANE;
+  /** 外网的用户数据地址；留空 = 与 wanAmane 相同（走域名分流）。 */
+  wanUser: string = '';
 
   amane: string = DEFAULT_AMANE;
   user: string = DEFAULT_USER;
@@ -90,6 +100,14 @@ export class Store {
   ready: boolean = false;
   /** 本次启动是否走了外网，仅用于界面提示。 */
   onWan: boolean = false;
+  /**
+   * 抽卡模式：一轮摆几张剧照（6 / 10 / 16）。
+   * 放在全局是为了「设置页调一次、所有列表页一起生效」；服务端上限 36，
+   * 客户端一次会抓 3 倍做本地池子，所以 16 → 一次 36 张、够两轮。
+   */
+  gachaCount: number = 10;
+  /** 打开列表页时是否直接进抽卡模式（默认关：列表还是列表）。 */
+  gachaAuto: boolean = false;
 
   private store: preferences.Preferences | undefined = undefined;
 
@@ -100,8 +118,12 @@ export class Store {
       this.lanAmane = trimBase(this.store.getSync(KEY_LAN_AMANE, legacy) as string);
       this.lanUser = trimBase(this.store.getSync(KEY_LAN_USER, DEFAULT_USER) as string);
       this.wanAmane = trimBase(this.store.getSync(KEY_WAN, DEFAULT_WAN_AMANE) as string);
+      this.wanUser = trimBase(this.store.getSync(KEY_WAN_USER, '') as string);
       this.token = this.store.getSync(KEY_TOKEN, DEFAULT_TOKEN) as string;
       this.mode = this.store.getSync(KEY_MODE, MODE_AUTO) as string;
+      const gc: number = Number(this.store.getSync(KEY_GACHA_COUNT, 10) as number);
+      this.gachaCount = gc >= 4 && gc <= 24 ? Math.trunc(gc) : 10;
+      this.gachaAuto = this.store.getSync(KEY_GACHA_AUTO, false) as boolean;
     } catch (error) {
       const err = error as BusinessError;
       console.error(`[amane] read prefs: ${err.code} ${err.message}`);
@@ -117,14 +139,50 @@ export class Store {
       this.store.putSync(KEY_LAN_AMANE, this.lanAmane);
       this.store.putSync(KEY_LAN_USER, this.lanUser);
       this.store.putSync(KEY_WAN, this.wanAmane);
+      this.store.putSync(KEY_WAN_USER, this.wanUser);
       this.store.putSync(KEY_TOKEN, this.token);
       this.store.putSync(KEY_MODE, this.mode);
+      this.store.putSync(KEY_GACHA_COUNT, this.gachaCount);
+      this.store.putSync(KEY_GACHA_AUTO, this.gachaAuto);
       this.store.flush().catch((error: BusinessError) => {
         console.error(`[amane] flush: ${error.code} ${error.message}`);
       });
     } catch (error) {
       const err = error as BusinessError;
       console.error(`[amane] save prefs: ${err.code} ${err.message}`);
+    }
+  }
+
+  /**
+   * 通用小偏好读写：页面自己的开关（例如搜索范围多选）不必各建一套 Preferences。
+   * 键名一律以页面名开头，避免和网络配置那套 KEY_* 撞车。
+   */
+  prefString(key: string, def: string): string {
+    if (this.store === undefined) {
+      return def;
+    }
+    try {
+      const v: string = this.store.getSync(key, def) as string;
+      return v === undefined || v === null ? def : v;
+    } catch (error) {
+      const err = error as BusinessError;
+      console.error(`[amane] read pref ${key}: ${err.code} ${err.message}`);
+      return def;
+    }
+  }
+
+  prefSetString(key: string, value: string): void {
+    if (this.store === undefined) {
+      return;
+    }
+    try {
+      this.store.putSync(key, value);
+      this.store.flush().catch((error: BusinessError) => {
+        console.error(`[amane] flush pref: ${error.code} ${error.message}`);
+      });
+    } catch (error) {
+      const err = error as BusinessError;
+      console.error(`[amane] save pref ${key}: ${err.code} ${err.message}`);
     }
   }
 
@@ -153,10 +211,13 @@ export class Store {
     return false;
   }
 
-  /** 外网只有一个域名：媒体走 /api/*，用户数据走 /api/user/* 和 /img，由 Caddy 分流。 */
+  /**
+   * 外网：媒体走 /api/*，用户数据走 /api/user/* 和 /img，默认由 Caddy 按路径分流到同一个域名。
+   * 填了 `wanUser` 就用它（外网想连另一台/另一个端口时，域名 + 端口是唯一能表达的方式）。
+   */
   useWan(): void {
     this.amane = this.wanAmane;
-    this.user = this.wanAmane;
+    this.user = this.wanUser.length > 0 ? this.wanUser : this.wanAmane;
     this.onWan = true;
   }
 

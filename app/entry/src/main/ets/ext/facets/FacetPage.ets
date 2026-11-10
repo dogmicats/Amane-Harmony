@@ -6,6 +6,9 @@ import { Theme } from '../../common/Theme';
 import { DetailParams, MediaItem } from '../../common/Types';
 import { posterItem } from '../../common/Util';
 import { PosterCard } from '../../view/PosterCard';
+import { BuildConfig } from '../../common/BuildConfig';
+import { GachaSwitch } from '../stills/GachaSwitch';
+import { GachaWall } from '../stills/GachaWall';
 import {
   FacetFavoriteResult, FacetItem, FacetMediaItem, FacetMediaList, FacetParams,
   emptyFacet, facetLabel, safeFacetMediaList
@@ -67,6 +70,8 @@ struct FacetPage {
   /** 分类自己的收藏位：只写 amane 的 is_favorite，与「影片收藏 → 自动入库」无关。 */
   @State facet: FacetItem = emptyFacet();
   @State tip: string = '';
+  /** 抽卡模式：把这款分类下的影片剧照随机铺成瀑布流，替代海报网格。 */
+  @State gachaOn: boolean = false;
   private kind: string = 'tag';
   private facetId: number = 0;
   private title: string = '';
@@ -96,6 +101,8 @@ struct FacetPage {
       this.facetId = Number(p.id);
       this.title = p.name === undefined || p.name === null ? '' : p.name;
     }
+    // 默认进不进抽卡模式由设置页决定（列表页仍是默认视图）
+    this.gachaOn = BuildConfig.ENABLE_GACHA && Store.I.gachaAuto;
     this.load(0, false);
   }
 
@@ -395,6 +402,16 @@ struct FacetPage {
             this.order = this.order === 'desc' ? 'asc' : 'desc';
             this.reload();
           })
+
+        // 抽卡模式：把这一页换成随机剧照墙（不改变筛选/排序，只是换一种看法）
+        if (BuildConfig.ENABLE_GACHA) {
+          GachaSwitch({
+            on: this.gachaOn,
+            onToggle: (v: boolean) => {
+              this.gachaOn = v;
+            }
+          })
+        }
       }
       .width('100%')
 
@@ -465,6 +482,28 @@ struct FacetPage {
     })
   }
 
+  /**
+   * 抽卡模式下的精简工具条：只留开关 + 一句说明。
+   * 开关必须一直看得见 —— 否则进了抽卡模式就退不出来了。
+   */
+  @Builder
+  GachaBar() {
+    Row({ space: 8 }) {
+      GachaSwitch({
+        on: this.gachaOn,
+        onToggle: (v: boolean) => {
+          this.gachaOn = v;
+        }
+      })
+      Blank()
+      Text('随机剧照 · 点图看详情')
+        .fontSize(10)
+        .fontColor(Theme.TEXT_FAINT)
+    }
+    .width('100%')
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 8 })
+  }
+
   build() {
     Column() {
       this.Header()
@@ -477,7 +516,25 @@ struct FacetPage {
           .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
       }
 
-      if (this.loading) {
+      if (this.gachaOn) {
+        this.GachaBar()
+        Scroll() {
+          Column() {
+            GachaWall({
+              scope: this.kind,
+              scopeId: this.facetId,
+              label: this.title,
+              count: 0
+            })
+          }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 24 })
+        }
+        .layoutWeight(1)
+        .align(Alignment.Top)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+      } else if (this.loading) {
         Column() {
           LoadingProgress()
             .width(28)

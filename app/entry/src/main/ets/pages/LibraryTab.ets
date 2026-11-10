@@ -48,10 +48,10 @@ export struct LibraryTab {
           .fontColor(Theme.TEXT)
         Blank()
         Text('⌕')
-          .fontSize(18)
+          .fontSize(22)
           .fontColor(Theme.TEXT)
-          .width(32)
-          .height(30)
+          .width(38)
+          .height(36)
           .textAlign(TextAlign.Center)
           .onClick(() => {
             router.pushUrl({ url: 'pages/SearchPage' });

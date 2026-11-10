@@ -22,6 +22,27 @@
       "scope": "public",
       "entry": "ext/subtitles/server_ext.py",
       "enabled": true
+    },
+    {
+      "id": "stills",
+      "title": "抽卡模式（随机剧照墙）",
+      "scope": "public",
+      "entry": "ext/stills/server_ext.py",
+      "enabled": true
+    },
+    {
+      "id": "highlights",
+      "title": "影片亮点（随机位置缩略图，点图从该处播放）",
+      "scope": "public",
+      "entry": "ext/highlights/server_ext.py",
+      "enabled": true
+    },
+    {
+      "id": "trailers",
+      "title": "预告片（详情页入口 + 预告片盲盒）",
+      "scope": "public",
+      "entry": "ext/trailers/server_ext.py",
+      "enabled": true
     }
   ]
 }

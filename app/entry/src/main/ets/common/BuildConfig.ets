@@ -6,14 +6,20 @@
  */
 export class BuildConfig {
   static readonly CHANNEL: string = 'public';
-  static readonly APP_VERSION: string = '2.3.0';
-  static readonly MIN_SERVER: string = '2.3.0';
+  static readonly APP_VERSION: string = '2.4.0';
+  static readonly MIN_SERVER: string = '2.4.0';
   static readonly DEFAULT_AMANE: string = '';
   static readonly DEFAULT_USER: string = '';
   static readonly DEFAULT_WAN: string = '';
   static readonly DEFAULT_TOKEN: string = '';
+  /** 构建时间（关于页显示，用于区分同号包）；公版不带自测线的 build 号。 */
+  static readonly BUILD_TIME: string = '';
   // 服务端公开扩展：随本仓库一起发布，保持开启
   static readonly ENABLE_ACTORS: boolean = true;
   static readonly ENABLE_FACETS: boolean = true;
   static readonly ENABLE_SUBTITLES: boolean = true;
+  static readonly ENABLE_GACHA: boolean = true;
+  static readonly ENABLE_HIGHLIGHTS: boolean = true;
+  // 分类列表的多选操作条在公版关闭（私有能力不随包）
+  static readonly ENABLE_FACET_MULTISELECT: boolean = false;
 }

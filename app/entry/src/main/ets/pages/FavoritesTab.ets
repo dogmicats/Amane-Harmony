@@ -6,6 +6,8 @@ import { Theme } from '../common/Theme';
 import { DetailParams, FavList, MediaItem } from '../common/Types';
 import { safeItems } from '../common/Safe';
 import { BuildConfig } from '../common/BuildConfig';
+import { GachaSwitch } from '../ext/stills/GachaSwitch';
+import { GachaWall } from '../ext/stills/GachaWall';
 import { MarkBadges } from '../view/MarkBadges';
 
 @Component
@@ -13,8 +15,11 @@ export struct FavoritesTab {
   @Prop @Watch('onRefresh') refreshKey: number = 0;
   @State items: MediaItem[] = [];
   @State loading: boolean = true;
+  /** 抽卡模式：把收藏影片的剧照随机铺成瀑布流。 */
+  @State gachaOn: boolean = false;
 
   aboutToAppear(): void {
+    this.gachaOn = BuildConfig.ENABLE_GACHA && Store.I.gachaAuto;
     this.load();
   }
 
@@ -46,11 +51,32 @@ export struct FavoritesTab {
         Text(`${this.items.length} 部`)
           .fontSize(11)
           .fontColor(Theme.TEXT_FAINT)
+          .margin({ right: 8 })
+        if (BuildConfig.ENABLE_GACHA) {
+          GachaSwitch({
+            on: this.gachaOn,
+            onToggle: (v: boolean) => {
+              this.gachaOn = v;
+            }
+          })
+        }
       }
       .width('100%')
       .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 8, bottom: 12 })
 
-      if (this.loading) {
+      if (this.gachaOn) {
+        Scroll() {
+          Column() {
+            GachaWall({ scope: 'favorite', scopeId: 0, label: '我的收藏', count: 0 })
+          }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 84 })
+        }
+        .layoutWeight(1)
+        .align(Alignment.Top)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+      } else if (this.loading) {
         Column() {
           LoadingProgress()
             .width(28)

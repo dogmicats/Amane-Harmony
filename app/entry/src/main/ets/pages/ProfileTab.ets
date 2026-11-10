@@ -153,6 +153,12 @@ export struct ProfileTab {
           this.MenuRow('▷', '播放器', '硬解、缓冲、拖动响应', 'static', () => {
             router.pushUrl({ url: 'pages/PlayerSettingsPage' });
           })
+          this.MenuRow('☰', '更新日志', '每一版改了什么', 'static', () => {
+            router.pushUrl({ url: 'pages/ChangelogPage' });
+          })
+          this.MenuRow('ⓘ', '关于应用', '版本、运行环境、致谢', 'static', () => {
+            router.pushUrl({ url: 'pages/AboutPage' });
+          })
         }
         .width('100%')
 
@@ -166,6 +172,9 @@ export struct ProfileTab {
         }
         .width('100%')
         .padding({ top: 10, bottom: 24 })
+        .onClick(() => {
+          router.pushUrl({ url: 'pages/AboutPage' });
+        })
       }
       .width('100%')
       .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 84 })

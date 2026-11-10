@@ -78,12 +78,12 @@ export struct HomeTab {
         .textShadow({ radius: 8, color: '#99000000', offsetX: 0, offsetY: 2 })
       Blank()
       Text('⌕')
-        .fontSize(20)
+        .fontSize(24)
         .fontColor('#FFFFFF')
-        .width(36)
-        .height(36)
+        .width(42)
+        .height(42)
         .textAlign(TextAlign.Center)
-        .borderRadius(18)
+        .borderRadius(21)
         .backgroundColor('#59000000')
         .onClick(() => {
           router.pushUrl({ url: 'pages/SearchPage' });

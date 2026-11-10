@@ -492,22 +492,14 @@ def _sizes(query: dict, key: str) -> list[int]:
     return out[:8]
 
 
-def cast_find(handler, query, *_):
-    """GET /api/user/cast/find —— 按演员阵容找片（共演 / 女演员人数）。
+def _cast_filter(query: dict) -> dict:
+    """共演筛选参数 → SQL 片段。**这是唯一来源**。
 
-    上游 /api/metadata 只能按 actor_id 做 AND 过滤，答不了「这部片有 N 个女演员」
-    这类问题，所以这里直接对 amane 只读库做一次聚合查询：
+    cast_find 用它出结果列表，stills 扩展的 `scope=cast`（走 `stills_where` 钩子）
+    用它抽剧照 —— 以后加筛选条件只改这里，两边不会漂。
+    （「结果页按条件筛了、抽卡却还是全库」就是两处各写一份的典型后果。）
 
-      * `actor_id=1&actor_id=2`  这些演员必须同时出现（具体 N 男 N 女共演）
-      * `female_min/female_max`  女演员人数区间
-      * `male_min/male_max`      男演员人数区间
-      * `female_n=1,2` / `male_n=0,1` 人数离散集合（客户端「1女 2女 3女 4女」
-        方形多选就是它：勾了几个就是「这几个数量里的任意一个」，不是区间）
-      * `cast_min/cast_max`      总人数区间
-      * `director_id=…` / `exclude_director_id=…` 按导演收窄 / 排除
-        （「n女n男 + 某导演」的组合可以从结果里整片剔掉）
-
-    只返回有文件的条目，默认按发行日期倒序。
+    返回 where / params / having / extra / body + 回显用的 echo。
     """
     actor_ids = _ids(query, "actor_id")
     fmin = _int(_one(query, "female_min", "0"), 0, 0, 99)
@@ -528,13 +520,6 @@ def cast_find(handler, query, *_):
     male_n = _sizes(query, "male_n")
     director_ids = _ids(query, "director_id")
     skip_dirs = _ids(query, "exclude_director_id")
-
-    sort_by = _one(query, "sort_by", "release")
-    if sort_by not in CAST_SORT:
-        sort_by = "release"
-    order = "ASC" if _one(query, "order", "desc") == "asc" else "DESC"
-    offset = _int(_one(query, "offset", "0"), 0, 0, 100000)
-    limit = _int(_one(query, "limit", "30"), 30, 1, 100)
 
     where = ["EXISTS (SELECT 1 FROM media_files f WHERE f.metadata_id = m.id)"]
     params: list = []
@@ -592,11 +577,6 @@ def cast_find(handler, query, *_):
         where.append("CAST(substr(m.release, 1, 4) AS INTEGER) BETWEEN ? AND ?")
         params.extend([lo, hi])
 
-    agg = (
-        "SUM(CASE WHEN LOWER(a.gender) = 'female' THEN 1 ELSE 0 END) AS female_count, "
-        "SUM(CASE WHEN LOWER(a.gender) = 'male' THEN 1 ELSE 0 END) AS male_count, "
-        "COUNT(ma.actor_id) AS cast_total"
-    )
     # HAVING 里不能用 SELECT 别名：COUNT 查询的投影里没有这些别名，SQLite 会直接报
     # "no such column"，所以条件写完整聚合表达式。
     female_sum = "SUM(CASE WHEN LOWER(a.gender) = 'female' THEN 1 ELSE 0 END)"
@@ -617,6 +597,57 @@ def cast_find(handler, query, *_):
         "WHERE " + " AND ".join(where) + " "
         "GROUP BY m.id "
         "HAVING " + " AND ".join(having)
+    )
+    return {
+        "where": where,
+        "params": params,
+        "having": having,
+        "extra": extra,
+        "body": body,
+        "echo": {
+            "female_min": fmin, "female_max": fmax,
+            "male_min": mmin, "male_max": mmax,
+            "cast_min": cmin, "cast_max": cmax,
+            "female_n": female_n, "male_n": male_n,
+            "director_id": director_ids, "exclude_director_id": skip_dirs,
+        },
+    }
+
+
+def cast_find(handler, query, *_):
+    """GET /api/user/cast/find —— 按演员阵容找片（共演 / 女演员人数）。
+
+    上游 /api/metadata 只能按 actor_id 做 AND 过滤，答不了「这部片有 N 个女演员」
+    这类问题，所以这里直接对 amane 只读库做一次聚合查询：
+
+      * `actor_id=1&actor_id=2`  这些演员必须同时出现（具体 N 男 N 女共演）
+      * `female_min/female_max`  女演员人数区间
+      * `male_min/male_max`      男演员人数区间
+      * `female_n=1,2` / `male_n=0,1` 人数离散集合（客户端「1女 2女 3女 4女」
+        方形多选就是它：勾了几个就是「这几个数量里的任意一个」，不是区间）
+      * `cast_min/cast_max`      总人数区间
+      * `director_id=…` / `exclude_director_id=…` 按导演收窄 / 排除
+        （「n女n男 + 某导演」的组合可以从结果里整片剔掉）
+
+    筛选条件全部来自 _cast_filter()，与抽卡墙的 `scope=cast` 共用同一份 SQL。
+    只返回有文件的条目，默认按发行日期倒序。
+    """
+    f = _cast_filter(query)
+    params: list = f["params"]
+    extra: list = f["extra"]
+    body: str = f["body"]
+
+    sort_by = _one(query, "sort_by", "release")
+    if sort_by not in CAST_SORT:
+        sort_by = "release"
+    order = "ASC" if _one(query, "order", "desc") == "asc" else "DESC"
+    offset = _int(_one(query, "offset", "0"), 0, 0, 100000)
+    limit = _int(_one(query, "limit", "30"), 30, 1, 100)
+
+    agg = (
+        "SUM(CASE WHEN LOWER(a.gender) = 'female' THEN 1 ELSE 0 END) AS female_count, "
+        "SUM(CASE WHEN LOWER(a.gender) = 'male' THEN 1 ELSE 0 END) AS male_count, "
+        "COUNT(ma.actor_id) AS cast_total"
     )
 
     try:
@@ -670,12 +701,24 @@ def cast_find(handler, query, *_):
         "total": _num(total),
         "offset": offset,
         "limit": limit,
-        "female_min": fmin, "female_max": fmax,
-        "male_min": mmin, "male_max": mmax,
-        "cast_min": cmin, "cast_max": cmax,
-        "female_n": female_n, "male_n": male_n,
-        "director_id": director_ids, "exclude_director_id": skip_dirs,
+        **f["echo"],
     })
+
+
+def stills_where(scope: str, query: dict):
+    """求值钩子（stills 扩展调）：`scope=cast` 的「metadata m」过滤片段。
+
+    返回 None = 不归我管，stills 会继续问下一个扩展、都没有就回 400。
+    抽卡墙因此能按**同一套共演筛选条件**抽片，而不是退回全库。
+    """
+    if scope != "cast":
+        return None
+    f = _cast_filter(query)
+    return {
+        "where": "m.id IN (SELECT m.id " + f["body"] + ")",
+        "args": list(f["params"]) + list(f["extra"]),
+        "note": f["echo"],
+    }
 
 
 def actors_stills(handler, query, actor_id, *_):
@@ -1106,11 +1149,125 @@ ROUTES = [
 ]
 
 
+# --------------------------------------------------------------------- 搜索联想
+# 核心 /api/user/suggest 的 `suggest_entities` 钩子。演员是核心唯一认不出来的
+# 实体（metadata.actors 只是一串名字，点不进任何页面），所以按名字命中演员表，
+# 交给核心排在影片后面；客户端点它进的是演员作品列表。
+SUGGEST_LIMIT = 6
+
+
+def _suggest_actors(raw: str, limit: int) -> dict:
+    """名字命中优先，其次别名命中，再按作品数 —— 排序必须在 SQL 里做，LIMIT 之后再排会漏人。
+
+    amane 认演员靠「actors.name + actor_aliases」两处：中文圈习惯叫的「蕾」是
+    「つぼみ」的别名。只按 name 匹配就会出现「演员列表里搜得到、搜索联想里搜不到」
+    （演员列表走上游 /api/actors?search=，那边是认别名的）。
+    """
+    esc = raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    like = f"%{esc}%"
+    prefix = f"{esc}%"
+    sql = (
+        "SELECT a.id AS id, a.name AS name, a.gender AS gender, "
+        "(SELECT COUNT(*) FROM metadata_actors ma WHERE ma.actor_id = a.id) AS cnt, "
+        # 0 名字前缀 · 1 别名完全相同 · 2 名字包含 · 3 别名前缀/包含 · 4 兜底
+        # 「蕾」这种完全等于别名的命中必须排在「名字里恰好带这个字」的人前面，
+        # 否则搜 蕾 会先给出一堆莲实克蕾儿，真正叫这个名的 つぼみ 排到后面。
+        "CASE WHEN a.name LIKE ? ESCAPE '\\' THEN 0 "
+        "WHEN EXISTS (SELECT 1 FROM actor_aliases ae WHERE ae.actor_id = a.id "
+        "AND ae.name = ? COLLATE NOCASE) THEN 1 "
+        "WHEN a.name LIKE ? ESCAPE '\\' THEN 2 "
+        "WHEN EXISTS (SELECT 1 FROM actor_aliases ap WHERE ap.actor_id = a.id "
+        "AND ap.name LIKE ? ESCAPE '\\') THEN 3 ELSE 4 END AS pre, "
+        # 命中的那个别名（按名字命中时留空），卡片上标一句「别名 蕾」才不莫名其妙
+        "(SELECT al.name FROM actor_aliases al WHERE al.actor_id = a.id "
+        "AND al.name LIKE ? ESCAPE '\\' ORDER BY al.position, al.id LIMIT 1) AS ali "
+        "FROM actors a "
+        "WHERE a.name LIKE ? ESCAPE '\\' "
+        "OR EXISTS (SELECT 1 FROM actor_aliases ax WHERE ax.actor_id = a.id "
+        "AND ax.name LIKE ? ESCAPE '\\') "
+        "ORDER BY pre ASC, cnt DESC, LENGTH(a.name) ASC, a.id ASC LIMIT ?"
+    )
+    try:
+        with A.amane_db() as conn:
+            rows = conn.execute(
+                sql, (prefix, raw, like, prefix, like, like, like, limit)).fetchall()
+            total = _num(conn.execute(
+                "SELECT COUNT(*) FROM actors a WHERE a.name LIKE ? ESCAPE '\\' "
+                "OR EXISTS (SELECT 1 FROM actor_aliases ax WHERE ax.actor_id = a.id "
+                "AND ax.name LIKE ? ESCAPE '\\')", (like, like)).fetchone()[0])
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"WARN actors 联想失败: {exc}")
+        return {"total": 0, "items": []}
+
+    avatars = _avatars_for([_num(r["id"]) for r in rows])
+    items = []
+    for r in rows:
+        aid = _num(r["id"])
+        pre = _num(r["pre"])
+        items.append({
+            "type": "actor",
+            "id": aid,
+            "name": _text(r["name"]),
+            "count": _num(r["cnt"]),
+            "gender": (_text(r["gender"]) or "unknown").strip().lower(),
+            # 按别名命中的才带出来；名字自己命中时留空，免得「つぼみ 别名 つぼみ」
+            "alias": "" if pre == 0 else _text(r["ali"]),
+            "image": avatars.get(aid, ""),
+            "tier": 1 if pre <= 1 else (2 if pre <= 3 else 3),
+        })
+    return {"total": total, "items": items}
+
+
+def suggest_entities(raw: str, kinds: list) -> dict:
+    """返回 {kind: {"total": n, "items": [...]}}；没被要求的 kind 不出现。"""
+    if "actor" not in (kinds or []):
+        return {}
+    return {"actor": _suggest_actors(raw, SUGGEST_LIMIT)}
+
+
+def suggest_kinds() -> dict:
+    """告诉核心「我这一摊能联想哪些类型」，核心据此回答 supported。"""
+    return {"actors": ["actor"]}
+
+
+def suggest_films(raw: str, limit: int) -> dict:
+    """按**演员别名**回查影片 id，补进影片联想。
+
+    `metadata.actors` 存的是规范名（つぼみ），别名（蕾）只在 `actor_aliases` 里 ——
+    所以搜「蕾」按普通影片条件是命中不了的。核心不认演员表，这里按别名把 id 解析出来，
+    核心只管「这些 id 也要出现在影片里」。只回 id，海报/标题仍由核心统一取。
+    """
+    esc = raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    like = f"%{esc}%"
+    try:
+        with A.amane_db() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT m.id AS id, m.release AS rel "
+                "FROM actor_aliases al "
+                "JOIN metadata_actors ma ON ma.actor_id = al.actor_id "
+                "JOIN metadata m ON m.id = ma.metadata_id "
+                "WHERE al.name LIKE ? ESCAPE '\\' "
+                "AND m.id IN (SELECT metadata_id FROM media_files) "
+                "ORDER BY m.release DESC, m.id DESC LIMIT ?",
+                (like, max(1, min(limit, 12))),
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"WARN actors 别名回查影片失败: {exc}")
+        return {"ids": []}
+    return {"ids": [_num(r["id"]) for r in rows if _num(r["id"]) > 0]}
+
+
 def install(api) -> dict:
     global A  # noqa: PLW0603
     A = api
     api.add_ddl(GALLERY_DDL)
     for method, pattern, fn in ROUTES:
         api.route(method, pattern)(fn)
-    api.log(f"扩展 actors 已启用（{len(ROUTES)} 个公开端点）")
+    api.hook("suggest_entities", suggest_entities)
+    api.hook("suggest_kinds", suggest_kinds)
+    api.hook("suggest_films", suggest_films)
+    # stills 扩展的「求值钩子」：共演筛选结果页要按同一套条件抽剧照，
+    # 筛选 SQL 只留 _cast_filter 一份，别在抽卡里再抄一遍。
+    api.hook("stills_where", stills_where)
+    api.log(f"扩展 actors 已启用（{len(ROUTES)} 个公开端点 + 搜索联想 + 抽卡范围）")
     return {"id": "actors", "enabled": True, "scope": "public"}

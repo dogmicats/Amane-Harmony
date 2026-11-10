@@ -193,9 +193,13 @@ def _marks_of(ids: list) -> dict:
     return out
 
 
+def _esc(value: str) -> str:
+    """LIKE 转义（不含通配符）：联想要拼 `前缀%`，不能直接套 _like 的 `%…%`。"""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _like(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
+    return f"%{_esc(value)}%"
 
 
 # 每个 metadata 的最新入库时间先聚一次再 JOIN：直接连 media_files 会按文件数放大行数，
@@ -681,11 +685,84 @@ ROUTES = [
 ]
 
 
+# --------------------------------------------------------------------- 搜索联想
+# 核心 /api/user/suggest 的 `suggest_entities` 钩子：关键词命中分类名时，
+# 把「标签 / 导演 / 系列 / 制片商」当成可点的一等结果交给它（点进去是分类影片墙）。
+# 为什么不放在核心里：这些表是 facets 扩展自己的领地，核心只认 film；
+# 关掉扩展，联想就自然只剩影片，不会因为找不到表而报 500。
+SUGGEST_KINDS = ("tag", "director", "series", "studio")
+SUGGEST_LIMIT = 6
+
+
+def _suggest_kind(kind: str, raw: str, limit: int) -> dict:
+    """一个分类的联想命中：名字前缀优先，其次按片数。
+
+    排序不能交给上层：`SELECT … LIMIT 6` 之后再排序只会得到「片数最多的 6 个里
+    前缀命中的那几个」，前缀命中的分类反而可能根本进不了前 6。
+    """
+    if kind in LINK_SPEC:
+        ent, link, fk = LINK_SPEC[kind]
+        head = (f"FROM {ent} e LEFT JOIN {link} l ON l.{fk} = e.id "
+                f"LEFT JOIN metadata m ON m.id = l.metadata_id ")
+    else:
+        ent, col = SCALAR_SPEC[kind]
+        head = f"FROM {ent} e LEFT JOIN metadata m ON m.{col} = e.name "
+
+    cond = "WHERE e.name LIKE ? ESCAPE '\\'"
+    cond_args: list = [_like(raw)]
+    hidden = _hidden_ids(kind)
+    if hidden:
+        cond += f" AND e.id NOT IN ({','.join('?' * len(hidden))})"
+        cond_args.extend(sorted(hidden))
+
+    sql = ("SELECT e.id AS id, e.name AS name, COUNT(m.id) AS cnt, "
+           "CASE WHEN e.name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END AS pre "
+           + head + cond + " GROUP BY e.id "
+           "ORDER BY pre ASC, cnt DESC, LENGTH(e.name) ASC, e.id ASC LIMIT ?")
+    try:
+        with A.amane_db() as conn:
+            rows = conn.execute(sql, (_esc(raw) + "%", *cond_args, limit)).fetchall()
+            total = _num(conn.execute(
+                f"SELECT COUNT(*) FROM {ent} e {cond}", cond_args).fetchone()[0])
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"WARN facets 联想 {kind} 失败: {exc}")
+        return {"total": 0, "items": []}
+
+    ids = [_num(r["id"]) for r in rows]
+    posters = _poster_map(kind, ids)
+    items = []
+    for r in rows:
+        fid = _num(r["id"])
+        items.append({
+            "type": kind,
+            "id": fid,
+            "name": _text(r["name"]),
+            "count": _num(r["cnt"]),
+            # 分类的「封面」就是它最近几部片的第一张海报，和分类列表里的缩略图同源
+            "image": (posters.get(fid) or [""])[0],
+            "tier": 1 if not r["pre"] else 2,
+        })
+    return {"total": total, "items": items}
+
+
+def suggest_entities(raw: str, kinds: list) -> dict:
+    """返回 {kind: {"total": n, "items": [...]}}；没被要求的 kind 不出现。"""
+    wanted = [k for k in SUGGEST_KINDS if k in (kinds or [])]
+    return {kind: _suggest_kind(kind, raw, SUGGEST_LIMIT) for kind in wanted}
+
+
+def suggest_kinds() -> dict:
+    """告诉核心「我这一摊能联想哪些类型」，核心据此回答 supported。"""
+    return {"facets": list(SUGGEST_KINDS)}
+
+
 def install(api) -> dict:
     global A  # noqa: PLW0603
     A = api
     api.add_ddl(HIDDEN_DDL)
     for method, pattern, fn in ROUTES:
         api.route(method, pattern)(fn)
-    api.log(f"扩展 facets 已启用（{len(ROUTES)} 个公开端点）")
+    api.hook("suggest_entities", suggest_entities)
+    api.hook("suggest_kinds", suggest_kinds)
+    api.log(f"扩展 facets 已启用（{len(ROUTES)} 个公开端点 + 搜索联想）")
     return {"id": "facets", "enabled": True, "scope": "public"}

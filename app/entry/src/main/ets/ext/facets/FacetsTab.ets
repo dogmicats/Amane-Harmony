@@ -3,6 +3,8 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet, httpPost } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
+import { BuildConfig } from '../../common/BuildConfig';
+import { MergeBar } from '../merge/MergeBar';
 import {
   FacetItem, FacetList, FacetParams, facetLabel, safeFacetList
 } from './FacetTypes';
@@ -78,6 +80,9 @@ export struct FacetsTab {
   /** 是否把隐藏的标签也列出来（默认不列）。 */
   @State includeHidden: boolean = false;
   @State hiddenCount: number = 0;
+  /** 多选合并态：长按卡片进入，这时候点卡片是「选中」而不是「进去」。 */
+  @State selecting: boolean = false;
+  @State picked: number[] = [];
   private searchTimer: number = -1;
   private tipTimer: number = -1;
   private kinds: Choice[] = [
@@ -276,6 +281,48 @@ export struct FacetsTab {
     router.pushUrl({ url: 'ext/facets/FacetPage', params: params });
   }
 
+  private isPicked(id: number): boolean {
+    return this.picked.indexOf(id) >= 0;
+  }
+
+  /** 长按起手：进入多选并把按住的这一项捎上。 */
+  private beginSelect(f: FacetItem): void {
+    if (!BuildConfig.ENABLE_FACET_MULTISELECT) {
+      return;
+    }
+    this.selecting = true;
+    this.picked = [f.id];
+  }
+
+  private togglePick(f: FacetItem): void {
+    const next: number[] = [];
+    let removed: boolean = false;
+    for (let i = 0; i < this.picked.length; i++) {
+      if (this.picked[i] === f.id) {
+        removed = true;
+      } else {
+        next.push(this.picked[i]);
+      }
+    }
+    if (!removed) {
+      next.push(f.id);
+    }
+    this.picked = next;
+    if (next.length === 0) {
+      this.selecting = false;
+    }
+  }
+
+  private endSelect(): void {
+    this.selecting = false;
+    this.picked = [];
+  }
+
+  /** 多选结束：重拉列表。 */
+  private onMerged(): void {
+    this.reload();
+  }
+
   /**
    * 分类收藏：先本地翻转再落库，失败时回滚。
    *
@@ -402,11 +449,22 @@ export struct FacetsTab {
     .height(92)
     .backgroundColor(Theme.CARD_HI)
     .borderRadius(10)
+    .border({ width: this.isPicked(f.id) ? 2 : 0, color: Theme.ACCENT })
     .clip(true)
     .opacity(f.isHidden ? 0.55 : 1)
     .onClick(() => {
-      this.open(f);
+      if (this.selecting) {
+        this.togglePick(f);
+      } else {
+        this.open(f);
+      }
     })
+    .gesture(
+      LongPressGesture({ repeat: false })
+        .onAction(() => {
+          this.beginSelect(f);
+        })
+    )
   }
 
   /**
@@ -492,11 +550,22 @@ export struct FacetsTab {
     .height(104)
     .backgroundColor(Theme.CARD_HI)
     .borderRadius(12)
+    .border({ width: this.isPicked(f.id) ? 2 : 0, color: Theme.ACCENT })
     .clip(true)
     .opacity(f.isHidden ? 0.55 : 1)
     .onClick(() => {
-      this.open(f);
+      if (this.selecting) {
+        this.togglePick(f);
+      } else {
+        this.open(f);
+      }
     })
+    .gesture(
+      LongPressGesture({ repeat: false })
+        .onAction(() => {
+          this.beginSelect(f);
+        })
+    )
   }
 
   /** 长条卡副标题：片数 + 最近上映（日期都没有时只说片数）。 */
@@ -535,6 +604,7 @@ export struct FacetsTab {
               return;
             }
             this.kind = key;
+            this.endSelect();
             // user_tag 不支持 favorite 筛选，切过去时清掉，避免按钮消失但条件还生效
             if (key === 'user_tag') {
               this.onlyFav = false;
@@ -705,7 +775,8 @@ export struct FacetsTab {
                 this.Cell(f)
               }
             }
-          }, (f: FacetItem) => `facet-${this.kind}-${f.id}-${f.isFavorite ? 1 : 0}`)
+          }, (f: FacetItem) => `facet-${this.kind}-${f.id}-${f.isFavorite ? 1 : 0}` +
+            `-${this.selecting ? 1 : 0}${this.isPicked(f.id) ? 1 : 0}`)
 
           if (this.items.length < this.total) {
             GridItem() {
@@ -739,6 +810,22 @@ export struct FacetsTab {
         .edgeEffect(EdgeEffect.Spring)
         .onReachEnd(() => {
           this.loadMore();
+        })
+      }
+
+      // 多选操作条：公版不含合并能力，这里是零尺寸空桩，不影响列表布局。
+      if (this.selecting) {
+        MergeBar({
+          kind: this.kind,
+          items: this.items,
+          picked: this.picked,
+          onCancel: () => {
+            this.endSelect();
+            this.reload();
+          },
+          onMerged: () => {
+            this.onMerged();
+          }
         })
       }
     }

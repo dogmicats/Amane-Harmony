@@ -12,6 +12,7 @@ import { BuildConfig } from '../common/BuildConfig';
 import { ActorChips } from '../ext/actors/ActorChips';
 import { FacetTagChips, SeriesCard } from '../ext/facets/ItemFacetBlocks';
 import { ItemFacets, emptyItemFacets, safeItemFacets } from '../ext/facets/FacetTypes';
+import { HighlightStrip } from '../ext/highlights/HighlightStrip';
 import { MarkBadges } from '../view/MarkBadges';
 import { StillsWall } from '../view/StillsWall';
 
@@ -55,6 +56,14 @@ struct DetailPage {
   @State expanded: boolean = false;
   @State toast: string = '';
   private metaId: number = 0;
+  /**
+   * 起播意图：-1 = 按进度续播（默认），>=0 = 从这一秒开始。
+   *
+   * 顶部播放拆成「继续 / 从头」之后，这两个入口和多版本选版面板是交叉的：
+   * 先点「从头」再选版本、或先点亮点再说，都必须把意图带到真正起播的那一刻，
+   * 所以意图存在这里，`playFile()` 消费一次就清掉（避免下一次点「继续」还从 0 开始）。
+   */
+  private startAt: number = -1;
 
   aboutToAppear(): void {
     const params = router.getParams() as DetailParams;
@@ -311,7 +320,14 @@ struct DetailPage {
     router.pushUrl({ url: 'pages/ImageViewerPage', params: params });
   }
 
-  private play(): void {
+  /** 有进度可续（且没看完）时，顶部按钮才有「继续 / 从头」两个选项。 */
+  private resumable(): boolean {
+    return this.detail.position > 5 && !this.detail.finished;
+  }
+
+  private play(fromStart: boolean): void {
+    // 从头播 = 位置 0；否则让 playFile 按进度自己决定
+    this.startAt = fromStart ? 0 : -1;
     // 一个条目挂多个版本时先让用户选；只有一个文件就直接播
     if (this.detail.files.length > 1) {
       this.openVersions();
@@ -320,15 +336,25 @@ struct DetailPage {
     this.playFile('', '');
   }
 
+  /** 点亮点缩略图：从这一秒起播，并且用**抽帧的那个文件**（多版本时位置才准）。 */
+  private playAt(t: number, fileKey: string, fileName: string): void {
+    this.startAt = Math.max(0, t);
+    this.playFile(fileKey, fileName);
+  }
+
   private playFile(fileKey: string, fileName: string): void {
+    const start: number = this.startAt >= 0
+      ? this.startAt
+      : (this.detail.finished ? 0 : this.detail.position);
     const params: PlayerParams = {
       id: this.detail.id,
       number: this.detail.number,
       title: this.detail.title,
-      position: this.detail.finished ? 0 : this.detail.position,
+      position: start,
       fileKey: fileKey,
       fileName: fileName
     };
+    this.startAt = -1;
     this.showVersions = false;
     router.pushUrl({ url: 'pages/PlayerPage', params: params });
   }
@@ -474,6 +500,8 @@ struct DetailPage {
             .textAlign(TextAlign.Center)
             .onClick(() => {
               this.showVersions = false;
+              // 关掉选版面板 = 这次播放没发生，起播意图跟着作废
+              this.startAt = -1;
             })
         }
         .width('100%')
@@ -532,6 +560,7 @@ struct DetailPage {
     .backgroundColor('#99000000')
     .onClick(() => {
       this.showVersions = false;
+      this.startAt = -1;
     })
   }
 
@@ -618,13 +647,26 @@ struct DetailPage {
               // 操作区
               Row({ space: 10 }) {
                 Button() {
-                  Row({ space: 6 }) {
-                    Text('▶')
-                      .fontSize(13)
-                      .fontColor('#FFFFFF')
-                    Text(this.playLabel())
-                      .fontSize(14)
-                      .fontColor('#FFFFFF')
+                  if (this.resumable()) {
+                    // 和「从头」并排之后，一行放不下「继续播放 01:40:21」（真机被截成省略号），
+                    // 所以主按钮给两行：上面是动作，下面就是「从哪儿接着播」
+                    Column({ space: 1 }) {
+                      Text('继续播放')
+                        .fontSize(13)
+                        .fontColor('#FFFFFF')
+                      Text(`${clock(this.detail.position)} 起`)
+                        .fontSize(9)
+                        .fontColor('#D9FFFFFF')
+                    }
+                  } else {
+                    Row({ space: 6 }) {
+                      Text('▶')
+                        .fontSize(13)
+                        .fontColor('#FFFFFF')
+                      Text(this.playLabel())
+                        .fontSize(14)
+                        .fontColor('#FFFFFF')
+                    }
                   }
                 }
                 .layoutWeight(1)
@@ -632,8 +674,29 @@ struct DetailPage {
                 .backgroundColor(Theme.ACCENT)
                 .borderRadius(21)
                 .onClick(() => {
-                  this.play();
+                  this.play(false);
                 })
+
+                // 有进度时补一个「从头」：想重看不用先进播放页再拖进度条
+                if (this.resumable()) {
+                  Button() {
+                    Row({ space: 4 }) {
+                      Text('⏮')
+                        .fontSize(11)
+                        .fontColor(Theme.TEXT)
+                      Text('从头')
+                        .fontSize(12)
+                        .fontColor(Theme.TEXT)
+                    }
+                  }
+                  .width(66)
+                  .height(42)
+                  .backgroundColor(Theme.CARD)
+                  .borderRadius(21)
+                  .onClick(() => {
+                    this.play(true);
+                  })
+                }
 
                 Column({ space: 1 }) {
                   Text(this.fav ? '♥' : '♡')
@@ -655,6 +718,17 @@ struct DetailPage {
               }
               .width('100%')
               .margin({ top: 16 })
+
+              // 公开扩展 highlights：影片亮点（片子里随机位置的抽帧缩略图，点图从该处起播）。
+              // 服务端抽不到帧（没 ffmpeg / 文件不在线）时组件自己整块隐藏，核心页面不受影响。
+              if (BuildConfig.ENABLE_HIGHLIGHTS && this.detail.files.length > 0) {
+                HighlightStrip({
+                  metaId: this.metaId,
+                  onPick: (t: number, fileKey: string, fileName: string) => {
+                    this.playAt(t, fileKey, fileName);
+                  }
+                })
+              }
 
               // 公开扩展 facets：所属系列（名称 + 同系列片数，点进系列影片墙）
               if (BuildConfig.ENABLE_FACETS && this.facets.series.name.length > 0) {
@@ -963,9 +1037,11 @@ struct DetailPage {
   }
 
   private playLabel(): string {
-    const base: string = this.detail.position > 5 && !this.detail.finished
-      ? `继续播放 ${clock(this.detail.position)}` : '播放';
-    return this.detail.files.length > 1 ? `${base} · ${this.detail.files.length} 个版本` : base;
+    const n: number = this.detail.files.length;
+    if (this.resumable()) {
+      return '继续播放';
+    }
+    return n > 1 ? `播放 · ${n} 个版本` : '播放';
   }
 
   private fileName(path: string): string {

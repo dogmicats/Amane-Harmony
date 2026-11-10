@@ -54,7 +54,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, build_opener, ProxyHandler
 
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 
 AMANE_BASE = os.environ.get("AMANE_BASE", "http://127.0.0.1:8000").rstrip("/")
 AMANE_DATA = os.environ.get("AMANE_DATA", "/amane-data")
@@ -157,6 +157,23 @@ class ExtensionHost:
                 log(f"ERROR 扩展 hook {name}: {exc}")
         return merged
 
+    def call_hook(self, name: str, *args):
+        """求值型钩子：返回**第一个**非 None 的结果。
+
+        与 call() 的区别是语义：call() 是「往同一份响应里各加各的字段」（dict 合并），
+        这里是「这个问题归谁回答」（比如 stills 问「scope=cast 的筛选片段长什么样」）——
+        需要拿到单个值，也必须能区分「不管我事（None）」和「管了但没结果（空 dict）」。
+        """
+        for fn in self.hooks.get(name, []):
+            try:
+                out = fn(*args)
+            except Exception as exc:  # noqa: BLE001
+                log(f"ERROR 扩展 hook {name}: {exc}")
+                continue
+            if out is not None:
+                return out
+        return None
+
     def load(self) -> None:
         import importlib.util
         from types import SimpleNamespace
@@ -167,7 +184,8 @@ class ExtensionHost:
             log(f"扩展清单读不到 {EXTENSIONS_MANIFEST}: {exc}；以无扩展模式启动")
             return
         api = SimpleNamespace(
-            route=self.route, add_ddl=self.add_ddl, add_init=self.add_init, hook=self.hook,
+            route=self.route, add_ddl=self.add_ddl, add_init=self.add_init,
+            hook=self.hook, call_hook=self.call_hook,
             user_db=user_db, amane_db=amane_db, log=log, now_iso=now_iso,
             os=os, json=json, datetime=datetime, timedelta=timedelta, timezone=timezone,
             # 通用上游能力：扩展不必自己读凭据文件 / 拼图片代理 URL
@@ -289,6 +307,15 @@ def init_user_db() -> None:
                 ratio       REAL NOT NULL DEFAULT 1.778,
                 updated_at  TEXT
             );
+            -- 搜索历史：norm 是去重键（小写 + 压空格），q 是最后一次输入的原文（展示用）
+            CREATE TABLE IF NOT EXISTS search_history (
+                norm       TEXT PRIMARY KEY,
+                q          TEXT NOT NULL,
+                hits       INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                used_at    TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_search_used ON search_history(used_at DESC);
             """
             + "\n".join(EXT.ddl)
         )
@@ -309,6 +336,28 @@ META_COLUMNS = (
     "m.release, m.runtime, m.content_type, m.poster_urls, m.thumb_urls, "
     "m.extrafanart_urls, m.scores, m.updated_at"
 )
+
+# 联想搜索可选的类型。顺序即客户端 chip 的默认顺序，也是返回结果里的排序。
+# film 由核心自己查；其余实体由扩展通过 `suggest_entities` 钩子补，核心不直连它们的表。
+SUGGEST_KINDS = ("film", "actor", "director", "tag", "series", "studio")
+
+# 搜索历史只留最近 N 条：它是「最近搜过」的快捷入口，不是操作日志。
+SEARCH_HISTORY_KEEP = 30
+
+
+def suggest_supported() -> list[str]:
+    """服务端真正能给出的联想类型：影片永远有，其余看扩展有没有登记。
+
+    扩展在 install 时把自己支持的 kind 挂到 `suggest_kinds` 钩子上，
+    这里只做合并 —— 关掉 facets 扩展，supported 里就没有 tag/director，
+    客户端据此把 chip 灰掉，而不是发一个永远空结果的参数。
+    """
+    kinds: set = set()
+    for group in EXT.call("suggest_kinds").values():
+        if isinstance(group, (list, tuple)):
+            kinds.update(str(x) for x in group)
+    return [k for k in SUGGEST_KINDS if k == "film" or k in kinds]
+
 
 # 排序键 -> (SQL 表达式, 默认方向)。评分在 scores JSON 里，只有 javdb 一个来源。
 SORTS = {
@@ -340,6 +389,33 @@ def _json_dict(raw) -> dict:
     except (TypeError, ValueError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def trailer_urls(mid: int) -> list[str]:
+    """该条目的预告片地址（按刮削顺序）。
+
+    两种形态混在一列里，客户端与流代理都要能处理：
+      * ``/api/resources/<hash>`` —— 刮削时已下载到 amane 的 Resource 库，取本地文件；
+      * ``http(s)://...`` —— 还没下载，或站点只给了外链（老数据基本都是这个）。
+
+    解析失败 / 空列一律回空列表：没预告片是常态（全库只有几百部有），不是错误。
+    """
+    try:
+        with amane_db() as conn:
+            row = conn.execute("SELECT trailer_urls FROM metadata WHERE id = ?", (int(mid),)).fetchone()
+    except sqlite3.Error as exc:
+        log(f"WARN trailer 读库失败 id={mid}: {exc}")
+        return []
+    if row is None:
+        return []
+    out: list[str] = []
+    for url in _json_list(row["trailer_urls"]):
+        if not isinstance(url, str):
+            continue
+        url = url.strip()
+        if url.startswith("/api/resources/") or url.startswith("http://") or url.startswith("https://"):
+            out.append(url)
+    return out
 
 
 def _b64url(raw: str) -> str:
@@ -1773,6 +1849,104 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._stream_sessions.pop(session_key, None)
 
+    # -- 预告片 -----------------------------------------------------------
+    #
+    # 预告片是几十秒的小视频（几 MB），不需要 play 那套分块缓存 + 预读：
+    # Range 原样透传给 mpv 就够，省一层内存缓存也省一路预取线程。
+    #
+    # 两种上游，**鉴权头必须分开**：
+    #   * 已在 amane 的 Resource 库里（刮削时下载下来的）→ /api/resources/{hash}，
+    #     带 Bearer 回源；
+    #   * 还只有外链（老数据或站点只给外链）→ 直接去源站拉，**绝不能带 Bearer**，
+    #     那是把实例 token 白送给第三方站点。
+
+    @route("GET", r"/api/user/trailer/(\d+)")
+    @route("HEAD", r"/api/user/trailer/(\d+)")
+    def trailer(self, query: dict, mid: str) -> None:
+        head_only: bool = self.command == "HEAD"
+        try:
+            idx = int((query.get("i") or ["0"])[0] or 0)
+        except ValueError:
+            idx = 0
+        urls = trailer_urls(int(mid))
+        if not urls:
+            return self._error(404, "这个条目没有预告片")
+        if idx < 0 or idx >= len(urls):
+            idx = 0
+        url = urls[idx]
+        if url.startswith("/api/resources/"):
+            upstream = f"{AMANE_BASE}{url}"
+            req_headers: dict[str, str] = {"Authorization": f"Bearer {AMANE_TOKEN}"}
+        elif url.startswith("http://") or url.startswith("https://"):
+            upstream = url
+            req_headers = {}
+        else:
+            return self._error(404, "预告片地址不可用")
+        for name in ("Range", "If-Range", "If-Modified-Since", "If-None-Match"):
+            val = self.headers.get(name)
+            if val:
+                req_headers[name] = val
+
+        session_key = f"trailer/{mid}/{idx}"
+        session: dict = {"ev": threading.Event(), "idle": 0.0, "sent": 0}
+        log(f"trailer {mid}#{idx} "
+            f"{'local' if url.startswith('/api/resources/') else 'remote'} "
+            f"range={self.headers.get('Range', '-')} "
+            f"ua={(self.headers.get('User-Agent') or '')[:32]}")
+        try:
+            self.connection.settimeout(60)
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+        if not head_only:
+            now = time.time()
+            with self._stream_lock:
+                alive: list = []
+                for old in self._stream_sessions.get(session_key, []):
+                    if old["idle"] > 0 and now - old["idle"] > 1.5:
+                        old["ev"].set()
+                    else:
+                        alive.append(old)
+                alive.append(session)
+                self._stream_sessions[session_key] = alive
+
+        started_at = time.time()
+        reason = "eof"
+        try:
+            reason = self._play_passthrough(upstream, req_headers, head_only, session, session_key)
+        except HTTPError as exc:
+            # 上游 404/403（源站下架、外链过期）也要如实回给播放页，别让 mpv 卡在「缓冲中」
+            try:
+                body = exc.read()
+                self.send_response(exc.code)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if not head_only:
+                    self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            self.close_connection = True
+            reason = f"http:{exc.code}"
+        except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError) as exc:
+            reason = type(exc).__name__
+            self.close_connection = True
+        except Exception as exc:  # noqa: BLE001
+            log(f"trailer {upstream} failed: {exc}\n{traceback.format_exc()}")
+            self.close_connection = True
+            reason = "error"
+        finally:
+            if not head_only:
+                spent = max(time.time() - started_at, 1e-6)
+                log(f"trailer {session_key} end {session['sent'] / 1048576:.2f}MB "
+                    f"in {spent:.1f}s ({reason})")
+            with self._stream_lock:
+                left = [s for s in self._stream_sessions.get(session_key, []) if s is not session]
+                if left:
+                    self._stream_sessions[session_key] = left
+                else:
+                    self._stream_sessions.pop(session_key, None)
+
     # -- 首页 / 浏览 -------------------------------------------------------
 
     @route("GET", r"/api/user/home")
@@ -1948,16 +2122,32 @@ class Handler(BaseHTTPRequestHandler):
           1 精确：番号去连字符后等于 / 前缀命中，或标题以关键词开头；
           2 模糊：番号 / 标题包含关键词；
           3 扩大：演员 / 系列 / 制片商命中，或拆词后任一词命中。
+
+        `types` 是「这一次搜哪些类型」的多选：film / actor / director / tag /
+        series / studio，逗号分隔。**不带这个参数就只搜影片、返回结构与旧版逐字段
+        一致**（2.2.14 及以前的客户端不认识 type/name，多给的实体行会被它画成空卡）。
+        演员 / 导演 / 标签这些实体不在这里直连表：核心通过 `suggest_entities`
+        钩子问扩展要，关掉对应扩展就自然没有那一类。
         """
         raw = ((query.get("q") or [""])[0]).strip()
         if not raw:
-            return self._json({"items": [], "q": raw})
+            return self._json({"items": [], "q": raw, "types": [], "supported": []})
+
+        asked = {x.strip().lower() for x in (query.get("types") or [""])[0].split(",") if x.strip()}
+        kinds = [k for k in SUGGEST_KINDS if k in asked] or ["film"]
+        try:
+            per = max(1, min(20, int((query.get("per") or ["6"])[0])))
+        except ValueError:
+            per = 6
+        # 只搜影片时保持旧的 14 条上限；混搜时给实体让几个位置。
+        limit = 14 if kinds == ["film"] else 10
+
         norm = re.sub(r"[\s\-_/]+", "", raw).upper()
         tokens = [t for t in re.split(r"[\s\-_/]+", raw) if t][:6]
-        limit = 14
         picked: dict[int, tuple] = {}
 
-        def grab(tier: int, where: str, params: tuple, cap: int) -> None:
+        def grab(tier: int, where: str, params: tuple, cap: int,
+                 order: str = "LENGTH(m.number), m.id") -> None:
             if len(picked) >= limit or not params:
                 return
             try:
@@ -1965,22 +2155,35 @@ class Handler(BaseHTTPRequestHandler):
                     rows = conn.execute(
                         f"SELECT {META_COLUMNS} FROM metadata m "
                         "JOIN (SELECT DISTINCT metadata_id FROM media_files) f ON f.metadata_id = m.id "
-                        f"WHERE {where} ORDER BY LENGTH(m.number), m.id LIMIT ?",
+                        f"WHERE {where} ORDER BY {order} LIMIT ?",
                         (*params, cap),
                     ).fetchall()
             except sqlite3.Error as exc:
                 log(f"WARN suggest: {exc}")
                 return
             for r in rows:
+                if len(picked) >= limit:
+                    break  # 档位之间也要守住上限，否则 8+4+10 会溢出到 20 多条
                 if r["id"] in picked:
                     continue
                 picked[r["id"]] = (tier, len(picked), item_of(r))
 
-        if norm:
+        if norm and "film" in kinds:
             # 1) 番号精确 / 前缀；标题开头
             grab(1, "REPLACE(UPPER(m.number), '-', '') LIKE ?", (norm + "%",), 8)
             grab(1, "UPPER(m.title) LIKE ?", (raw.upper() + "%",), 4)
-            # 2) 番号 / 标题包含
+            # 2a) 演员别名回查：metadata.actors 存的是规范名（つぼみ），别名「蕾」只在
+            #     actor_aliases 里，普通条件命中不了。核心不认演员表，让扩展把别名解析成
+            #     影片 id 交回来，这里只负责「这些 id 也要出现」。
+            #     必须排在「标题包含」之前：蕾 是「芭蕾」的一部分，库里有 108 部片标题带它，
+            #     先跑标题匹配会把她的 49 部作品全挤掉 —— 用户搜的是人，不是芭蕾。
+            alias_ids = [int(i) for i in (EXT.call("suggest_films", raw, 4).get("ids") or [])
+                         if int(i or 0) > 0]
+            if alias_ids and len(picked) < limit:
+                # 这批按发行时间倒序：别名命中通常就是「这个人的片」，最新的一部最可能是想找的
+                grab(2, f"m.id IN ({','.join('?' * len(alias_ids))})", tuple(alias_ids), 4,
+                     "m.release DESC, m.id DESC")
+            # 2b) 番号 / 标题包含
             grab(2, "(REPLACE(UPPER(m.number), '-', '') LIKE ? OR UPPER(m.title) LIKE ?)",
                  (f"%{norm}%", f"%{raw.upper()}%"), 10)
             # 3) 演员 / 系列 / 制片商，或拆词任一命中（扩大范围）
@@ -1989,10 +2192,92 @@ class Handler(BaseHTTPRequestHandler):
                  (f"%{raw}%", f"%{raw}%", *[f"%{t}%" for t in tokens]), 10)
 
         items = []
-        for _, (_, _, item) in sorted(picked.items(), key=lambda kv: (kv[1][0], kv[1][1]))[:limit]:
+        for _, (_, _, item) in sorted(picked.items(), key=lambda kv: (kv[1][0], kv[1][1])):
             item["tier"] = picked[item["id"]][0]
+            item["type"] = "film"
             items.append(item)
-        self._json({"items": items, "q": raw})
+
+        # 实体命中：扩展各自查自己的表/上游，返回 {kind: {"total": n, "items": [...]}}。
+        entity_kinds = [k for k in kinds if k != "film"]
+        totals: dict = {}
+        if entity_kinds:
+            merged = EXT.call("suggest_entities", raw, entity_kinds)
+            for kind in entity_kinds:
+                bucket = merged.get(kind)
+                if not isinstance(bucket, dict):
+                    continue
+                totals[kind] = int(bucket.get("total") or 0)
+                for hit in (bucket.get("items") or [])[:per]:
+                    if isinstance(hit, dict) and int(hit.get("id") or 0) > 0:
+                        items.append(hit)
+
+        self._json({
+            "items": items,
+            "q": raw,
+            # types 回显「这次真搜了哪几类」，supported 是服务端**全量**能力：
+            # 两个都要回，客户端才能分得清「没勾」和「装了但服务端不支持」。
+            "types": kinds,
+            "supported": suggest_supported(),
+            "totals": totals,
+        })
+
+    # ---- 搜索历史 ---------------------------------------------------------
+    # 「上次搜过什么」放服务端而不是本地偏好：重装包、换设备都还在，
+    # 与收藏 / 观看记录同一套思路。只留最近 SEARCH_HISTORY_KEEP 条 —— 它是快捷入口，
+    # 不是审计日志。
+    @route("GET", r"/api/user/search/history")
+    def search_history(self, query, *_) -> None:
+        try:
+            limit = max(1, min(60, int((query.get("limit") or ["20"])[0])))
+        except ValueError:
+            limit = 20
+        with user_db() as conn:
+            rows = conn.execute(
+                "SELECT q, hits, used_at FROM search_history ORDER BY used_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            total = conn.execute("SELECT COUNT(*) FROM search_history").fetchone()[0]
+        self._json({
+            "items": [{"q": r["q"], "hits": r["hits"], "usedAt": r["used_at"]} for r in rows],
+            "total": total,
+        })
+
+    @route("POST", r"/api/user/search/history")
+    def search_history_add(self, query, *_) -> None:
+        raw = str(self._body().get("q") or "").strip()
+        if not raw:
+            return self._error(422, "q 必填")
+        text = raw[:60]
+        # 归一化只用于去重：大小写 / 多余空格不同的算同一条，但展示仍用最后一次输入的原文
+        norm = re.sub(r"\s+", " ", text).lower()
+        now = now_iso()
+        with user_db() as conn:
+            conn.execute(
+                "INSERT INTO search_history(q, norm, hits, created_at, used_at) VALUES(?,?,1,?,?) "
+                "ON CONFLICT(norm) DO UPDATE SET q = excluded.q, hits = hits + 1, "
+                "used_at = excluded.used_at",
+                (text, norm, now, now),
+            )
+            conn.execute(
+                "DELETE FROM search_history WHERE norm NOT IN ("
+                "SELECT norm FROM search_history ORDER BY used_at DESC LIMIT ?)",
+                (SEARCH_HISTORY_KEEP,),
+            )
+            total = conn.execute("SELECT COUNT(*) FROM search_history").fetchone()[0]
+        self._json({"ok": True, "total": total})
+
+    @route("DELETE", r"/api/user/search/history")
+    def search_history_del(self, query, *_) -> None:
+        """带 `q` 删单条，不带 `q` 清空。"""
+        text = ((query.get("q") or [""])[0]).strip()
+        with user_db() as conn:
+            if text:
+                conn.execute("DELETE FROM search_history WHERE norm = ?",
+                             (re.sub(r"\s+", " ", text).lower(),))
+            else:
+                conn.execute("DELETE FROM search_history")
+            total = conn.execute("SELECT COUNT(*) FROM search_history").fetchone()[0]
+        self._json({"ok": True, "total": total})
 
     @route("GET", r"/api/user/item/(\d+)")
     def item(self, query, metadata_id, *_) -> None:

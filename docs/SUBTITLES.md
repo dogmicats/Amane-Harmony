@@ -21,7 +21,7 @@
 | … 不存在 | 映射后的路径在旁挂服务里看不到 | compose 加只读卷 `- /your/media:/mnt/media2:ro`，再 `docker exec` 进容器 `ls /mnt/media2` 确认 |
 | … 不可读（Permission denied） | 容器内用户没有读权限 | 检查宿主机目录权限；必要时调整容器用户或 `chmod o+r` |
 | 同目录没有与视频同名的字幕 | 命名不符合规则 | 必须是 `<视频名>.srt` 或 `<视频名>.<语言>.srt`；`xxx.zh-CN.ass`、`xxx.chs.srt` 都行，`字幕.srt` 不行 |
-| 面板里没有字幕入口 / 提示 404 | 服务端不是 2.3.0+（旧版没有字幕端点） | 升级旁挂服务：`curl .../api/user/subtitles/providers` 应返回 `{"providers":[]}`，而不是 404 |
+| 面板里没有字幕入口 / 提示 404 | 旁挂服务版本偏旧（没有字幕端点） | 升级旁挂服务：`curl .../api/user/subtitles/providers` 应返回 `{"providers":[]}`，而不是 404 |
 
 > `MEDIA_ROOT` 只是 compose 挂载卷的宿主路径占位，**不参与字幕路径解析**；真正生效的是 `MEDIA_PATH_MAP`。不配它也能用手机导入和手动 URL，只是看不到同目录字幕。
 
