@@ -14,12 +14,17 @@
 1. **Hero**：`assets/hero-banner.png`，1600×650，左侧品牌与一句话价值，右侧三张真实界面。
 2. **Badges**：Releases / HarmonyOS / ArkTS / mpv / Python / License，六个以内。
 3. **一句话定位 + 截图声明**：客户端做什么、旁挂服务补什么；紧跟一行「截图取自作者自建库，封面、横幅与剧照已打码」。
-4. **界面预览**：4 张（首页 / 媒体库 / 演员 / 详情），一行放完。
-5. **核心能力**：3 张卡片（媒体库与分类、演员与共演、详情与续播），每张 = 一张截图 + 一句功能 + 一句细节。
-6. **播放链路**：`assets/architecture.png` + 3–4 条短句（块缓存、并行预取、硬解、旁挂服务）。
+4. **四件别处没有的**（2026-11-10 起取代原「界面预览」）：共演检索 / 抽卡 / 亮点 / 剧照盲盒，
+   前三张并排、亮点用一张宽幅特写独占一行；每张都要写一句「别处为什么做不到」。
+5. **其余能力**：两行各四张小图（首页 / 媒体库 / 分类 / 演员 / 详情 / 剧照 / 搜索 / 播放器设置），
+   每张 = 图 + 一句标题 + 一句细节。
+6. **播放链路**：`assets/architecture.png` + 4–6 条短句（块缓存、并行预取、硬解、玻璃控制层、参数锁定、外挂字幕）。
 7. **快速开始**：三步表格（部署服务 / 安装客户端 / 连接媒体库），细节链去 `docs/`。
 8. **文档**：Wiki 在前，仓库内文档一列排完。
 9. **许可**：MIT + 非官方声明。
+
+> 不写「唯一」「最强」这类自我评价；差异点用「别处做不到什么」的事实句表达，
+> 且必须能对上 Emby / Jellyfin 生态的实际能力（对比依据见 PR 说明与 wiki）。
 
 ## 3. 图片策略（2026-11-10 起）
 
@@ -39,18 +44,27 @@
 
 | 文件 | 用途 |
 |---|---|
-| `docs/screenshots/home.png` | Hero、界面预览、核心能力 |
-| `docs/screenshots/library.png` | 界面预览、核心能力 |
-| `docs/screenshots/actors.png` | 界面预览、Hero |
-| `docs/screenshots/detail.png` | 界面预览、核心能力、Hero |
-| `docs/screenshots/cast-finder.png` | 核心能力（共演检索） |
-| `docs/screenshots/search.png` | 其他能力一栏 |
-| `docs/screenshots/facets.png` | 其他能力一栏（导演 = 一行一条长图版式） |
-| `docs/screenshots/actor-detail.png` | 其他能力一栏 |
-| `docs/screenshots/player-settings.png` | 其他能力一栏 |
-| `docs/screenshots/library-filter.png` · `facet-media.png` · `detail-stills.png` · `favorites.png` | Wiki |
+| `docs/screenshots/home.png` | Hero、其余能力 |
+| `docs/screenshots/library.png` | 其余能力 |
+| `docs/screenshots/actors.png` | 其余能力 |
+| `docs/screenshots/detail.png` | 其余能力（系列卡） |
+| `docs/screenshots/cast-finder.png` | **四件别处没有的**（共演检索）+ Hero |
+| `docs/screenshots/gacha.png` | **四件别处没有的**（抽卡） |
+| `docs/screenshots/highlights.png` | **四件别处没有的**（亮点，宽幅特写） |
+| `docs/screenshots/blindbox.png` | **四件别处没有的**（剧照盲盒） |
+| `docs/screenshots/facets.png` | 其余能力（分类） |
+| `docs/screenshots/detail-stills.png` | 其余能力（剧照瀑布流） |
+| `docs/screenshots/search.png` | 其余能力（搜索） |
+| `docs/screenshots/player-settings.png` | 其余能力（播放器设置） |
+| `docs/screenshots/library-filter.png` · `facet-media.png` · `favorites.png` | Wiki |
 
-规格：720×1507 PNG，状态栏已裁掉，宽度统一；新增截图沿用同一尺寸，别混入不同比例。
+规格：
+
+- 整屏截图：1280×2832 原图裁掉状态栏后缩到 **720 宽**。状态栏高度随 UI 改版变过：
+  旧版（`tailwind` 之前）是 152px，沉浸式 UI 之后是 **58px** —— 按 152 裁会把页头切掉，重拍时先确认。
+- 功能特写：允许宽幅（当前 `highlights.png` 是 1280×532），只保留能说明该功能的那一段，
+  避开标签墙、简介等容易带入露骨文案的区域。
+- 两张「一屏放不下」的图（`gacha` / `blindbox`）在 README 里按 150 宽显示，高度差在缩略尺寸下看不出来。
 
 ## 5. 实现约束
 
