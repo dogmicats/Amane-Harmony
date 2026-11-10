@@ -1,6 +1,6 @@
 # Amane-Harmony
 
-自建 [Amane](https://github.com/sqzw-x/amane) 媒体库的**鸿蒙原生客户端**：媒体库与分类浏览、共演检索、收藏续播、网盘源流畅播放、外挂字幕——核心体验都在手机上完成。旁挂服务只是辅助：一个纯标准库的单文件服务，负责补齐筛选、字幕与播放代理这些 Amane 本体没有的能力。
+自建 [Amane](https://github.com/sqzw-x/amane) 媒体库的**鸿蒙原生客户端**：媒体库与分类浏览、共演检索、收藏续播、网盘源流畅播放、外挂字幕——核心体验都在手机上完成。附带辅助用的旁挂服务：一个纯标准库的单文件服务，负责补齐筛选、字幕与播放代理这些 Amane 本体没有的能力。
 
 <p align="center">
   <img src="docs/screenshots/home.png" width="196" alt="首页">
