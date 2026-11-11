@@ -36,7 +36,7 @@
     <td width="33%" valign="top">
       <img src="docs/screenshots/facets.png" width="210"><br>
       <strong>③ 分类体系</strong><br>
-      <sub>Emby 连一个能翻的演员墙都没有——想看某个人的全部作品，得进设置翻 metadata 里的 people 文件夹自己导出来。标签管理更是混乱的鸡肋功能。这里演员、标签、系列、制片厂、导演都是能直接翻的墙，视图多变，保你好看。<br><strong>多类入口 · 优化布局 ·横幅生成· 且均可收藏</strong></sub>
+      <sub>Emby 连一个能翻的演员墙都没有——想看某个人的全部作品，得进设置翻 metadata 里的 people 文件夹自己导出来。标签管理更是混乱的鸡肋功能。这里演员、标签、系列、制片厂、导演都是能直接翻的墙，视图多变，保你好看。<br><strong>多类入口 · 优化布局 ·横幅生成· 可隐藏、可收藏</strong></sub>
     </td>
   </tr>
 </table>
