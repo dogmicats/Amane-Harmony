@@ -15,6 +15,17 @@
     "requestPermissions": [
       {
         "name": "ohos.permission.INTERNET"
+      },
+      {
+        // 重力传感器：判断「用户是否改变了手机方向」——点全屏/按返回后的方向锁定，
+        // 要等他真的把手机转过去才交还重力（2.4.6.22 反馈）。
+        // normal 级，安装即授予，不弹窗。
+        "name": "ohos.permission.ACCELEROMETER",
+        "reason": "$string:permission_gravity_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "inuse"
+        }
       }
     ],
     "metadata": [

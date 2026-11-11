@@ -27,8 +27,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 import urllib.request
+from datetime import date
 
 A = None  # type: ignore[assignment]
+
+# 核心是否提供 amane_rel（关键词相关性分档）：None = 还没检测过
+_REL_OK: bool | None = None
 
 SORT_VALUES = {
     "name", "count", "updated_at", "has_image",
@@ -182,6 +186,137 @@ def _marks_of(ids: list) -> dict:
     return out
 
 
+def _has_rel() -> bool:
+    """核心 1.3.41+ 在 amane_db() 连接上注册了 amane_rel(name, kw)（相关性分档）。
+
+    只检测一次：老核心没有这个函数时搜索退回上游代理，不因为排序升级把搜索打挂。
+    """
+    global _REL_OK
+    if _REL_OK is None:
+        try:
+            with A.amane_db() as conn:
+                conn.execute("SELECT amane_rel('a', 'a')").fetchone()
+            _REL_OK = True
+        except Exception:  # noqa: BLE001
+            _REL_OK = False
+            A.log("WARN actors: 核心未提供 amane_rel，搜索退回上游")
+    return _REL_OK
+
+
+# 搜索分支的排序键：只映射确定存在的列，其余（updated_at / has_image）退回名字，
+# 免得因为猜错列名让整个搜索 500。作品数用 SELECT 里算好的别名 cnt。
+_SEARCH_SORT = {
+    "count": "cnt",
+    "name": "a.name COLLATE NOCASE",
+    "birthday": "a.birthday",
+    "height": "a.height",
+    "bust": "a.bust",
+    "waist": "a.waist",
+    "hip": "a.hip",
+    "cup": "a.cup",
+}
+
+
+def _search_actors(handler, params: dict, query: dict) -> bool:
+    """搜索演员：本地库按相关性排序 + 精确分页（2.4.6.21）。
+
+    为什么不能直接透传上游：`/api/actors?search=` 只有「包含匹配」，排序是作品数
+    / 名字。排序必须发生在 LIMIT 之前才有意义（否则只有第一页是对的），所以这里
+    在 actors + actor_aliases 上一次算好档位，分页在 SQL 里做。
+
+    卡片字段仍用上游 `ids=` 批量取：头像代理、count 口径、字段裁剪与列表其它分支
+    保持一致，不在这里另造一套。返回 True = 已写响应。
+    """
+    kw = params.get("search") or ""
+    if not _has_rel() or not kw:
+        return False
+
+    where: list[str] = [
+        "(amane_rel(a.name, ?) IS NOT NULL "
+        "OR EXISTS (SELECT 1 FROM actor_aliases ax WHERE ax.actor_id = a.id "
+        "AND amane_rel(ax.name, ?) IS NOT NULL))"
+    ]
+    args: list = [kw, kw]
+
+    gender = [g for g in (query.get("gender") or []) if g in ("female", "male", "unknown")]
+    if gender:
+        where.append(f"LOWER(a.gender) IN ({','.join('?' * len(gender))})")
+        args.extend(gender)
+    if _one(query, "has_image", "true") in ("true", "1"):
+        where.append("a.image_urls IS NOT NULL AND a.image_urls NOT IN ('', '[]', 'null')")
+    for key in ("height", "bust", "waist", "hip"):
+        for edge, op in (("min", ">="), ("max", "<=")):
+            raw = _one(query, f"{key}_{edge}")
+            if raw.isdigit():
+                where.append(f"a.{key} {op} ?")
+                args.append(int(raw))
+    for edge, op in (("min", ">="), ("max", "<=")):
+        raw = _one(query, f"birthday_{edge}")
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+            where.append(f"substr(a.birthday, 1, 10) {op} ?")
+            args.append(raw)
+    for edge, op in (("min", ">="), ("max", "<=")):
+        cup = _one(query, f"cup_{edge}").strip().upper()
+        if len(cup) == 1 and cup in _CUP:
+            where.append(f"UPPER(a.cup) {op} ?")
+            args.append(cup)
+    place = _one(query, "birthplace").strip()
+    if place:
+        where.append("a.birthplace LIKE ?")
+        args.append(f"%{place[:40]}%")
+
+    cond = " AND ".join(where)
+    order = params["order"].upper()
+    sort_col = _SEARCH_SORT.get(params["sort_by"], "a.name COLLATE NOCASE")
+    # rel 越小越准；同档按用户选的排序，再按名字长度（更短的通常更接近）
+    order_sql = f"rel ASC, {sort_col} {order}, LENGTH(a.name) ASC, a.id ASC"
+    sql = (
+        "SELECT a.id AS id, "
+        "(SELECT COUNT(*) FROM metadata_actors ma "
+        " JOIN media_files f ON f.metadata_id = ma.metadata_id "
+        " WHERE ma.actor_id = a.id) AS cnt, "
+        "COALESCE(amane_rel(a.name, ?), "
+        "(SELECT MIN(amane_rel(al.name, ?)) FROM actor_aliases al "
+        " WHERE al.actor_id = a.id)) AS rel "
+        "FROM actors a "
+        f"WHERE {cond} ORDER BY {order_sql} LIMIT ? OFFSET ?"
+    )
+    count_sql = f"SELECT COUNT(*) FROM actors a WHERE {cond}"
+    try:
+        with A.amane_db() as conn:
+            rows = conn.execute(
+                sql, (kw, kw, *args, params["limit"], params["offset"])).fetchall()
+            total = _num(conn.execute(count_sql, args).fetchone()[0])
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"ERROR actors 搜索失败: {exc}")
+        return False
+
+    ids = [_num(r["id"]) for r in rows]
+    if not ids:
+        handler._json({"items": [], "total": total, "offset": params["offset"],
+                       "limit": params["limit"]})
+        return True
+    _up = _upstream("/api/actors", {"ids": ids, "limit": len(ids)}, handler)
+    if _up is None:
+        return True
+    by_id: dict = {}
+    for a in (_up.get("items") or []):
+        if isinstance(a, dict):
+            by_id[_num(a.get("id"))] = a
+    fav = _fav_set()
+    items: list = []
+    for aid in ids:              # 相关性顺序由本地 SQL 决定，上游 IN 查询不保序
+        raw = by_id.get(aid)
+        if raw is None:
+            continue
+        card = _card(raw)
+        card["isFavorite"] = aid in fav
+        items.append(card)
+    handler._json({"items": items, "total": total, "offset": params["offset"],
+                   "limit": params["limit"]})
+    return True
+
+
 def actors_list(handler, query, *_):
     """GET /api/user/actors —— 演员网格，分页 + 搜索 + 排序 + 多维筛选。
 
@@ -225,10 +360,21 @@ def actors_list(handler, query, *_):
     if place:
         params["birthplace"] = place[:40]
 
+    # 只看收藏：上游没有这个筛选条件，走本地的收藏表
+    if _one(query, "favorite") in ("true", "1"):
+        return _favorite_actors(handler, params)
+
+    # 有关键词：本地按相关性排序（越精准越靠前），分页仍然准
+    if search and _search_actors(handler, params, query):
+        return
+
     data = _upstream("/api/actors", params, handler)
     if data is None:
         return
     items = [_card(a) for a in (data.get("items") or []) if isinstance(a, dict)]
+    fav = _fav_set()
+    for it in items:
+        it["isFavorite"] = int(it.get("id") or 0) in fav
     handler._json({
         "items": items,
         "total": _num(data.get("total")),
@@ -253,6 +399,7 @@ def actors_detail(handler, query, actor_id, *_):
         "hip": _num(data.get("hip")),
         "avatars": _images(data.get("image_urls")) + gallery_of(int(actor_id)),
         "updated_at": _text(data.get("updated_at")),
+        "isFavorite": int(actor_id) in _fav_set(),
     })
     handler._json(out)
 
@@ -389,16 +536,36 @@ def _avatars_for(ids: list[int]) -> dict:
     return out
 
 
+def _age_of(release, birthday) -> int:
+    """发行日 − 生日 = 这位演员出演本片时的周岁。0 = 资料不足，不显示。
+
+    上游 amane 没有「出演时岁数」字段，只有 metadata.release 与 actors.birthday。
+    口径必须与核心 /api/user/browse 的 cast_age_min/max 里的 SQL 完全一致：
+    年份差，若发行日还没到当年生日再减一岁。异常日期 / 超出 18~90 一律当 0：
+    客户端年龄分桶从 18 起，低于 18 的岁数不展示、不参与筛选与排序
+    （2026-11-10 2.4.4.1 收紧，原先 10~90 会让脏生日算出 12 岁这种值）。
+    """
+    try:
+        r = date.fromisoformat(str(release)[:10])
+        b = date.fromisoformat(str(birthday)[:10])
+    except (TypeError, ValueError):
+        return 0
+    age = r.year - b.year - (1 if (r.month, r.day) < (b.month, b.day) else 0)
+    return age if 18 <= age <= 90 else 0
+
+
 def _cast_rows(metadata_ids: list[int]) -> dict:
-    """一次查出这些影片的演员（含性别），用于结果卡片上直接展示阵容。"""
+    """一次查出这些影片的演员（含性别、出演时岁数），用于结果卡片上直接展示阵容。"""
     if not metadata_ids:
         return {}
     ph = ",".join("?" * len(metadata_ids))
     out: dict = {}
     with A.amane_db() as conn:
         rows = conn.execute(
-            "SELECT ma.metadata_id, a.id, a.name, a.gender FROM metadata_actors ma "
+            "SELECT ma.metadata_id, a.id, a.name, a.gender, a.birthday, m.release "
+            "FROM metadata_actors ma "
             "JOIN actors a ON a.id = ma.actor_id "
+            "JOIN metadata m ON m.id = ma.metadata_id "
             f"WHERE ma.metadata_id IN ({ph}) ORDER BY ma.position, a.id",
             metadata_ids,
         ).fetchall()
@@ -410,6 +577,7 @@ def _cast_rows(metadata_ids: list[int]) -> dict:
             "id": r["id"],
             "name": r["name"] or "",
             "gender": gender,
+            "age": _age_of(r["release"], r["birthday"]),
         })
     return out
 
@@ -577,6 +745,21 @@ def _cast_filter(query: dict) -> dict:
         where.append("CAST(substr(m.release, 1, 4) AS INTEGER) BETWEEN ? AND ?")
         params.extend([lo, hi])
 
+    # 清单内关键词（2.4.6.26 起）：番号 / 标题。
+    # 演员作品页以前只能一路往下翻，找「TA 演的 IPZZ-436」得靠记番号前缀。
+    # amane_rel 做归一化（全角、大小写、少个连字符都能命中），老核心没有这个
+    # 标量函数时退回 LIKE —— 别为了搜索把整个列表打成 500。
+    kw = (_one(query, "search") or _one(query, "q") or "").strip()[:40]
+    if kw:
+        if _has_rel():
+            where.append("(amane_rel(m.number, ?) IS NOT NULL "
+                         "OR amane_rel(m.title, ?) IS NOT NULL)")
+            params.extend([kw, kw])
+        else:
+            like = f"%{kw}%"
+            where.append("(m.number LIKE ? OR m.title LIKE ?)")
+            params.extend([like, like])
+
     # HAVING 里不能用 SELECT 别名：COUNT 查询的投影里没有这些别名，SQLite 会直接报
     # "no such column"，所以条件写完整聚合表达式。
     female_sum = "SUM(CASE WHEN LOWER(a.gender) = 'female' THEN 1 ELSE 0 END)"
@@ -590,6 +773,21 @@ def _cast_filter(query: dict) -> dict:
     if male_n:
         having.append(f"{male_sum} IN ({','.join('?' * len(male_n))})")
         extra.extend(male_n)
+
+    # 本地筛选（我的评分 / 收藏夹）：直接复用核心 browse_where 钩子的 clauses。
+    # 那些条件的锚点就是 `m.id`，而这里的 SQL 也把 metadata 别名成 m，所以能原样拼进去；
+    # 放在 body 之前追加，WHERE 才对 total 与分页查询同时生效。
+    for fn in getattr(A, "hooks", {}).get("browse_where", []):
+        try:
+            out = fn(query) or {}
+        except Exception as exc:  # noqa: BLE001
+            A.log(f"ERROR 扩展 hook browse_where: {exc}")
+            continue
+        for clause in out.get("clauses", []):
+            if isinstance(clause, (tuple, list)) and len(clause) == 2:
+                where.append(str(clause[0]))
+                params.extend(clause[1])
+
     body = (
         "FROM metadata m "
         "JOIN metadata_actors ma ON ma.metadata_id = m.id "
@@ -638,9 +836,17 @@ def cast_find(handler, query, *_):
     body: str = f["body"]
 
     sort_by = _one(query, "sort_by", "release")
-    if sort_by not in CAST_SORT:
+    # 我的评分：核心 SORTS 里没有这一档，由 ratings 扩展的求值钩子给出分档 CASE
+    myrating_expr = ""
+    if sort_by == "myrating":
+        got = A.call_hook("browse_sort", "myrating")
+        if isinstance(got, dict) and got.get("expr"):
+            myrating_expr = str(got["expr"])
+    if sort_by not in CAST_SORT and not myrating_expr:
         sort_by = "release"
     order = "ASC" if _one(query, "order", "desc") == "asc" else "DESC"
+    order_sql = (f"{myrating_expr} {order}" if myrating_expr
+                 else f"{CAST_SORT[sort_by]} {order}")
     offset = _int(_one(query, "offset", "0"), 0, 0, 100000)
     limit = _int(_one(query, "limit", "30"), 30, 1, 100)
 
@@ -658,7 +864,7 @@ def cast_find(handler, query, *_):
             rows = conn.execute(
                 "SELECT m.id, m.number, m.title, m.release, m.runtime, m.content_type, "
                 "m.poster_urls, m.thumb_urls, m.scores, " + agg + " " + body +
-                f" ORDER BY {CAST_SORT[sort_by]} {order}, m.id DESC LIMIT ? OFFSET ?",
+                f" ORDER BY {order_sql}, m.id DESC LIMIT ? OFFSET ?",
                 params + extra + [limit, offset],
             ).fetchall()
     except Exception as exc:  # noqa: BLE001
@@ -696,6 +902,13 @@ def cast_find(handler, query, *_):
             "cast": cast[:8],
             "directors": dir_map.get(r["id"], [])[:3],
         })
+    # ratings / collections 扩展在这里补 my_rating / collection_ids：
+    # 海报角标要显示「我的评价」，这两项不走核心 attach_marks，得手动问一次。
+    try:
+        A.call("marks_extra", items)
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"WARN cast_find marks_extra: {exc}")
+
     handler._json({
         "items": items,
         "total": _num(total),
@@ -853,6 +1066,159 @@ GALLERY_DDL = (
     " created_at TEXT NOT NULL,"
     " UNIQUE(actor_id, url));"
 )
+
+# ---- 演员收藏 --------------------------------------------------------------- #
+# 上游 actors 表**没有** is_favorite 列（标签 / 系列 / 导演有），所以演员收藏
+# 只能落在旁挂 user.db，不写上游、不影响刮削。收藏顺序按时间倒序，
+# 「最近收藏的演员」排在前面 —— 与影片收藏的时间序一致。
+FAV_DDL = (
+    "CREATE TABLE IF NOT EXISTS actor_favorites ("
+    " actor_id INTEGER PRIMARY KEY,"
+    " created_at TEXT NOT NULL);"
+)
+
+
+def _fav_ids() -> list[int]:
+    """收藏的演员 id，最近收藏在前。"""
+    try:
+        with A.user_db() as conn:
+            return [int(r["actor_id"]) for r in conn.execute(
+                "SELECT actor_id FROM actor_favorites ORDER BY created_at DESC")]
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"WARN actors 取收藏失败: {exc}")
+        return []
+
+
+def _fav_set() -> set:
+    return set(_fav_ids())
+
+
+def _actor_posters(ids: list, per: int = 12) -> dict:
+    """每位演员最近几部作品的海报（带影片 id）——收藏页横版行里点海报直接进影片。
+
+    一次窗口函数取完，不做 N 次查询；只算「有媒体文件」的片子，避免海报指向空条目。
+    库里 poster_urls/thumb_urls 是 JSON 字符串，_poster() 只吃列表，所以先解析。
+    """
+    out: dict = {}
+    if not ids:
+        return out
+    ph = ",".join("?" * len(ids))
+    sql = (
+        "SELECT actor_id, mid, poster_urls, thumb_urls FROM ("
+        " SELECT ma.actor_id AS actor_id, m.id AS mid, m.poster_urls, m.thumb_urls,"
+        "  ROW_NUMBER() OVER (PARTITION BY ma.actor_id"
+        "   ORDER BY m.release DESC, m.id DESC) AS rn"
+        " FROM metadata_actors ma JOIN metadata m ON m.id = ma.metadata_id"
+        f" WHERE ma.actor_id IN ({ph})"
+        "  AND EXISTS (SELECT 1 FROM media_files f WHERE f.metadata_id = m.id)"
+        ") WHERE rn <= ?"
+    )
+    try:
+        with A.amane_db() as conn:
+            rows = conn.execute(sql, (*ids, per)).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"WARN actors 取收藏海报失败: {exc}")
+        return out
+    for r in rows:
+        d = dict(r)
+        for key in ("poster_urls", "thumb_urls"):
+            raw = d.get(key)
+            if isinstance(raw, str):
+                try:
+                    d[key] = A.json.loads(raw)
+                except (TypeError, ValueError):
+                    d[key] = []
+        p = _poster(d)
+        if not p:
+            continue
+        out.setdefault(int(d["actor_id"]), []).append(
+            {"id": int(d["mid"]), "url": p})
+    return out
+
+
+def _favorite_actors(handler, params: dict) -> None:
+    """只看收藏：上游不支持这个筛选，直接按 user.db 的顺序查只读库。
+
+    不走 `/api/actors` 有两个原因：上游没有收藏列；按 id 逐个回源会是 N 次请求。
+    这里一次 IN 查询就够，分页在本地按收藏顺序切。
+    """
+    ids = _fav_ids()
+    total = len(ids)
+    start = params["offset"]
+    page = ids[start:start + params["limit"]]
+    items: list = []
+    if not page:
+        handler._json({"items": [], "total": total, "offset": start,
+                       "limit": params["limit"]})
+        return
+    ph = ",".join("?" * len(page))
+    try:
+        with A.amane_db() as conn:
+            rows = conn.execute(
+                "SELECT a.id, a.name, a.gender, a.birthday, a.birthplace, a.height, "
+                "a.bust, a.waist, a.hip, a.cup, a.image_urls, "
+                "(SELECT COUNT(*) FROM metadata_actors ma "
+                " JOIN media_files f ON f.metadata_id = ma.metadata_id "
+                " WHERE ma.actor_id = a.id) AS cnt "
+                f"FROM actors a WHERE a.id IN ({ph})", page).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"ERROR actors 收藏列表: {exc}")
+        return handler._error(500, f"读取演员收藏失败: {exc}")
+    by_id: dict = {}
+    for r in rows:
+        d = dict(r)
+        d["count"] = d.pop("cnt", 0)
+        # image_urls 在库里是 JSON 字符串，_card()/_images() 只吃列表
+        raw = d.get("image_urls")
+        if isinstance(raw, str):
+            try:
+                d["image_urls"] = A.json.loads(raw)
+            except (TypeError, ValueError):
+                d["image_urls"] = []
+        by_id[int(d["id"])] = d
+    for aid in page:               # 保持「最近收藏在前」，不被 IN 查询的顺序打乱
+        d = by_id.get(aid)
+        if d is None:              # 演员被上游删了：跳过，不占位
+            continue
+        card = _card(d)
+        card["isFavorite"] = True
+        items.append(card)
+    posters = _actor_posters([int(it["id"]) for it in items])
+    for it in items:
+        it["posters"] = posters.get(int(it["id"]), [])
+    handler._json({"items": items, "total": total, "offset": start,
+                   "limit": params["limit"]})
+
+
+def actor_favorite(handler, query, actor_id, *_):
+    """POST /api/user/actors/{id}/favorite —— 收藏 / 取消收藏演员。
+
+    body: {favorite: true|false}；与影片收藏、分类收藏都是独立的数据。
+    """
+    aid = _int(actor_id, 0, 1, 10 ** 9)
+    body = handler._body() or {}
+    raw = body.get("favorite")
+    if isinstance(raw, bool):
+        want = raw
+    elif isinstance(raw, (int, float)):
+        want = bool(raw)
+    else:
+        want = str(raw).strip().lower() in ("1", "true", "yes", "on")
+    try:
+        with A.user_db() as conn:
+            if want:
+                conn.execute(
+                    "INSERT INTO actor_favorites(actor_id, created_at) VALUES(?, ?) "
+                    "ON CONFLICT(actor_id) DO NOTHING", (aid, A.now_iso()))
+            else:
+                conn.execute("DELETE FROM actor_favorites WHERE actor_id = ?", (aid,))
+            total = int(conn.execute(
+                "SELECT COUNT(*) AS c FROM actor_favorites").fetchone()["c"])
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"ERROR actors 收藏 {aid}: {exc}")
+        return handler._error(500, f"保存失败: {exc}")
+    handler._json({"ok": True, "id": aid, "favorite": want, "total": total})
+
 
 
 def gallery_of(actor_id: int) -> list[str]:
@@ -1133,12 +1499,153 @@ def gallery_fetch(handler, query, actor_id, *_):
                    "items": gallery_of(aid), "source": "gfriends"})
 
 
+def actor_series(handler, query, actor_id, *_):
+    """GET /api/user/actors/{id}/series —— 这位演员参演过哪些系列。
+
+    系列在 metadata 上是名字列，series 表里才有 id，所以按名字聚合后再回连 id。
+    返回按参演片数倒序；同数量的按最近发行排，新片多的系列更值得看。
+    """
+    aid = _int(actor_id, 0, 0, 10 ** 9)
+    limit = _int(_one(query, "limit", "24"), 24, 1, 60)
+    try:
+        with A.amane_db() as conn:
+            rows = conn.execute(
+                "SELECT m.series AS name, COUNT(*) n, MAX(m.release) last, MIN(m.id) sample_id "
+                "FROM metadata_actors ma JOIN metadata m ON m.id = ma.metadata_id "
+                "WHERE ma.actor_id = ? AND m.series IS NOT NULL AND TRIM(m.series) <> '' "
+                "GROUP BY m.series ORDER BY n DESC, last DESC LIMIT ?",
+                (aid, limit),
+            ).fetchall()
+            ids = [r["name"] for r in rows]
+            id_map = {}
+            if ids:
+                ph = ",".join("?" * len(ids))
+                for r in conn.execute(f"SELECT id, name FROM series WHERE name IN ({ph})", ids):
+                    id_map[r["name"]] = int(r["id"])
+            sample_ids = [int(r["sample_id"]) for r in rows]
+            posters = {}
+            if sample_ids:
+                ph2 = ",".join("?" * len(sample_ids))
+                for r in conn.execute(
+                        f"SELECT id, poster_urls, thumb_urls FROM metadata WHERE id IN ({ph2})",
+                        sample_ids):
+                    posters[int(r["id"])] = _poster_of(r)
+    except Exception as exc:  # noqa: BLE001
+        return handler._error(500, f"取参演系列失败: {exc}")
+    items = []
+    for r in rows:
+        items.append({
+            "id": id_map.get(r["name"], 0),
+            "name": r["name"] or "",
+            "count": int(r["n"]),
+            "poster": posters.get(int(r["sample_id"]), ""),
+        })
+    handler._json({"items": items})
+
+def actor_co_actors(handler, query, actor_id, *_):
+    """GET /api/user/actors/{id}/co-actors —— 和这位演员同片出现过的人 + 共演片数。
+
+    演员作品筛选页的「合作演员」候选原来只有名字，挑人全凭记忆猜「跟谁的片子多」；
+    这里给的是**与本人共演**的片数（不是对方的全部作品数），选之前就知道能收到几部，
+    也让「共演筛选」这件事在点之前就有个预期。
+
+    没给关键词时按共演片数倒序 —— 那正好是「最常合作的人」，比按名字或总作品数排有用。
+    """
+    aid = _int(actor_id, 0, 0, 10 ** 9)
+    if aid <= 0:
+        return handler._error(400, "actor_id 不合法")
+    limit = _int(_one(query, "limit", "24"), 24, 1, 60)
+    offset = _int(_one(query, "offset", "0"), 0, 0, 100000)
+    kw = (_one(query, "search") or "").strip()[:40]
+    # 候选分男女（2.4.6.26 起）：挑合作演员时绝大多数时候只想看女演员，
+    # 男演员（监督 / 男优）混在几十个人里得翻半天。
+    gender = (_one(query, "gender") or "").strip().lower()
+    rel_on = bool(kw) and _has_rel()
+
+    where = ["ma.actor_id <> ?"]
+    search_args: list = []
+    if gender in ("female", "male"):
+        # 库里这两个值的大小写不统一（上游某些条是 Male / Female），直接比会全空
+        where.append("LOWER(TRIM(a.gender)) = ?")
+        search_args.append(gender)
+    if kw:
+        if rel_on:
+            # 姓名与别名同级：中文圈叫的「蕾」是「つぼみ」的别名
+            where.append(
+                "(amane_rel(a.name, ?) IS NOT NULL OR EXISTS ("
+                "SELECT 1 FROM actor_aliases ax WHERE ax.actor_id = a.id "
+                "AND amane_rel(ax.name, ?) IS NOT NULL))")
+            search_args.extend([kw, kw])
+        else:                       # 老核心没有 amane_rel：退回包含匹配，别把搜索打挂
+            where.append("a.name LIKE ?")
+            search_args.append(f"%{kw}%")
+    cond = " AND ".join(where)
+
+    rel_sql = ("COALESCE(amane_rel(a.name, ?), "
+               "(SELECT MIN(amane_rel(al.name, ?)) FROM actor_aliases al "
+               "WHERE al.actor_id = a.id)) AS rel") if rel_on else "0 AS rel"
+    base = (
+        "FROM metadata_actors ma "
+        "JOIN (SELECT DISTINCT metadata_id FROM metadata_actors WHERE actor_id = ?) mine "
+        "ON mine.metadata_id = ma.metadata_id "
+        "JOIN actors a ON a.id = ma.actor_id "
+        f"WHERE {cond} "
+    )
+    order = "rel ASC, shared DESC, a.id ASC" if rel_on else "shared DESC, a.id ASC"
+    sql = (
+        "SELECT a.id AS id, a.name AS name, a.gender AS gender, "
+        f"a.image_urls AS image_urls, COUNT(*) AS shared, {rel_sql} "
+        f"{base} GROUP BY a.id ORDER BY {order} LIMIT ? OFFSET ?"
+    )
+    count_sql = "SELECT COUNT(DISTINCT ma.actor_id) " + base
+    args: list = ([kw, kw] if rel_on else []) + [aid, aid] + search_args + [limit, offset]
+    # COUNT 复用同一个 base：两个 aid 占位（mine 子查询 + ma.actor_id <> ?）
+    count_args: list = [aid, aid] + search_args
+    try:
+        with A.amane_db() as conn:
+            rows = conn.execute(sql, args).fetchall()
+            total = _num(conn.execute(count_sql, count_args).fetchone()[0])
+    except Exception as exc:  # noqa: BLE001
+        return handler._error(500, f"取合作演员失败: {exc}")
+
+    items = []
+    for r in rows:
+        raw = r["image_urls"]
+        imgs = raw
+        if isinstance(raw, str):
+            try:
+                imgs = A.json.loads(raw)
+            except (TypeError, ValueError):
+                imgs = []
+        if not isinstance(imgs, list):
+            imgs = []
+        # 候选只显示一张头像：只代理前两个，别为 24 个人把整串图都转一遍
+        avatar = ""
+        for u in imgs[:2]:
+            if isinstance(u, str):
+                p = A.public_image(u)
+                if p:
+                    avatar = p
+                    break
+        items.append({
+            "id": _num(r["id"]),
+            "name": _text(r["name"]),
+            "gender": (_text(r["gender"]) or "unknown").strip().lower(),
+            "avatar": avatar,
+            "shared": _num(r["shared"]),
+        })
+    handler._json({"items": items, "total": total,
+                   "offset": offset, "limit": limit})
+
 ROUTES = [
     ("GET", r"/api/user/actors", actors_list),
     ("GET", r"/api/user/actors/lookup", actors_lookup),
     ("GET", r"/api/user/actors/(\d+)", actors_detail),
+    ("POST", r"/api/user/actors/(\d+)/favorite", actor_favorite),
     ("GET", r"/api/user/actors/(\d+)/media", actors_media),
     ("GET", r"/api/user/actors/(\d+)/stills", actors_stills),
+    ("GET", r"/api/user/actors/(\d+)/series", actor_series),
+    ("GET", r"/api/user/actors/(\d+)/co-actors", actor_co_actors),
     ("GET", r"/api/user/actors/(\d+)/gallery", gallery_list),
     ("POST", r"/api/user/actors/(\d+)/gallery", gallery_add),
     ("POST", r"/api/user/actors/(\d+)/gallery/upload", gallery_upload),
@@ -1261,6 +1768,7 @@ def install(api) -> dict:
     global A  # noqa: PLW0603
     A = api
     api.add_ddl(GALLERY_DDL)
+    api.add_ddl(FAV_DDL)
     for method, pattern, fn in ROUTES:
         api.route(method, pattern)(fn)
     api.hook("suggest_entities", suggest_entities)

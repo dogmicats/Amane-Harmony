@@ -141,23 +141,27 @@ export struct ProfileTab {
         .width('100%')
 
         Column({ space: 10 }) {
+          this.MenuRow('✎', '我的评价', '', 'comment', () => {
+            router.pushUrl({ url: 'pages/MyCommentsPage' });
+          })
+          this.MenuRow('⌗', '我的弹幕', '播放时发的时间点，点一条回到那里', 'comment', () => {
+            router.pushUrl({ url: 'pages/MyAnnotationsPage' });
+          })
+          this.MenuRow('◎', '我的截帧', '我截的关键帧：看、跳、删', 'comment', () => {
+            router.pushUrl({ url: 'pages/FramePicksPage' });
+          })
           this.MenuRow('▶', '观看记录', '', 'history', () => {
             router.pushUrl({ url: 'pages/HistoryPage' });
+          })
+          this.MenuRow('◷', '稍后再看', '想看的先记一下，回头再看', 'static', () => {
+            router.pushUrl({ url: 'pages/WatchLaterPage' });
           })
           this.MenuRow('▤', '网页管理', '刮削、入库、任务队列', 'static', () => {
             router.pushUrl({ url: 'pages/WebPage' });
           })
-          this.MenuRow('⚙', '连接设置', '', 'server', () => {
+          // 播放器 / 更新日志 / 关于 都在「设置」里，这里不再重复（2026-11-11 去重）
+          this.MenuRow('⚙', '设置', '', 'server', () => {
             router.pushUrl({ url: 'pages/SettingsPage' });
-          })
-          this.MenuRow('▷', '播放器', '硬解、缓冲、拖动响应', 'static', () => {
-            router.pushUrl({ url: 'pages/PlayerSettingsPage' });
-          })
-          this.MenuRow('☰', '更新日志', '每一版改了什么', 'static', () => {
-            router.pushUrl({ url: 'pages/ChangelogPage' });
-          })
-          this.MenuRow('ⓘ', '关于应用', '版本、运行环境、致谢', 'static', () => {
-            router.pushUrl({ url: 'pages/AboutPage' });
           })
         }
         .width('100%')

@@ -1,7 +1,7 @@
 import { router } from '@kit.ArkUI';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
-import { FacetItem, emptyFacet, FacetParams, facetLabel } from './FacetTypes';
+import { FacetItem, emptyFacet, FacetParams, PrefixParams, facetLabel } from './FacetTypes';
 
 /** @Prop 的默认值必须是完整字面量：FacetItem 新增字段时只改这里，别散落在组件里。 */
 function emptyItemSeries(): FacetItem {
@@ -140,6 +140,18 @@ export struct FacetTagChips {
   @Prop tags: FacetItem[] = [];
   @Prop userTags: FacetItem[] = [];
   @Prop directors: FacetItem[] = [];
+  /** 制片商（id 来自 item_facets 的 studio，0 表示没有）；点它进制片商影片墙。 */
+  @Prop studio: FacetItem = emptyFacet();
+  /** 本部番号的前缀；非空时给一个「同番号前缀」标签。 */
+  @Prop prefix: string = '';
+
+  private openPrefix(): void {
+    if (this.prefix.length === 0) {
+      return;
+    }
+    const params: PrefixParams = { prefix: this.prefix };
+    router.pushUrl({ url: 'pages/PrefixPage', params: params });
+  }
 
   @Builder
   Group(label: string, kind: string, items: FacetItem[]) {
@@ -178,6 +190,45 @@ export struct FacetTagChips {
       }
       if (this.directors.length > 0) {
         this.Group(facetLabel('director'), 'director', this.directors)
+      }
+      // 制片厂 / 同番号前缀：和标签同一套小标签样式，放在标签栏最下面。
+      // 这两个是「这部片从哪来、还有哪些同编号的」，性质与标签不同，但入口就在这里最顺手。
+      if (this.studio.id > 0 || this.prefix.length > 0) {
+        Column({ space: 6 }) {
+          Text('出处')
+            .fontSize(12)
+            .fontColor(Theme.TEXT_FAINT)
+            .width('100%')
+          Flex({ wrap: FlexWrap.Wrap }) {
+            if (this.studio.id > 0) {
+              Text(`制片厂 · ${this.studio.name}`)
+                .fontSize(11)
+                .fontColor(Theme.TEXT)
+                .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+                .backgroundColor(Theme.CARD_HI)
+                .borderRadius(11)
+                .margin({ right: 6, bottom: 6 })
+                .onClick(() => {
+                  openFacet('studio', this.studio);
+                })
+            }
+            if (this.prefix.length > 0) {
+              Text(`同番号 ${this.prefix}`)
+                .fontSize(11)
+                .fontColor(Theme.ACCENT)
+                .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+                .backgroundColor(Theme.ACCENT_SOFT)
+                .borderRadius(11)
+                .margin({ right: 6, bottom: 6 })
+                .onClick(() => {
+                  this.openPrefix();
+                })
+            }
+          }
+          .width('100%')
+        }
+        .alignItems(HorizontalAlign.Start)
+        .width('100%')
       }
     }
     .width('100%')

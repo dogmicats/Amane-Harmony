@@ -25,6 +25,9 @@ const MIN_RATIO: number = 0.42;
 const MAX_RATIO: number = 2.8;
 /** 尺寸合并窗口。 */
 const SETTLE_MS: number = 180;
+/** 心形：已喜欢 / 未喜欢。已喜欢用暖粉，在任意画面上都看得清。 */
+const LIKE_ON: string = '#FF6B93';
+const LIKE_OFF: string = '#FFFFFF';
 
 @Component
 export struct StillsWall {
@@ -32,6 +35,14 @@ export struct StillsWall {
   @Prop @Watch('onInputChange') ratios: number[] = [];
   /** 点第几张（原始下标）。 */
   onPick: (index: number) => void = (index: number) => {};
+  /** 是否给每张图叠心形（喜欢功能）；false = 纯看图墙，行为和以前一样。 */
+  @Prop showLike: boolean = false;
+  /** 与 urls 等长：这一张是否已被喜欢。 */
+  @Prop liked: boolean[] = [];
+  /** 点心形（不会触发 onPick：小图标自己吃掉点击）。 */
+  onLike: (index: number) => void = (index: number) => {};
+  /** 与 urls 等长：这一张是不是「我自己截的帧」。是的话左下角标一下。 */
+  @Prop mined: boolean[] = [];
 
   @State left: number[] = [];
   @State right: number[] = [];
@@ -140,20 +151,61 @@ export struct StillsWall {
 
   @Builder
   tile(i: number) {
-    Image(Store.I.img(this.urls[i]))
-      .width('100%')
-      .aspectRatio(this.ratioAt(i))
-      .objectFit(ImageFit.Cover)
-      .borderRadius(10)
-      .backgroundColor(Theme.CARD)
-      .onComplete((e) => {
-        if (e !== undefined && e !== null) {
-          this.noteSize(i, e.width, e.height);
+    Stack({ alignContent: Alignment.TopEnd }) {
+      // 图片自己一层、且整块可点：嵌套滚动里只绑 Image 时偶发只命中内容区，
+      // 点了像没反应。心形是和它并列的另一层，点♥不会连带触发看图。
+      Stack({ alignContent: Alignment.BottomStart }) {
+        Image(Store.I.img(this.urls[i]))
+          .width('100%')
+          .aspectRatio(this.ratioAt(i))
+          .objectFit(ImageFit.Cover)
+          .borderRadius(10)
+          .backgroundColor(Theme.CARD)
+          .onComplete((e) => {
+            if (e !== undefined && e !== null) {
+              this.noteSize(i, e.width, e.height);
+            }
+          })
+
+        // 「我截的帧」标记（用户第 4 条）：刮削剧照和我自己截的必须一眼能分开。
+        if (i < this.mined.length && this.mined[i]) {
+          Row({ space: 3 }) {
+            Text('◎')
+              .fontSize(8)
+              .fontColor('#FFD06B')
+            Text('我截的')
+              .fontSize(8)
+              .fontColor('#FFFFFF')
+          }
+          .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+          .backgroundColor('#A6000000')
+          .borderRadius(6)
+          .margin({ left: 6, bottom: 6 })
+          .hitTestBehavior(HitTestMode.None)
         }
-      })
+      }
+      .width('100%')
       .onClick(() => {
         this.onPick(i);
       })
+
+      if (this.showLike) {
+        // 心形只在需要时叠上去：详情页 / 我的喜爱有，抽卡墙没有。
+        Text(i < this.liked.length && this.liked[i] ? '♥' : '♡')
+          .fontSize(15)
+          .fontColor(i < this.liked.length && this.liked[i] ? LIKE_ON : LIKE_OFF)
+          .width(26)
+          .height(26)
+          .textAlign(TextAlign.Center)
+          .borderRadius(13)
+          .backgroundColor('#59000000')
+          .margin({ top: 6, right: 6 })
+          .onClick(() => {
+            this.onLike(i);
+          })
+      }
+    }
+    .width('100%')
   }
 
   build() {

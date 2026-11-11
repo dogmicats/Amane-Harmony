@@ -46,6 +46,7 @@ import sys
 import threading
 import time
 import traceback
+import unicodedata
 from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -54,7 +55,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, build_opener, ProxyHandler
 
-VERSION = "2.4.0"
+VERSION = "2.5.0"
+
+# 「看完」的唯一口径：客户端 PlayerPage.saveProgress 与服务端兜底都用它。
+# 两处各写一个数（曾经 0.95 / 0.92）会出现「客户端显示看完、服务端没标完」的错位。
+FINISH_RATIO = 0.95
 
 AMANE_BASE = os.environ.get("AMANE_BASE", "http://127.0.0.1:8000").rstrip("/")
 AMANE_DATA = os.environ.get("AMANE_DATA", "/amane-data")
@@ -110,6 +115,68 @@ def log(msg: str) -> None:
     with _log_lock:
         sys.stdout.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
         sys.stdout.flush()
+
+
+# --------------------------------------------------------------------------- #
+# 关键词相关性：清单页搜索框统一口径（2.4.6.21）
+#
+# 各清单（影片库 / 演员 / 标签·系列·导演 / 收藏）除了「指定筛选」，还要能直接打
+# 关键词搜。只做 LIKE 有两个问题：一是全角/大小写/连字符不同就搜不到，二是命中
+# 之后没有「像不像」的顺序 —— 搜「三上」时「三上悠亜」和「三上理子」谁在前全看
+# 作品数。所以这里给出一套归一化 + 分档打分：
+#
+#   0 完全相等      normalize 之后一模一样（SPSD-014 = spsd014）
+#   1 前缀          名字以关键词开头
+#   2 词首          多词名字里任一词以关键词开头（Yui Hatano ← hatano）
+#   3 包含          名字里带这段
+#   4 子序列        字符按序出现即可（大桥未久 ← 大桥久），只对短查询开放
+#   None 不命中
+#
+# 为什么做成 SQLite 函数：过滤（IS NOT NULL）和排序（升序）都得在 SQL 里一次
+# 完成，否则「先取一页再排」会让分页算不准；这几张表都只有几千~几万行，全表过
+# 一次 Python 回调在可接受范围内。
+# --------------------------------------------------------------------------- #
+_SEP_RE = re.compile(
+    r"[\s\-_·・./\\|,，、;；:：()（）\[\]【】「」『』!！?？'\"“”‘’+~@#&*]+")
+
+
+def _norm_kw(text) -> str:
+    """全角转半角 + 小写 + 去掉分隔符：`ＳＰＳＤ_014` / `spsd-014` 都归一成 `spsd014`。"""
+    if not text:
+        return ""
+    s = unicodedata.normalize("NFKC", str(text)).lower()
+    return _SEP_RE.sub("", s)
+
+
+def _subseq(needle: str, hay: str) -> bool:
+    """needle 的字符按顺序全部出现在 hay 里（不要求连续）。"""
+    if not needle:
+        return False
+    it = iter(hay)
+    return all(ch in it for ch in needle)
+
+
+def rel_score(text, kw) -> int | None:
+    """相关性档位：越小越靠前，None = 不命中。给 SQLite 用的标量函数。"""
+    name = _norm_kw(text)
+    key = _norm_kw(kw)
+    if not key or not name:
+        return None
+    if name == key:
+        return 0
+    if name.startswith(key):
+        return 1
+    # 词首：日/英混排的名字常用分隔符（Yui Hatano、つぼみ・蕾），任一词开头都算
+    raw = unicodedata.normalize("NFKC", str(text)).lower()
+    for word in _SEP_RE.split(raw):
+        if word and _norm_kw(word).startswith(key):
+            return 2
+    if key in name:
+        return 3
+    # 兜底模糊只对短查询开放：长关键词做子序列几乎必然误命中一长串无关名字
+    if 2 <= len(key) <= 6 and len(name) - len(key) <= 6 and _subseq(key, name):
+        return 4
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -186,7 +253,14 @@ class ExtensionHost:
         api = SimpleNamespace(
             route=self.route, add_ddl=self.add_ddl, add_init=self.add_init,
             hook=self.hook, call_hook=self.call_hook,
+            # `call` / `hooks` 是给「扩展自己的列表接口」用的：有些端点（cast/find、
+            # facets/*/media）不走核心 browse，但要和 browse 同一套筛选口径，
+            # 只能自己遍历 browse_where 钩子、再调 marks_extra 补字段。
+            call=self.call, hooks=self.hooks,
             user_db=user_db, amane_db=amane_db, log=log, now_iso=now_iso,
+            # 清单页搜索的统一相关性口径：核心已在 amane_db() 连接上注册
+            # `amane_rel(name, kw)`，这里再给一份 Python 实现供扩展兜底
+            rel_score=rel_score,
             os=os, json=json, datetime=datetime, timedelta=timedelta, timezone=timezone,
             # 通用上游能力：扩展不必自己读凭据文件 / 拼图片代理 URL
             amane_get=amane_get, amane_post=amane_post, public_image=public_image,
@@ -270,6 +344,8 @@ def amane_db():
     if conn is None:
         conn = sqlite3.connect(f"file:{AMANE_DB}?mode=ro&immutable=1", uri=True, timeout=10)
         conn.row_factory = sqlite3.Row
+    # 关键词相关性打分（清单页搜索）：扩展也走这条连接，所以在这里统一注册。
+    conn.create_function("amane_rel", 2, rel_score)
     try:
         yield conn
     finally:
@@ -293,6 +369,26 @@ def init_user_db() -> None:
                 finished    INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_history_played ON history(played_at DESC);
+            -- 我自己写的评价：与上游 comments（amane.db 只读）完全分开存。
+            -- 一部片可以写多条（id 自增），详情接口把它们按时间倒序插在评价列表最前并标 mine。
+            CREATE TABLE IF NOT EXISTS user_comments (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                metadata_id INTEGER NOT NULL,
+                body        TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            );
+            -- 索引在迁移之后再建（老库这表还没有 id 列，先建索引会直接报错）
+            -- 播放器批注（R23）：某个时间点的一句话，播放到那一刻从画面上滚过。
+            -- 不入摘要、不做社交，纯自用 —— 记「这里演到哪了 / 这段好」。
+            CREATE TABLE IF NOT EXISTS annotations (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                metadata_id INTEGER NOT NULL,
+                file_key    TEXT NOT NULL DEFAULT '',
+                t_ms        INTEGER NOT NULL,
+                body        TEXT NOT NULL,
+                created_at  TEXT NOT NULL
+            );
             -- 横幅图尺寸缓存：只下载校验一次，之后按 url 命中（含不合格的 0x0）
             CREATE TABLE IF NOT EXISTS img_dims (
                 url        TEXT PRIMARY KEY,
@@ -321,6 +417,40 @@ def init_user_db() -> None:
         )
         for fn in EXT.init_fns:
             fn(conn)
+        # 迁移：2.4.5.6 之前的 user_comments 是「一片一条」（PK=metadata_id）。
+        # 现在放开成多条，老表结构不同就必须重建，否则新插入会撞主键。
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='user_comments'"
+        ).fetchone()
+        if row and "AUTOINCREMENT" not in (row["sql"] or ""):
+            conn.executescript(
+                "ALTER TABLE user_comments RENAME TO user_comments_old;"
+                "CREATE TABLE user_comments ("
+                "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "  metadata_id INTEGER NOT NULL,"
+                "  body TEXT NOT NULL,"
+                "  created_at TEXT NOT NULL,"
+                "  updated_at TEXT NOT NULL);"
+                "CREATE INDEX IF NOT EXISTS idx_user_comments_meta "
+                "  ON user_comments(metadata_id, id DESC);"
+                "INSERT INTO user_comments(metadata_id, body, created_at, updated_at) "
+                "  SELECT metadata_id, body, created_at, updated_at FROM user_comments_old;"
+                "DROP TABLE user_comments_old;"
+            )
+        # 索引统一在表结构确定之后建（老库要先走上面的迁移才有 id 列）
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_comments_meta "
+            "ON user_comments(metadata_id, id DESC);")
+        # 迁移（1.3.35）：annotations 加 file_key —— 弹幕必须跟着「版本/集」走。
+        # 一部片可能有好几个文件（不同清晰度/不同集），共用一个时间轴就会串弹幕。
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(annotations)").fetchall()]
+        if "file_key" not in cols:
+            conn.execute(
+                "ALTER TABLE annotations ADD COLUMN file_key TEXT NOT NULL DEFAULT ''")
+        conn.execute("DROP INDEX IF EXISTS idx_annotations_meta")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_annotations_file "
+            "ON annotations(metadata_id, file_key, t_ms)")
 
 
 def now_iso() -> str:
@@ -359,6 +489,85 @@ def suggest_supported() -> list[str]:
     return [k for k in SUGGEST_KINDS if k == "film" or k in kinds]
 
 
+# 出演时岁数：上游没有这个字段，用 metadata.release − actors.birthday 现算周岁。
+#
+# 2026-11-10 用户定：这个功能是给女演员做的 —— 男演员的岁数默认既不在详情页显示、
+# 也不参与筛选/排序；要算男性（「有人就喜欢看小孩男孩或大叔」）用
+# cast_age_gender=male 显式切过去。性别取值只有 FEMALE / MALE（上游另有 UNKNOWN，
+# 不属于任何一档，天然不参与）。
+#
+# 与扩展 /item/{id}/cast 的 _age_of() 同口径：只有 18–90 岁才算有效（客户端分桶
+# 从 18 起）。上游有少量脏生日（只读抽查升序头部先出现 4/5/6 岁、收紧到 10 岁后
+# 仍有 12 岁），不滤掉会把这些片顶到首页，也和详情页对不上。聚合里用 CASE 把
+# 异常值变 NULL，SQLite 的 MIN/MAX 自动忽略 NULL；不能用 HAVING，相关子查询里
+# 不想再套一层派生表。
+_CAST_AGE_EXPR = (
+    "CAST(strftime('%Y', substr(m.release, 1, 10)) AS INTEGER) "
+    "- CAST(strftime('%Y', substr(caa.birthday, 1, 10)) AS INTEGER) "
+    "- (CASE WHEN strftime('%m-%d', substr(m.release, 1, 10)) "
+    "< strftime('%m-%d', substr(caa.birthday, 1, 10)) THEN 1 ELSE 0 END)"
+)
+
+# 对外只认这两个值；其他（含空）一律回落 female。
+CAST_AGE_GENDERS = ("female", "male")
+# 客户端 key -> 上游 actors.gender 的取值。
+_CAST_AGE_LABEL = {"female": "FEMALE", "male": "MALE"}
+
+_CAST_AGE_FROM = (
+    "FROM metadata_actors cma JOIN actors caa ON caa.id = cma.actor_id "
+    "WHERE cma.metadata_id = m.id AND caa.gender = '{gender}' "
+    "AND substr(caa.birthday, 1, 10) GLOB "
+    "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' "
+    "AND substr(m.release, 1, 10) GLOB "
+    "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'"
+)
+
+
+def cast_age_gender_of(raw) -> str:
+    """把 cast_age_gender 归一：只留 female / male，其余一律 female。"""
+    v = str(raw or "").strip().lower()
+    return v if v in CAST_AGE_GENDERS else "female"
+
+
+# 维度过滤：分类墙（标签/系列/制片商/导演）、演员作品、共演结果这些列表页，
+# 本质上都是「某个维度下的影片列表」。统一由 browse 承接，新加的筛选（我的评分、
+# 收藏夹）和排序（我的评分）才能一处生效，不用每个端点各写一遍。
+# 同一个参数里多值用逗号 = AND（演员作品页的「本人 + 合作演员」就是这个口径）。
+# 每个 SQL 都以 m.id 为锚点，{marks} 是占位符个数、{n} 是多值个数。
+_DIM_FILTERS: dict = {
+    "tag_id": ("EXISTS (SELECT 1 FROM metadata_tags t WHERE t.metadata_id = m.id "
+               "AND t.tag_id IN ({marks}) GROUP BY t.metadata_id "
+               "HAVING COUNT(DISTINCT t.tag_id) = {n})"),
+    "director_id": ("EXISTS (SELECT 1 FROM metadata_directors d WHERE d.metadata_id = m.id "
+                    "AND d.director_id IN ({marks}) GROUP BY d.metadata_id "
+                    "HAVING COUNT(DISTINCT d.director_id) = {n})"),
+    "actor_id": ("EXISTS (SELECT 1 FROM metadata_actors a WHERE a.metadata_id = m.id "
+                 "AND a.actor_id IN ({marks}) GROUP BY a.metadata_id "
+                 "HAVING COUNT(DISTINCT a.actor_id) = {n})"),
+    # 系列 / 制片商 / 发行商在 metadata 上是名字列，id 要先换名字
+    "series_id": "m.series = (SELECT name FROM series WHERE id = ?)",
+    "studio_id": "m.studio = (SELECT name FROM studios WHERE id = ?)",
+    "publisher_id": "m.publisher = (SELECT name FROM publishers WHERE id = ?)",
+}
+
+
+def cast_age_sql(gender: str, agg: str) -> str:
+    """一部片在指定性别里的最小 / 最大有效岁数；该性别没有可算的资料时是 NULL。"""
+    g = _CAST_AGE_LABEL[cast_age_gender_of(gender)]
+    return (
+        "(SELECT " + agg + "(CASE WHEN " + _CAST_AGE_EXPR + " BETWEEN 18 AND 90 "
+        "THEN " + _CAST_AGE_EXPR + " ELSE NULL END) "
+        + _CAST_AGE_FROM.format(gender=g) + ")"
+    )
+
+
+# 排序键按「哪个性别 + 哪个方向」预生成：升序比该性别里最年轻的那位，
+# 降序比最年长的那位（2.4.5.4 用户定，不再固定取最年轻）。
+CAST_AGE_SORT_SQL = {
+    g: {"asc": cast_age_sql(g, "MIN"), "desc": cast_age_sql(g, "MAX")}
+    for g in CAST_AGE_GENDERS
+}
+
 # 排序键 -> (SQL 表达式, 默认方向)。评分在 scores JSON 里，只有 javdb 一个来源。
 SORTS = {
     "recent": ("m.updated_at", "desc"),
@@ -367,6 +576,8 @@ SORTS = {
     "score": ("CAST(json_extract(m.scores, '$.javdb') AS REAL)", "desc"),
     "title": ("m.title COLLATE NOCASE", "asc"),
     "runtime": ("m.runtime", "desc"),
+    # 列只是占位（让 sort 校验通过），真正用哪个方向/性别在 browse() 里按参数重算。
+    "cast_age": (CAST_AGE_SORT_SQL["female"]["asc"], "asc"),
     "random": ("RANDOM()", "desc"),
 }
 
@@ -588,6 +799,127 @@ def fetch_by_ids(ids: list[int]) -> list[dict]:
     out = [by_id[i] for i in ids if i in by_id]
     # 观看记录等页面直接吃这里的字段，标记必须一起给
     return attach_marks_auto(out)
+
+
+# --------------------------------------------------------------------------- #
+# 相似影片：详情页底部推荐
+#
+# 四种信号的强弱差得很远：同系列几乎是「同一部片的不同集」，同演员次之，
+# 共同标签是口味相近；同厂牌 / 同年份只是弱相关 —— 只按厂牌选，GIGA 的 1857 部
+# 能把一整屏填满，那不叫相似。所以后两者只加分，不单独进候选。
+# --------------------------------------------------------------------------- #
+
+SIMILAR_W_SERIES = 40
+SIMILAR_W_ACTOR = 12          # 每个共同演员
+SIMILAR_W_TAG = 3             # 每个共同标签
+SIMILAR_W_STUDIO = 6
+SIMILAR_W_YEAR = 2
+SIMILAR_CAND_CAP = 400        # 每路候选上限，防大系列把 SQL 撑爆
+
+
+def build_similar(metadata_id: int, limit: int = 12) -> list[dict]:
+    """同系列 / 同演员 / 共同标签（≥2 个）三路取候选，再按加权分排序。
+
+    候选门槛只用强信号；同厂牌、同年份在打分阶段才计入。没有海报的不要 ——
+    详情页底部是横滑卡片，缺图会露出一个空框。
+    """
+    limit = max(1, min(limit, 24))
+    with amane_db() as conn:
+        row = conn.execute(
+            f"SELECT {META_COLUMNS} FROM metadata m WHERE m.id = ?", (metadata_id,)).fetchone()
+        if row is None:
+            return []
+        base = item_of(row)
+        series = base["series"].strip()
+        studio = base["studio"].strip()
+        year = base["release"][:4]
+        actors = [a for a in base["actors"] if a]
+        tag_ids = [int(r[0]) for r in conn.execute(
+            "SELECT tag_id FROM metadata_tags WHERE metadata_id = ?", (metadata_id,))]
+
+        cand: set[int] = set()
+        if series:
+            cand.update(r[0] for r in conn.execute(
+                "SELECT id FROM metadata WHERE series = ? AND id <> ? LIMIT ?",
+                (series, metadata_id, SIMILAR_CAND_CAP)))
+        if actors:
+            marks = ",".join("?" * len(actors))
+            cand.update(r[0] for r in conn.execute(
+                f"SELECT DISTINCT m.id FROM metadata m, json_each(m.actors) je "
+                f"WHERE je.value IN ({marks}) AND m.id <> ? LIMIT ?",
+                (*actors, metadata_id, SIMILAR_CAND_CAP)))
+        if tag_ids:
+            marks = ",".join("?" * len(tag_ids))
+            cand.update(r[0] for r in conn.execute(
+                f"SELECT metadata_id FROM metadata_tags WHERE tag_id IN ({marks}) "
+                f"AND metadata_id <> ? GROUP BY metadata_id HAVING COUNT(*) >= 2 LIMIT ?",
+                (*tag_ids, metadata_id, SIMILAR_CAND_CAP)))
+
+        cand.discard(metadata_id)
+        if not cand:
+            return []
+        ids = tuple(sorted(cand))
+        marks = ",".join("?" * len(ids))
+        # 列表页口径：只有还有文件的片子才出现；顺手一次取全字段
+        rows = conn.execute(
+            f"SELECT {META_COLUMNS} FROM metadata m WHERE m.id IN ({marks}) "
+            f"AND EXISTS (SELECT 1 FROM media_files mf WHERE mf.metadata_id = m.id)",
+            ids).fetchall()
+        tag_map: dict[int, set[int]] = {}
+        for r in conn.execute(
+                f"SELECT metadata_id, tag_id FROM metadata_tags WHERE metadata_id IN ({marks})", ids):
+            tag_map.setdefault(int(r[0]), set()).add(int(r[1]))
+
+    actor_set = set(actors)
+    tag_set = set(tag_ids)
+    scored: list[tuple[int, dict]] = []
+    for r in rows:
+        item = item_of(r)
+        if not item["poster"]:
+            continue
+        score = 0
+        if series and item["series"] == series:
+            score += SIMILAR_W_SERIES
+        if studio and item["studio"] == studio:
+            score += SIMILAR_W_STUDIO
+        if year and item["release"][:4] == year:
+            score += SIMILAR_W_YEAR
+        score += len(actor_set & set(item["actors"])) * SIMILAR_W_ACTOR
+        score += len(tag_set & tag_map.get(item["id"], set())) * SIMILAR_W_TAG
+        if score > 0:
+            scored.append((score, item))
+
+    # 先按发行日降序，再按分数稳定排序 —— 同分时新的在前
+    scored.sort(key=lambda pair: pair[1]["release"] or "", reverse=True)
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return attach_marks_auto(attach_progress([it for _s, it in scored[:limit]]))
+
+
+def annotation_file_names(keys: list[str]) -> dict[str, str]:
+    """file_key（f<media_file_id>）→ 文件名，弹幕管理页分组时显示。
+
+    只查一次 amane 库；拿不到就返回空名，页面退化成显示 key，不影响功能。
+    """
+    ids: list[int] = []
+    for k in keys:
+        if k[:1] == "f" and k[1:].isdigit():
+            n = int(k[1:])
+            if n not in ids:
+                ids.append(n)
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    out: dict[str, str] = {}
+    try:
+        with amane_db() as conn:
+            rows = conn.execute(
+                f"SELECT id, path FROM media_files WHERE id IN ({marks})", ids).fetchall()
+    except sqlite3.Error:
+        return {}
+    for r in rows:
+        path = str(r["path"] or "")
+        out[f"f{int(r['id'])}"] = os.path.basename(path) or path
+    return out
 
 
 def attach_progress(items: list[dict]) -> list[dict]:
@@ -1192,6 +1524,191 @@ class _PlayJob:
         self.cv = threading.Condition()
 
 
+class PlayDiskCache:
+    """播放块的**持久化**缓存（1.3.35）。
+
+    为什么要有它：内存里的 `_play_blocks` 一重启就没了，而且几十 GB 的片看两分钟
+    就把 320MB 挤爆，回头看同一个位置又要回源 CD2 —— 用户看到的就是「每次进去
+    都重新缓存」。别的播放器之所以「点进去就秒开」，是因为它们把下过的数据留在
+    了本地磁盘上。
+
+    结构：`<DATA_DIR>/play-cache/<sha1(upstream)[:16]>/<块号>.bin`，一块一个文件，
+    写完先落 `.tmp` 再改名（避免读到半块）。整块 1MiB，正好和 `PLAY_BLOCK` 对齐。
+
+    预算：`AMANE_PLAY_DISK_MB`（默认 4096）。超了就按 mtime 从旧到新删，
+    每写 64 块才检查一次，避免每块都扫目录。
+    """
+
+    def __init__(self, root: str, budget_mb: int) -> None:
+        self.root = root
+        self.budget = max(0, budget_mb) * 1024 * 1024
+        self._lock = threading.Lock()
+        self._used = 0
+        self._scanned = False
+        self._writes = 0
+        if self.budget > 0:
+            try:
+                os.makedirs(self.root, exist_ok=True)
+            except OSError as exc:
+                log(f"play-cache mkdir failed: {exc}")
+                self.budget = 0
+
+    # -- 路径 ---------------------------------------------------------- #
+
+    def _dir(self, upstream: str) -> str:
+        name = hashlib.sha1(upstream.encode("utf-8")).hexdigest()[:16]
+        return os.path.join(self.root, name)
+
+    def _path(self, upstream: str, blk: int) -> str:
+        return os.path.join(self._dir(upstream), f"{blk:08d}.bin")
+
+    # -- 读写 ---------------------------------------------------------- #
+
+    def get(self, upstream: str, blk: int):
+        if self.budget <= 0:
+            return None
+        path = self._path(upstream, blk)
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+        except OSError:
+            return None
+        if not data:
+            return None
+        # 读到了就刷新 mtime：最近看过的片子不会被清掉
+        try:
+            os.utime(path, None)
+        except OSError:
+            pass
+        return data
+
+    def put(self, upstream: str, blk: int, data: bytes) -> None:
+        if self.budget <= 0 or not data:
+            return
+        d = self._dir(upstream)
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            return
+        path = os.path.join(d, f"{blk:08d}.bin")
+        # 临时名带上线程 id：预取线程和兜底同步取可能同时写同一块，
+        # 共用一个 .tmp 会写串（然后 os.replace 出一块坏数据）
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        try:
+            with open(tmp, "wb") as fh:
+                fh.write(data)
+            os.replace(tmp, path)
+        except OSError as exc:
+            log(f"play-cache write {blk} failed: {exc}")
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return
+        with self._lock:
+            self._used += len(data)
+            self._writes += 1
+            need_trim = self._writes % 64 == 0 or self._used > self.budget
+        if need_trim:
+            self.trim()
+
+    def trim(self) -> None:
+        """按 mtime 从旧到新删到预算内（最多删 2000 个，避免卡住请求线程）。
+
+        每个文件**保住开头和结尾两块**：MP4 的 moov 常在文件尾部，每次打开都要
+        读它；开头那块决定「点进去多快能出画面」。这两块被挤掉，用户就会觉得
+        「每次进去都在重新缓存」。
+        """
+        with self._lock:
+            if not self._scanned:
+                self._scanned = True
+                self._used = self._measure()
+            over = self._used - self.budget
+            if over <= 0:
+                return
+            walked: list = []
+            firsts: set = set()
+            lasts: dict = {}
+            for base, _dirs, files in os.walk(self.root):
+                for name in files:
+                    if not name.endswith(".bin"):
+                        continue
+                    p = os.path.join(base, name)
+                    try:
+                        st = os.stat(p)
+                        blk = int(name[:8])
+                    except (OSError, ValueError):
+                        continue
+                    firsts.add((base, blk))
+                    if base not in lasts or blk > lasts[base]:
+                        lasts[base] = blk
+                    walked.append((st.st_mtime, st.st_size, p, base, blk))
+                    if len(walked) >= 4000:
+                        break
+                if len(walked) >= 4000:
+                    break
+            walked.sort()
+            for _mt, size, p, base, blk in walked:
+                if over <= 0:
+                    break
+                if blk == 0 or blk == lasts.get(base):
+                    continue
+                try:
+                    os.remove(p)
+                    over -= size
+                    self._used = max(0, self._used - size)
+                except OSError:
+                    continue
+
+    def _measure(self) -> int:
+        total = 0
+        for base, _dirs, files in os.walk(self.root):
+            for name in files:
+                try:
+                    total += os.stat(os.path.join(base, name)).st_size
+                except OSError:
+                    continue
+        return total
+
+    def stats(self) -> dict:
+        used = self._used if self._scanned else self._measure()
+        with self._lock:
+            self._used = used
+            self._scanned = True
+        files = 0
+        try:
+            for _base, _dirs, names in os.walk(self.root):
+                files += len(names)
+        except OSError:
+            pass
+        return {"enabled": self.budget > 0, "used_mb": round(used / 1048576, 1),
+                "budget_mb": round(self.budget / 1048576), "files": files,
+                "dir": self.root}
+
+    def clear(self) -> dict:
+        removed = 0
+        for base, dirs, files in os.walk(self.root, topdown=False):
+            for name in files:
+                try:
+                    os.remove(os.path.join(base, name))
+                    removed += 1
+                except OSError:
+                    continue
+            for name in dirs:
+                try:
+                    os.rmdir(os.path.join(base, name))
+                except OSError:
+                    continue
+        with self._lock:
+            self._used = 0
+            self._scanned = True
+        return {"ok": True, "removed": removed}
+
+
+PLAY_DISK = PlayDiskCache(os.path.join(DATA_DIR, "play-cache"),
+                          int(os.environ.get("AMANE_PLAY_DISK_MB", "4096")))
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = f"amane-user/{VERSION}"
@@ -1452,7 +1969,7 @@ class Handler(BaseHTTPRequestHandler):
     # 块按 1MiB 对齐存进 LRU，并**并行**预取后面若干块。这样 CD2 的冷启动延迟被
     # 多个块同时摊掉，播放点前面始终有几秒到十几秒的余量。
     PLAY_BLOCK = 1024 * 1024
-    PLAY_READAHEAD = 12
+    PLAY_READAHEAD = 8
     PLAY_MAX_JOBS = 16
     PLAY_CACHE_BYTES = int(os.environ.get("AMANE_PLAY_CACHE_MB", "320")) * 1024 * 1024
     _play_lock = threading.Lock()
@@ -1481,10 +1998,31 @@ class Handler(BaseHTTPRequestHandler):
                 _, old = self._play_blocks.popitem(last=False)
                 self._play_stat["bytes"] -= len(old)
 
+    def _play_disk_get(self, upstream: str, blk: int):
+        """先内存、再磁盘。磁盘命中同时塞回内存，后面几块连读就更快。"""
+        data = PLAY_DISK.get(upstream, blk)
+        if data is None:
+            return None
+        key = f"{upstream}#{blk}"
+        self._play_cache_put(key, data)
+        return data
+
+    def _play_disk_put(self, upstream: str, blk: int, data: bytes) -> None:
+        # 落盘在独立线程：1MiB 写到 NAS 盘上十几毫秒，别占着服务线程
+        if not data or PLAY_DISK.budget <= 0:
+            return
+        try:
+            threading.Thread(target=PLAY_DISK.put, args=(upstream, blk, data),
+                             daemon=True, name="play-disk").start()
+        except RuntimeError:
+            pass
+
     def _play_job_for(self, upstream: str, ck: str, blk: int):
         """取（或启动）一块的下载任务；已缓存则立刻是完成状态。"""
         key = f"{ck}#{blk}"
         cached = self._play_cache_get(key)
+        if cached is None:
+            cached = self._play_disk_get(upstream, blk)
         if cached is not None:
             job = _PlayJob()
             job.data = bytearray(cached)
@@ -1529,6 +2067,11 @@ class Handler(BaseHTTPRequestHandler):
                     self._play_jobs.pop(key, None)
                 if job.data and not job.failed:
                     self._play_cache_put(key, bytes(job.data))
+                    # 落盘：下一次（哪怕服务重启后）直接命中，不用再回源。
+                    # 只存**完整**的块 —— 半块写进磁盘，下次读回来会比预期短，
+                    # `_play_serve_blocks` 会当成文件尾直接收工（画面就断了）。
+                    if len(job.data) >= self.PLAY_BLOCK:
+                        self._play_disk_put(upstream, blk, bytes(job.data))
 
         try:
             threading.Thread(target=run, daemon=True, name="play-block").start()
@@ -1564,12 +2107,50 @@ class Handler(BaseHTTPRequestHandler):
         for blk in blocks:
             self._play_job_for(upstream, ck, blk)
 
+    # 元信息落盘：服务一重启，第一次打开也不用再去上游探一次 HEAD
+    # （CD2 冷区首字节 0.3~4.6s，那一下就是用户感知到的「进去要等」）。
+    _meta_disk_ready: dict = {"loaded": False}
+    _meta_disk_lock = threading.Lock()
+
+    def _meta_disk_path(self) -> str:
+        return os.path.join(DATA_DIR, "play-meta.json")
+
+    def _meta_disk_load(self) -> None:
+        if self._meta_disk_ready["loaded"]:
+            return
+        with self._meta_disk_lock:
+            if self._meta_disk_ready["loaded"]:
+                return
+            try:
+                with open(self._meta_disk_path(), encoding="utf-8") as fh:
+                    data = json.load(fh)
+                now = time.time()
+                # 文件大小不会变，给 7 天；过期只是多重探一次，不会出错
+                for k, v in (data or {}).items():
+                    if isinstance(v, dict) and now - float(v.get("at") or 0) < 7 * 86400:
+                        self._play_meta[k] = v
+                log(f"play meta loaded: {len(self._play_meta)} files")
+            except (OSError, ValueError, TypeError):
+                pass
+            self._meta_disk_ready["loaded"] = True
+
+    def _meta_disk_save(self) -> None:
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            tmp = f"{self._meta_disk_path()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(self._play_meta, fh)
+            os.replace(tmp, self._meta_disk_path())
+        except (OSError, ValueError, TypeError) as exc:
+            log(f"play meta save failed: {exc}")
+
     def _play_meta_for(self, upstream: str, ck: str):
-        """拿总长度 / 类型（每个文件缓存 1 小时，只探 1 个字节）。"""
+        """拿总长度 / 类型（内存 + 磁盘两层缓存，只探 1 个字节）。"""
+        self._meta_disk_load()
         now = time.time()
         with self._play_lock:
             meta = self._play_meta.get(ck)
-            if meta is not None and now - meta["at"] < 3600:
+            if meta is not None and now - meta["at"] < 7 * 86400:
                 return meta
         headers = {"Authorization": f"Bearer {AMANE_TOKEN}", "Range": "bytes=0-0"}
         try:
@@ -1595,6 +2176,12 @@ class Handler(BaseHTTPRequestHandler):
             return None
         with self._play_lock:
             self._play_meta[ck] = meta
+        # 落盘不挡这次请求
+        try:
+            threading.Thread(target=self._meta_disk_save, daemon=True,
+                             name="play-meta").start()
+        except RuntimeError:
+            pass
         return meta
 
     def _play_wait_writable(self, session: dict, session_key: str) -> bool:
@@ -1645,6 +2232,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not blob:
                     return "fetch-failed"
                 self._play_cache_put(key, blob)
+                self._play_disk_put(upstream, blk, blob)
                 piece = blob[off:off + need]
                 reason = self._play_write(session, session_key, piece)
                 if reason:
@@ -1678,6 +2266,10 @@ class Handler(BaseHTTPRequestHandler):
             pos += need
             # 播放点前面始终备着几块，CD2 的冷启动延迟被并行摊掉
             last = (total - 1) // self.PLAY_BLOCK
+            if blk == last and job.data and not job.failed:
+                # 最后一块通常不足 1MiB（文件尾），`run()` 那边按「完整块」判断会跳过它，
+                # 但 MP4 的 moov 恰恰躺在这一块里 —— 显式存一次，下次打开就秒开
+                self._play_disk_put(upstream, blk, bytes(job.data))
             self._play_prefetch(upstream, ck,
                                 [b for b in range(blk + 1, min(blk + 1 + self.PLAY_READAHEAD,
                                                                last + 1))])
@@ -1813,6 +2405,20 @@ class Handler(BaseHTTPRequestHandler):
                 reason = "head"
                 return
 
+            # 起播先把「头」和「尾」两块拉下来（后台线程，不挡这一帧）：
+            # MP4 的 moov 大多在文件末尾，每开一次都要读它；不预热的话每次进片
+            # 都得等 CD2 冷启动，用户看到的就是「每次进去都重新缓存一会儿」。
+            last_blk = (total - 1) // self.PLAY_BLOCK
+            warm: list = [0]
+            if last_blk > 0:
+                warm.append(last_blk)
+            if last_blk > 1:
+                warm.append(last_blk - 1)
+            try:
+                self._play_prefetch(upstream, upstream, warm)
+            except (RuntimeError, OSError, ValueError):
+                pass
+
             reason = self._play_serve_blocks(upstream, upstream, start, limit,
                                              session, session_key, total)
         except HTTPError as exc:
@@ -1848,6 +2454,19 @@ class Handler(BaseHTTPRequestHandler):
                     self._stream_sessions[session_key] = left
                 else:
                     self._stream_sessions.pop(session_key, None)
+
+    # -- 播放缓存管理（1.3.35） -------------------------------------------- #
+    #
+    # 客户端「设置 → 高级 → 清理缓存」用它显示占用 / 一键清空。
+    # 以前清的是手机沙箱里 mpv 的 stream-cache（作用有限），现在真正管用的是
+    # 服务端这份按块落盘的缓存 —— 同一个文件第二次打开基本不用回源。
+    @route("GET", r"/api/user/playcache")
+    def playcache_stats(self, query, *_) -> None:
+        self._json(PLAY_DISK.stats())
+
+    @route("POST", r"/api/user/playcache/clear")
+    def playcache_clear(self, query, *_) -> None:
+        self._json(PLAY_DISK.clear())
 
     # -- 预告片 -----------------------------------------------------------
     #
@@ -2009,17 +2628,50 @@ class Handler(BaseHTTPRequestHandler):
         search = arg("q")
 
         sort = arg("sort", "recent").lower()
-        if sort not in SORTS:
+        # 扩展可以提供核心 SORTS 里没有的排序键（数据落在 user.db 时跨库不能 JOIN，
+        # 由扩展给出分档 CASE 表达式）。求值型钩子：不认识这个 sort 就返回 None。
+        ext_sort = EXT.call_hook("browse_sort", sort)
+        if sort not in SORTS and not ext_sort:
             sort = "recent"
-        column, default_dir = SORTS[sort]
-        direction = arg("order", default_dir).lower()
+            ext_sort = None
+        column, default_dir = SORTS.get(sort, ("m.id", "desc"))
+        want_dir = (ext_sort or {}).get("dir") or default_dir
+        direction = arg("order", want_dir).lower()
         if direction not in ("asc", "desc"):
-            direction = default_dir
+            direction = want_dir
+        # 出演年龄看哪个性别：默认女优，male 显式切男优。排序与区间筛选共用这一个。
+        age_gender = cast_age_gender_of(arg("cast_age_gender"))
         if sort == "random":
             order = "RANDOM()"
+        elif ext_sort and ext_sort.get("expr"):
+            order = f"{ext_sort['expr']} {direction.upper()}, m.id DESC"
+        elif sort == "cast_age":
+            # 升序比「该性别里最年轻的那位」，降序比「该性别里最年长的那位」。
+            # 约 29% 影片没有可算岁数的演员：NULL 在 SQLite 的 ASC 里排最前，
+            # 会把一堆「查不出年龄」的片顶到首页。先按 IS NULL 沉底，再按岁数排。
+            key = CAST_AGE_SORT_SQL[age_gender][direction]
+            order = f"({key} IS NULL), {key} {direction.upper()}, m.id DESC"
         else:
             # 次级键保证分页稳定（同分/同日期不会在翻页时重复或漏项）
             order = f"{column} {direction.upper()}, m.id DESC"
+
+        # 有搜索词时相关性优先（2.4.6.21）：番号全等 / 去连字符全等 > 番号前缀 >
+        # 标题包含 > 系列包含 > 演员等其它命中。用户选的排序退成次级键 ——
+        # 否则搜「IPZZ-932」时最像的那部会被「最近更新」埋到第一页之外。
+        rel_params: tuple = ()
+        if search:
+            kw_esc = re.sub(r"([%_\\])", r"\\\1", search)
+            order = (
+                "CASE WHEN UPPER(m.number) = UPPER(?) THEN 0 "
+                "WHEN REPLACE(UPPER(m.number), '-', '') = REPLACE(UPPER(?), '-', '') THEN 0 "
+                "WHEN UPPER(m.number) LIKE UPPER(?) ESCAPE '\\' THEN 1 "
+                "WHEN m.title LIKE ? ESCAPE '\\' THEN 2 "
+                "WHEN m.series LIKE ? ESCAPE '\\' THEN 3 "
+                "ELSE 4 END ASC, " + order
+            )
+            rel_params = (
+                search, search, kw_esc + "%", "%" + kw_esc + "%", "%" + kw_esc + "%"
+            )
 
         where: list[str] = []
         params: tuple = ()
@@ -2035,13 +2687,18 @@ class Handler(BaseHTTPRequestHandler):
             # 模糊搜索：按空格 / 连字符拆词，每个词都要命中（AND）。
             # number 额外去掉连字符再比一次，这样 "ipzz932" 能搜到 "IPZZ-932"，
             # "ipzz 932" 拆成两个词也照样命中。
+            # 再叠一层 amane_rel：全角输入（ｉｐｚｚ－９３２）、大小写、少打一个连字符
+            # 都能命中 —— LIKE 只认字面，归一化得交给这个标量函数。
+            # 只对番号做：标题是长日文，逐行归一化+子序列会让搜索从 40ms 涨到 400ms，
+            # 而中文标题本来就是全角，LIKE 已经能命中。
             tokens = [x for x in re.split(r"[\s\-_/]+", search) if x][:6]
             for tok in tokens:
                 where.append(
                     "(m.number LIKE ? OR REPLACE(m.number, '-', '') LIKE ? "
-                    "OR m.title LIKE ? OR m.actors LIKE ? OR m.series LIKE ?)")
+                    "OR m.title LIKE ? OR m.actors LIKE ? OR m.series LIKE ? "
+                    "OR amane_rel(m.number, ?) IS NOT NULL)")
                 like = f"%{tok}%"
-                params = (*params, like, like, like, like, like)
+                params = (*params, like, like, like, like, like, tok)
 
         # 马赛克：CRACKED / LEAKED / NONE（原版无标记）
         mosaic = arg("mosaic").upper()
@@ -2093,16 +2750,69 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 pass
 
-        # 私有扩展可以追加状态筛选（如「还行」/「已收藏」）：核心不感知具体语义，
-        # 只提供 where/params 拼接点，扩展自己读自己的表。
-        for extra in EXT.call("browse_where", query).get("clauses", []):
-            if isinstance(extra, (tuple, list)) and len(extra) == 2:
-                where.append(str(extra[0]))
-                params = (*params, *tuple(extra[1]))
+        # 出演时岁数：上游没有这个字段，用 发行日 − 演员生日 在只读库里现算周岁。
+        # 只看 age_gender 指定的那个性别（默认女优），任一位该性别演员落在区间即命中；
+        # 没生日 / 性别 UNKNOWN 的演员天然不参与（扩展 actors 的 /item/{id}/cast
+        # 用同一口径展示，口径见那里的 _age_of()）。
+        age_min = arg("cast_age_min")
+        age_max = arg("cast_age_max")
+        if age_min.isdigit() or age_max.isdigit():
+            # 下限与 _age_of() / cast_age_sql() 一致收到 18：低于 18 的岁数一律不参与。
+            lo = int(age_min) if age_min.isdigit() else 18
+            hi = int(age_max) if age_max.isdigit() else 90
+            lo, hi = max(18, min(lo, 90)), max(18, min(hi, 90))
+            if lo > hi:
+                lo, hi = hi, lo
+            where.append(
+                "EXISTS (SELECT 1 FROM metadata_actors ca "
+                "JOIN actors cab ON cab.id = ca.actor_id "
+                "WHERE ca.metadata_id = m.id AND cab.gender = ? "
+                "AND substr(cab.birthday, 1, 10) GLOB "
+                "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' "
+                "AND substr(m.release, 1, 10) GLOB "
+                "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*' "
+                "AND (CAST(strftime('%Y', substr(m.release, 1, 10)) AS INTEGER) "
+                "- CAST(strftime('%Y', substr(cab.birthday, 1, 10)) AS INTEGER) "
+                "- (CASE WHEN strftime('%m-%d', substr(m.release, 1, 10)) "
+                "< strftime('%m-%d', substr(cab.birthday, 1, 10)) THEN 1 ELSE 0 END)) "
+                "BETWEEN ? AND ?)")
+            params = (*params, _CAST_AGE_LABEL[age_gender], lo, hi)
+
+        # 维度过滤（标签 / 导演 / 演员 / 系列 / 制片商 / 发行商），口径见 _DIM_FILTERS。
+        for dim, dim_sql in _DIM_FILTERS.items():
+            raw = arg(dim)
+            if not raw:
+                continue
+            vals = [x.strip() for x in raw.split(",") if x.strip().isdigit()][:12]
+            if not vals:
+                continue
+            if "{marks}" in dim_sql:
+                where.append(dim_sql.format(marks=",".join("?" * len(vals)), n=len(vals)))
+                params = (*params, *[int(x) for x in vals])
+            else:
+                # 标量维度（系列/制片商/发行商）只有一个名字位，多值只取第一个
+                where.append(dim_sql)
+                params = (*params, int(vals[0]))
+
+        # 扩展可以追加筛选条件：核心不感知具体语义，只提供 where/params 拼接点。
+        # 逐个钩子取结果再累加，不能用 EXT.call()——它按 dict 合并，多个扩展
+        # 同时返回 clauses 时后一个会把前一个覆盖掉（收藏夹 + 评分并存时必踩）。
+        for fn in EXT.hooks.get("browse_where", []):
+            try:
+                out = fn(query) or {}
+            except Exception as exc:  # noqa: BLE001
+                log(f"ERROR 扩展 hook browse_where: {exc}")
+                continue
+            for extra in out.get("clauses", []):
+                if isinstance(extra, (tuple, list)) and len(extra) == 2:
+                    where.append(str(extra[0]))
+                    params = (*params, *tuple(extra[1]))
 
         clause = " AND ".join(where)
         with amane_db() as conn:
-            items = query_meta(conn, clause, params, order, limit, offset)
+            # 相关性档位的占位符在 ORDER BY 里（SQL 尾部），所以只给取页的那条加；
+            # count_meta 的 SQL 没有 ORDER BY，用它会把参数数量对不上。
+            items = query_meta(conn, clause, params + rel_params, order, limit, offset)
             attach_marks(conn, items)
             total = count_meta(conn, clause, params)
         self._json({
@@ -2112,6 +2822,7 @@ class Handler(BaseHTTPRequestHandler):
             "limit": limit,
             "sort": sort,
             "order": direction,
+            "cast_age_gender": age_gender,
         })
 
     @route("GET", r"/api/user/suggest")
@@ -2333,6 +3044,28 @@ class Handler(BaseHTTPRequestHandler):
             }
             for r in rows
         ]
+        # 我自己写的评价：按时间倒序全部插到最前，并打 mine 标记（客户端高亮 + 就地改删）
+        with user_db() as conn:
+            mine_rows = conn.execute(
+                "SELECT id, body, created_at, updated_at FROM user_comments "
+                "WHERE metadata_id = ? ORDER BY id DESC",
+                (int(metadata_id),),
+            ).fetchall()
+        mine_list = []
+        for r in mine_rows:
+            body_text = (r["body"] or "").strip()
+            if not body_text:
+                continue
+            mine_list.append({
+                "id": int(r["id"]),
+                "body": body_text,
+                "created_at": r["created_at"] or "",
+                "updated_at": r["updated_at"] or "",
+                "mine": True,
+            })
+        data["comments"] = mine_list + data["comments"]
+        data["my_comment"] = mine_list[0]["body"] if mine_list else ""
+        data["my_comment_count"] = len(mine_list)
         with user_db() as conn:
             fav = conn.execute("SELECT 1 FROM favorites WHERE metadata_id = ?", (int(metadata_id),)).fetchone()
             hist = conn.execute(
@@ -2344,6 +3077,203 @@ class Handler(BaseHTTPRequestHandler):
         data["finished"] = bool(hist["finished"]) if hist else False
         data.update(EXT.call("item_extra", int(metadata_id)))
         self._json(data)
+
+    @route("GET", r"/api/user/item/(\d+)/similar")
+    def item_similar(self, query, metadata_id, *_) -> None:
+        """详情页「相似影片」。limit 默认 12，上限 24（横滑一屏别拉太多）。"""
+        limit = max(1, min(int((query.get("limit") or ["12"])[0]), 24))
+        self._json({"items": build_similar(int(metadata_id), limit)})
+
+    @route("POST", r"/api/user/item/(\d+)/comment")
+    def comment_add(self, query, metadata_id, *_) -> None:
+        """新增一条「我的评价」。一部片可以写多条，不覆盖旧的。
+
+        与上游 comments（只读库里的刮削内容）分开存 user.db；详情接口会把我写的
+        这些按时间倒序插在评价列表最前并标 mine=true。上限 4000 字。
+        """
+        text = str((self._body() or {}).get("body") or "").strip()
+        mid = int(metadata_id)
+        if not text:
+            return self._error(400, "评价不能为空")
+        if len(text) > 4000:
+            return self._error(400, "评价太长了（上限 4000 字）")
+        now = now_iso()
+        with user_db() as conn:
+            cur = conn.execute(
+                "INSERT INTO user_comments(metadata_id, body, created_at, updated_at) "
+                "VALUES(?, ?, ?, ?)", (mid, text, now, now))
+            new_id = cur.lastrowid
+        self._json({"ok": True, "id": new_id, "body": text, "created_at": now})
+
+    @route("PUT", r"/api/user/item/(\d+)/comment/(\d+)")
+    def comment_edit(self, query, metadata_id, comment_id, *_) -> None:
+        text = str((self._body() or {}).get("body") or "").strip()
+        if not text:
+            return self._error(400, "评价不能为空（要删请用 DELETE）")
+        if len(text) > 4000:
+            return self._error(400, "评价太长了（上限 4000 字）")
+        with user_db() as conn:
+            n = conn.execute(
+                "UPDATE user_comments SET body = ?, updated_at = ? WHERE id = ? AND metadata_id = ?",
+                (text, now_iso(), int(comment_id), int(metadata_id))).rowcount
+        if not n:
+            return self._error(404, "这条评价不存在")
+        self._json({"ok": True, "id": int(comment_id), "body": text})
+
+    @route("DELETE", r"/api/user/item/(\d+)/comment/(\d+)")
+    def comment_del_one(self, query, metadata_id, comment_id, *_) -> None:
+        with user_db() as conn:
+            conn.execute("DELETE FROM user_comments WHERE id = ? AND metadata_id = ?",
+                         (int(comment_id), int(metadata_id)))
+        self._json({"ok": True})
+
+    @route("DELETE", r"/api/user/item/(\d+)/comment")
+    def comment_del_all(self, query, metadata_id, *_) -> None:
+        with user_db() as conn:
+            conn.execute("DELETE FROM user_comments WHERE metadata_id = ?", (int(metadata_id),))
+        self._json({"ok": True})
+
+    @route("GET", r"/api/user/mycomments")
+    def my_comments(self, query, *_) -> None:
+        """「我的评价」列表页：我写过的全部评价 + 影片基本信息。
+
+        影片信息在 amane.db（只读）、评价在 user.db，跨库不能 JOIN，所以先取评价
+        再按 id 批量补片名/海报。
+        """
+        try:
+            limit = max(1, min(int((query.get("limit") or ["200"])[0]), 500))
+        except ValueError:
+            return self._error(400, "limit 必须是整数")
+        with user_db() as conn:
+            rows = conn.execute(
+                "SELECT id, metadata_id, body, created_at, updated_at FROM user_comments "
+                "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        info = {int(m["id"]): m for m in fetch_by_ids([int(r["metadata_id"]) for r in rows])}
+        out = []
+        for r in rows:
+            base = info.get(int(r["metadata_id"]))
+            card = {}
+            if base:
+                try:
+                    card = item_of(base)
+                except Exception:  # noqa: BLE001
+                    # fetch_by_ids 已经在某些版本里就返回成品 dict，直接拿来用
+                    card = dict(base)
+            out.append({
+                "id": int(r["id"]),
+                "metadata_id": int(r["metadata_id"]),
+                "body": r["body"] or "",
+                "created_at": r["created_at"] or "",
+                "updated_at": r["updated_at"] or "",
+                "number": card.get("number", ""),
+                "title": card.get("title", ""),
+                "poster": card.get("poster", ""),
+            })
+        self._json({"items": out})
+
+    # ---- 播放器批注（R23） --------------------------------------------- #
+    #
+    # 一条批注 = 「某个时间点 + 一句话」。播放到那一刻从画面上滚过；汇总页点一条
+    # 直接跳到那部片的那个位置。纯自用，不做社交、不进摘要。
+    #
+    @route("GET", r"/api/user/annotations/(\d+)")
+    def annotations_of(self, query, metadata_id, *_) -> None:
+        """某部片的弹幕。
+
+        `?file=<file_key>` 指定版本/集：弹幕是**跟着文件走**的，不同清晰度、
+        不同集共用一个时间轴必然串戏，所以默认必须带 file_key。
+        不带 file 时回退成「这部片全部文件」的合集（老客户端兼容），
+        并额外返回 `files`（每个文件多少条），管理页据此分组。
+        """
+        key = (query.get("file") or [""])[0]
+        key = key[:64]
+        with user_db() as conn:
+            if key:
+                rows = conn.execute(
+                    "SELECT id, t_ms, body, created_at FROM annotations "
+                    "WHERE metadata_id = ? AND file_key = ? ORDER BY t_ms",
+                    (int(metadata_id), key)).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, file_key, t_ms, body, created_at FROM annotations "
+                    "WHERE metadata_id = ? ORDER BY t_ms", (int(metadata_id),)).fetchall()
+            files = conn.execute(
+                "SELECT file_key, COUNT(*) AS n FROM annotations "
+                "WHERE metadata_id = ? GROUP BY file_key",
+                (int(metadata_id),)).fetchall()
+        names = annotation_file_names([str(r["file_key"] or "") for r in files])
+        self._json({
+            "items": [dict(r) for r in rows],
+            "files": [{"file_key": str(r["file_key"] or ""), "name": names.get(
+                str(r["file_key"] or ""), ""), "count": int(r["n"])} for r in files],
+        })
+
+    @route("GET", r"/api/user/annotations")
+    def annotations_all(self, query, *_) -> None:
+        """我的全部批注（汇总页）：跨库不能 JOIN，先取批注再按 id 补片名/海报。"""
+        try:
+            limit = max(1, min(int((query.get("limit") or ["300"])[0]), 1000))
+        except ValueError:
+            return self._error(400, "limit 必须是整数")
+        with user_db() as conn:
+            rows = conn.execute(
+                "SELECT id, metadata_id, file_key, t_ms, body, created_at FROM annotations "
+                "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        info = {int(m["id"]): m for m in fetch_by_ids([int(r["metadata_id"]) for r in rows])}
+        names = annotation_file_names([str(r["file_key"] or "") for r in rows])
+        out = []
+        for r in rows:
+            base = info.get(int(r["metadata_id"]))
+            card = {}
+            if base:
+                try:
+                    card = item_of(base)
+                except Exception:  # noqa: BLE001
+                    card = dict(base)
+            fk = str(r["file_key"] or "")
+            out.append({
+                "id": int(r["id"]),
+                "metadata_id": int(r["metadata_id"]),
+                "file_key": fk,
+                "file_name": names.get(fk, ""),
+                "t_ms": int(r["t_ms"] or 0),
+                "body": r["body"] or "",
+                "created_at": r["created_at"] or "",
+                "number": card.get("number", ""),
+                "title": card.get("title", ""),
+                "poster": card.get("poster", ""),
+            })
+        self._json({"items": out})
+
+    @route("POST", r"/api/user/annotations/(\d+)")
+    def annotation_add(self, query, metadata_id, *_) -> None:
+        body = self._body() or {}
+        text = str(body.get("body") or "").strip()
+        if not text:
+            return self._error(400, "批注不能为空")
+        if len(text) > 200:
+            return self._error(400, "批注太长了（上限 200 字）")
+        file_key = str(body.get("file_key") or "")[:64]
+        try:
+            t_ms = int(round(float(body.get("t") or 0) * 1000))
+        except (TypeError, ValueError):
+            t_ms = 0
+        t_ms = max(0, min(t_ms, 24 * 3600 * 1000))
+        with user_db() as conn:
+            cur = conn.execute(
+                "INSERT INTO annotations(metadata_id, file_key, t_ms, body, created_at) "
+                "VALUES(?,?,?,?,?)",
+                (int(metadata_id), file_key, t_ms, text, now_iso()))
+            new_id = cur.lastrowid
+        self._json({"ok": True, "id": new_id, "file_key": file_key,
+                    "t_ms": t_ms, "body": text})
+
+    @route("DELETE", r"/api/user/annotations/(\d+)/(\d+)")
+    def annotation_del(self, query, metadata_id, annotation_id, *_) -> None:
+        with user_db() as conn:
+            conn.execute("DELETE FROM annotations WHERE id = ? AND metadata_id = ?",
+                         (int(annotation_id), int(metadata_id)))
+        self._json({"ok": True})
 
     @route("GET", r"/api/user/extensions")
     def extensions(self, query, *_) -> None:
@@ -2446,14 +3376,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(422, "metadata_id 必填")
         position = max(0.0, float(body.get("position") or 0))
         duration = max(0.0, float(body.get("duration") or 0))
-        finished = 1 if (body.get("finished") or (duration and position >= duration * 0.92)) else 0
+        # 已看完的口径只有一个：0.95，与客户端 PlayerPage.saveProgress 完全一致。
+        # 从前这里是 0.92、客户端是 0.95，会出现「客户端显示看完、服务端没标完」的错位。
+        finished = 1 if (body.get("finished") or (duration and position >= duration * FINISH_RATIO)) else 0
         if not finished and position < 5:
             return self._json({"ok": True, "skipped": True})
         with user_db() as conn:
             conn.execute(
                 "INSERT INTO history(metadata_id, position, duration, played_at, finished) VALUES(?,?,?,?,?) "
+                # finished 一旦置 1 就不再回落：重看开头几秒不该把「已看完」抹掉
                 "ON CONFLICT(metadata_id) DO UPDATE SET position=excluded.position, "
-                "duration=excluded.duration, played_at=excluded.played_at, finished=excluded.finished",
+                "duration=excluded.duration, played_at=excluded.played_at, "
+                "finished=MAX(history.finished, excluded.finished)",
                 (mid, position, duration, now_iso(), finished),
             )
             row = conn.execute(

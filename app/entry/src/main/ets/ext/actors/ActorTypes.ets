@@ -5,6 +5,8 @@
  * 关掉扩展后核心不应该残留任何「演员」相关类型。服务端字段可能为 null / 缺失，
  * 所有进入 UI 的数据都要先过 safeXxx()，否则 ArkTS 里 null.length 会直接崩。
  */
+import { PosterRef } from '../../common/Types';
+import { safePosterRefs } from '../../common/Safe';
 
 export interface ActorItem {
   id: number;
@@ -19,6 +21,10 @@ export interface ActorItem {
   hip: number;
   cup: string;
   avatar: string;
+  /** 是否已收藏（存在旁挂 user.db，上游 actors 表没有收藏列）。 */
+  isFavorite: boolean;
+  /** 最近几部作品的海报（只有 `?favorite=true` 会下发；收藏页横版行用）。 */
+  posters: PosterRef[];
 }
 
 export interface ActorDetail {
@@ -39,6 +45,8 @@ export interface ActorDetail {
   hip: number;
   avatars: string[];
   updated_at: string;
+  /** 是否已收藏（旁挂 user.db）。 */
+  isFavorite: boolean;
 }
 
 export interface ActorMediaItem {
@@ -50,6 +58,8 @@ export interface ActorMediaItem {
   score: number;
   /** 无码 / 破解 / 流出 / 中字 */
   marks: string[];
+  /** 公开扩展 ratings：我给这部片打的分（0 = 没打过）。 */
+  my_rating?: number;
 }
 
 export interface ActorList {
@@ -106,7 +116,7 @@ export function emptyActorDetail(): ActorDetail {
   const d: ActorDetail = {
     id: 0, name: '', count: 0, gender: '', birthday: '', height: 0, cup: '', avatar: '',
     aliases: [], overview: '', tagline: '', birthplace: '', bust: 0, waist: 0, hip: 0,
-    avatars: [], updated_at: ''
+    avatars: [], updated_at: '', isFavorite: false
   };
   return d;
 }
@@ -114,7 +124,8 @@ export function emptyActorDetail(): ActorDetail {
 export function safeActor(raw: ActorItem): ActorItem {
   const a: ActorItem = {
     id: 0, name: '', count: 0, gender: '', birthday: '', birthplace: '',
-    height: 0, bust: 0, waist: 0, hip: 0, cup: '', avatar: ''
+    height: 0, bust: 0, waist: 0, hip: 0, cup: '', avatar: '', isFavorite: false,
+    posters: []
   };
   if (raw === undefined || raw === null) {
     return a;
@@ -131,6 +142,8 @@ export function safeActor(raw: ActorItem): ActorItem {
   a.hip = Math.trunc(n(raw.hip));
   a.cup = s(raw.cup);
   a.avatar = s(raw.avatar);
+  a.isFavorite = raw.isFavorite === true;
+  a.posters = safePosterRefs(raw.posters);
   return a;
 }
 
@@ -171,6 +184,7 @@ export function safeActorDetail(raw: ActorDetail): ActorDetail {
   d.hip = Math.trunc(n(raw.hip));
   d.avatars = sl(raw.avatars);
   d.updated_at = s(raw.updated_at);
+  d.isFavorite = raw.isFavorite === true;
   return d;
 }
 
@@ -189,7 +203,9 @@ export function safeActorMediaList(raw: ActorMediaList): ActorMediaList {
       release: s(m.release),
       poster: s(m.poster),
       score: Number(m.score) || 0,
-      marks: Array.isArray(m.marks) ? m.marks : []
+      marks: Array.isArray(m.marks) ? m.marks : [],
+      my_rating: Math.trunc(m.my_rating === undefined || m.my_rating === null
+        ? 0 : Number(m.my_rating))
     });
   }
   out.total = Math.trunc(n(raw.total));
@@ -204,6 +220,8 @@ export interface CastMember {
   name: string;
   gender: string;
   avatar: string;
+  /** 出演本片时的周岁；0 = 上游缺生日/发行日，不算也不显示。 */
+  age: number;
 }
 
 export interface CastMemberList {
@@ -221,6 +239,8 @@ export interface CastFindItem {
   score: number;
   poster: string;
   marks: string[];
+  /** 公开扩展 ratings：我给这部片打的分（0 = 没打过）。 */
+  my_rating?: number;
   female_count: number;
   male_count: number;
   cast_total: number;
@@ -260,6 +280,47 @@ export function safeDirectorHits(raw: DirectorHitList): DirectorHit[] {
   return out;
 }
 
+/**
+ * 合作演员候选（`/api/user/actors/{id}/co-actors`）。
+ * `shared` = 与当前这位演员同片的部数 —— 选之前就知道能筛出几部。
+ */
+export interface CoActorItem {
+  id: number;
+  name: string;
+  gender: string;
+  avatar: string;
+  shared: number;
+}
+
+export interface CoActorList {
+  items: CoActorItem[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export function safeCoActors(raw: CoActorList): CoActorItem[] {
+  const out: CoActorItem[] = [];
+  if (raw === undefined || raw === null || !Array.isArray(raw.items)) {
+    return out;
+  }
+  for (let i = 0; i < raw.items.length; i++) {
+    const a: CoActorItem = raw.items[i];
+    if (a === undefined || a === null) {
+      continue;
+    }
+    const id: number = Math.trunc(n(a.id));
+    if (id <= 0) {
+      continue;
+    }
+    out.push({
+      id: id, name: s(a.name), gender: s(a.gender), avatar: s(a.avatar),
+      shared: Math.trunc(n(a.shared))
+    });
+  }
+  return out;
+}
+
 export interface CastFindList {
   items: CastFindItem[];
   total: number;
@@ -274,7 +335,7 @@ export interface CastFindList {
 }
 
 export function safeCastMember(raw: CastMember): CastMember {
-  const c: CastMember = { id: 0, name: '', gender: 'unknown', avatar: '' };
+  const c: CastMember = { id: 0, name: '', gender: 'unknown', avatar: '', age: 0 };
   if (raw === undefined || raw === null) {
     return c;
   }
@@ -282,6 +343,7 @@ export function safeCastMember(raw: CastMember): CastMember {
   c.name = s(raw.name);
   c.gender = s(raw.gender);
   c.avatar = s(raw.avatar);
+  c.age = Math.trunc(n(raw.age));
   return c;
 }
 
@@ -317,6 +379,8 @@ export function safeCastFindList(raw: CastFindList): CastFindList {
       score: Number(m.score) || 0,
       poster: s(m.poster),
       marks: Array.isArray(m.marks) ? m.marks : [],
+      my_rating: Math.trunc(m.my_rating === undefined || m.my_rating === null
+        ? 0 : Number(m.my_rating)),
       female_count: Math.trunc(n(m.female_count)),
       male_count: Math.trunc(n(m.male_count)),
       cast_total: Math.trunc(n(m.cast_total)),

@@ -1,6 +1,6 @@
 import {
   CommentItem, HistoryItem, HomeData, HomeRow, ItemDetail, LibraryInfo, MediaFile, MediaItem,
-  StreamItem, StreamList, SuggestItem, SuggestResult, SuggestTotals, emptySuggestTotals,
+  PosterRef, StreamItem, StreamList, SuggestItem, SuggestResult, SuggestTotals, emptySuggestTotals,
   SearchHistoryItem, SearchHistoryList
 } from './Types';
 
@@ -64,6 +64,9 @@ export function safeItem(raw: MediaItem): MediaItem {
   // 服务端已经算好「无码/破解/流出/中字」，这里必须原样带过来，
   // 否则卡片拿到了数据也不显示（之前收藏页就没标签）。
   item.marks = Array.isArray(raw.marks) ? raw.marks : [];
+  // 公开扩展 ratings：列表卡右下角「我的评价」标签用，丢了海报上就不显示
+  item.my_rating = Math.trunc(num(raw.my_rating === undefined || raw.my_rating === null
+    ? 0 : raw.my_rating));
   // 横幅按真实比例定宽，这个字段必须接住（marks 就踩过一次）
   item.fanart_ratio = num(raw.fanart_ratio === undefined || raw.fanart_ratio === null
     ? 0 : raw.fanart_ratio);
@@ -100,6 +103,8 @@ export function safeFile(raw: MediaFile): MediaFile {
   file.library_id = Math.trunc(num(raw.library_id));
   return file;
 }
+
+
 
 export function safeDetail(raw: ItemDetail): ItemDetail {
   const d: ItemDetail = {
@@ -150,7 +155,9 @@ export function safeDetail(raw: ItemDetail): ItemDetail {
         id: Math.trunc(num(c.id)),
         body: str(c.body),
         created_at: str(c.created_at),
-        updated_at: str(c.updated_at)
+        updated_at: str(c.updated_at),
+        // 我自己写的那条（服务端插在最前并打 mine）：漏了这个字段就高亮不出来
+        mine: c.mine === true
       });
     }
   }
@@ -174,6 +181,38 @@ export function safeDetail(raw: ItemDetail): ItemDetail {
     }
   }
   d.still_ratios = ratios;
+  // 公开扩展 stills：喜欢过的剧照地址（服务端没装扩展时就是空数组）
+  d.still_likes = strList(raw.still_likes === undefined ? [] : raw.still_likes);
+  // 公开扩展 watch_later：稍后再看状态（没装扩展时恒为 false）
+  d.watch_later = raw.watch_later === true;
+  // 扩展下发的字段走重建式白名单：不在这里显式接住，详情页会静默丢掉
+  d.my_rating = Math.trunc(num(raw.my_rating === undefined ? 0 : raw.my_rating));
+  const cids: number[] = [];
+  if (raw.collection_ids !== undefined && raw.collection_ids !== null &&
+      Array.isArray(raw.collection_ids)) {
+    for (let i = 0; i < raw.collection_ids.length; i++) {
+      const v: number = Math.trunc(num(raw.collection_ids[i]));
+      if (v > 0) {
+        cids.push(v);
+      }
+    }
+  }
+  d.collection_ids = cids;
+  // 没刮削封面时用我截的关键帧兜底（老服务端没这字段就是空串）
+  d.frame_cover = raw.frame_cover === undefined || raw.frame_cover === null
+    ? '' : String(raw.frame_cover);
+  // 我截的帧当剧照：老服务端没有这字段，兜成空数组
+  const mine: string[] = [];
+  const rawMine = raw.my_stills;
+  if (rawMine !== undefined && rawMine !== null && Array.isArray(rawMine)) {
+    for (let i = 0; i < rawMine.length; i++) {
+      const u: string = String(rawMine[i]);
+      if (u.length > 0) {
+        mine.push(u);
+      }
+    }
+  }
+  d.my_stills = mine;
   return d;
 }
 
@@ -197,7 +236,11 @@ export function safeHistory(list: HistoryItem[]): HistoryItem[] {
       duration: num(raw.duration),
       played_at: str(raw.played_at),
       finished: raw.finished === true,
-      marks: Array.isArray(raw.marks) ? raw.marks : []
+      marks: Array.isArray(raw.marks) ? raw.marks : [],
+      // 历史页要能按「我的评分 / 收藏夹」本地筛选、按我的评分排序
+      my_rating: Math.trunc(num(raw.my_rating === undefined || raw.my_rating === null
+        ? 0 : raw.my_rating)),
+      collection_ids: Array.isArray(raw.collection_ids) ? raw.collection_ids : []
     };
     out.push(item);
   }
@@ -355,6 +398,29 @@ export function safeStreams(raw: StreamList): StreamItem[] {
       available: s.available === true,
       detail: str(s.detail)
     });
+  }
+  return out;
+}
+
+/**
+ * 可点击海报列表（分类列表的 `posterItems`、演员收藏的 `posters`）。
+ * 缺 id 或缺地址的条目直接丢掉 —— 点了没反应比少一张图更难受。
+ */
+export function safePosterRefs(raw: PosterRef[]): PosterRef[] {
+  const out: PosterRef[] = [];
+  if (!Array.isArray(raw)) {
+    return out;
+  }
+  for (let i = 0; i < raw.length; i++) {
+    const p = raw[i];
+    if (p === undefined || p === null) {
+      continue;
+    }
+    const id: number = Math.trunc(num(p.id));
+    const url: string = str(p.url);
+    if (id > 0 && url.length > 0) {
+      out.push({ id: id, url: url });
+    }
   }
   return out;
 }

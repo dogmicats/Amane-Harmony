@@ -7,40 +7,28 @@ import { BrowseResult, DetailParams, MediaItem } from '../common/Types';
 import { safeItems } from '../common/Safe';
 import { BuildConfig } from '../common/BuildConfig';
 import { PosterCard } from './PosterCard';
+import { KeywordBox } from './KeywordBox';
+import { BottomSheet, ChipGroup, SortSheet, ToolPill } from './ListSheets';
 import { GachaSwitch } from '../ext/stills/GachaSwitch';
 import { GachaWall } from '../ext/stills/GachaWall';
+import { CollectionInfo, fetchCollections } from '../ext/collections/CollectionTypes';
+import {
+  AGE_BANDS, MYRATING_OPTIONS, PREF_AGE_GENDER, SORT_OPTIONS, ChipOption, SortOption,
+  sortLabelWith, sortDefOf, ageBandParams, ageGenderParam, ageGenderLabel
+} from '../common/BrowseOptions';
 
 const PAGE_SIZE: number = 45;
+/** 悬浮 Tab 导航栏占的底部高度：Tab 内的筛选/排序面板要让出这么多，否则最下面被挡住。 */
+export const TAB_SAFE: number = 84;
 
-export interface SortOption {
-  key: string;
-  label: string;
-  def: string;
-}
-
-export interface FilterOption {
-  key: string;
-  label: string;
-}
-
-export const SORT_OPTIONS: SortOption[] = [
-  { key: 'recent', label: '最近更新', def: 'desc' },
-  { key: 'release', label: '发行日期', def: 'desc' },
-  { key: 'score', label: '评分', def: 'desc' },
-  { key: 'number', label: '番号', def: 'asc' },
-  { key: 'title', label: '标题', def: 'asc' },
-  { key: 'runtime', label: '时长', def: 'desc' },
-  { key: 'random', label: '随机', def: 'desc' }
-];
-
-const MOSAIC_OPTIONS: FilterOption[] = [
+const MOSAIC_OPTIONS: ChipOption[] = [
   { key: '', label: '全部' },
   { key: 'LEAKED', label: '无码流出' },
   { key: 'CRACKED', label: '破解' },
   { key: 'NONE', label: '原版' }
 ];
 
-const CTYPE_OPTIONS: FilterOption[] = [
+const CTYPE_OPTIONS: ChipOption[] = [
   { key: '', label: '全部' },
   { key: 'CENSORED', label: '有码' },
   { key: 'UNCENSORED', label: '无码' },
@@ -48,13 +36,14 @@ const CTYPE_OPTIONS: FilterOption[] = [
   { key: 'AMATEUR', label: '业余' }
 ];
 
-const SUB_OPTIONS: FilterOption[] = [
+const SUB_OPTIONS: ChipOption[] = [
   { key: '', label: '全部' },
   { key: '1', label: '有字幕' },
   { key: '0', label: '无字幕' }
 ];
 
-const SCORE_OPTIONS: FilterOption[] = [
+
+const SCORE_OPTIONS: ChipOption[] = [
   { key: '', label: '全部' },
   { key: '4.5', label: '4.5 以上' },
   { key: '4.0', label: '4.0 以上' },
@@ -62,60 +51,13 @@ const SCORE_OPTIONS: FilterOption[] = [
   { key: '3.0', label: '3.0 以上' }
 ];
 
-const YEAR_OPTIONS: FilterOption[] = [
+const YEAR_OPTIONS: ChipOption[] = [
   { key: '', label: '全部' },
   { key: '2026', label: '2026' },
   { key: '2025', label: '2025' },
   { key: '2024', label: '2024' },
   { key: 'old', label: '2023 及更早' }
 ];
-
-function sortLabelOf(key: string): string {
-  for (let i = 0; i < SORT_OPTIONS.length; i++) {
-    if (SORT_OPTIONS[i].key === key) {
-      return SORT_OPTIONS[i].label;
-    }
-  }
-  return '最近更新';
-}
-
-/**
- * 一组筛选 chip。
- * 必须做成子组件：@Builder 按值传参不会刷新，选中态会一直停在初始值。
- */
-@Component
-struct FilterChips {
-  title: string = '';
-  options: FilterOption[] = [];
-  @Prop current: string = '';
-  onPick: (key: string) => void = () => {};
-
-  build() {
-    Column({ space: 8 }) {
-      Text(this.title)
-        .fontSize(11)
-        .fontColor(Theme.TEXT_FAINT)
-        .width('100%')
-      Flex({ wrap: FlexWrap.Wrap }) {
-        ForEach(this.options, (opt: FilterOption) => {
-          Text(opt.label)
-            .fontSize(12)
-            .fontColor(this.current === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
-            .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-            .backgroundColor(this.current === opt.key ? Theme.ACCENT : Theme.CARD)
-            .borderRadius(14)
-            .margin({ right: 8, bottom: 8 })
-            .onClick(() => {
-              this.onPick(opt.key);
-            })
-        }, (opt: FilterOption) => `${this.title}-${opt.key}`)
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-  }
-}
 
 /**
  * 媒体浏览网格：排序 + 筛选 + 分页。
@@ -125,6 +67,14 @@ struct FilterChips {
 export struct BrowseGrid {
   @Prop @Watch('onExternalChange') libraryId: number = 0;
   @Prop @Watch('onExternalChange') refreshKey: number = 0;
+  /** 从详情页点「N 岁」进来时预置的年龄分桶；空串=不预置。 */
+  @Prop initialAgeBand: string = '';
+  /** 预置排序键（如 cast_age）；空串=默认最近更新。 */
+  @Prop initialSort: string = '';
+  /** 预置年龄性别（female / male）；空串=读全局偏好（默认 female）。 */
+  @Prop initialAgeGender: string = '';
+  /** 底部悬浮 Tab 导航栏的安全间距：Tab 内传 TAB_SAFE，独立页留 0。 */
+  @Prop tabInset: number = 0;
 
   @State items: MediaItem[] = [];
   @State total: number = 0;
@@ -138,19 +88,63 @@ export struct BrowseGrid {
   @State fSub: string = '';
   @State fScore: string = '';
   @State fYear: string = '';
+  @State fAge: string = '';
+  /** 出演年龄看哪个性别：female（默认）/ male。全局偏好，与详情页、搜索页共用。 */
+  @State fAgeGender: string = 'female';
   @State fState: string = '';
+  @State fMyRating: string = '';
+  @State fCollection: string = '';
+  /** 收藏夹筛选的选项是用户自创的，运行时从服务端拉。 */
+  @State collectionOptions: ChipOption[] = [];
   @State showSort: boolean = false;
   @State showFilter: boolean = false;
+  /** 关键词：在当前库/当前筛选之上再缩一层，服务端按相关性排（越精准越靠前）。 */
+  @State keyword: string = '';
   /** 抽卡模式：把这个库里的影片剧照随机铺成瀑布流，替代海报网格。 */
   @State gachaOn: boolean = false;
 
   aboutToAppear(): void {
     this.gachaOn = BuildConfig.ENABLE_GACHA && Store.I.gachaAuto;
+    // 外部带入的初值必须先落进 @State 再发第一次请求，否则第一屏还是默认的
+    // 「最近更新 + 全部」，看起来像点了岁数没反应。
+    if (this.initialAgeBand.length > 0) {
+      this.fAge = this.initialAgeBand;
+    }
+    if (this.initialSort.length > 0) {
+      this.sort = this.initialSort;
+      this.order = sortDefOf(this.initialSort);
+    }
+    // 性别是全局偏好（详情页徽章 / 筛选 / 搜索页共用一个）；从详情页跳来时
+    // 外部带了明确值就用它，保证点「24 岁」看到的一定是女优 18–24。
+    this.fAgeGender = this.initialAgeGender.length > 0
+      ? this.initialAgeGender : Store.I.prefString(PREF_AGE_GENDER, 'female');
+    this.loadCollections();
     this.reload();
   }
 
   onExternalChange(): void {
+    this.loadCollections();
     this.reload();
+  }
+
+  private async loadCollections(): Promise<void> {
+    if (!BuildConfig.ENABLE_COLLECTIONS) {
+      return;
+    }
+    try {
+      const lists: CollectionInfo[] = await fetchCollections();
+      const opts: ChipOption[] = [
+        { key: '', label: '全部' },
+        { key: 'none', label: '未归类' }
+      ];
+      for (let i = 0; i < lists.length; i++) {
+        opts.push({ key: `${lists[i].id}`, label: lists[i].name });
+      }
+      this.collectionOptions = opts;
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error(`[amane] collections: ${e.code} ${e.message}`);
+    }
   }
 
   private filterCount(): number {
@@ -170,7 +164,16 @@ export struct BrowseGrid {
     if (this.fYear.length > 0) {
       n++;
     }
+    if (this.fAge.length > 0) {
+      n++;
+    }
     if (this.fState.length > 0) {
+      n++;
+    }
+    if (this.fMyRating.length > 0) {
+      n++;
+    }
+    if (this.fCollection.length > 0) {
       n++;
     }
     return n;
@@ -200,8 +203,26 @@ export struct BrowseGrid {
     } else if (this.fYear.length > 0) {
       parts.push(`year_from=${this.fYear}`);
     }
+    const ageParts: string[] = ageBandParams(this.fAge);
+    for (let i = 0; i < ageParts.length; i++) {
+      parts.push(ageParts[i]);
+    }
+    // 性别只在真的用到年龄时带上（区间筛选或按年龄排序），不往每条 URL 塞无关参数。
+    if (this.fAge.length > 0 || this.sort === 'cast_age') {
+      parts.push(ageGenderParam(this.fAgeGender));
+    }
     if (this.fState.length > 0) {
       parts.push(`state=${this.fState}`);
+    }
+    if (this.fMyRating.length > 0) {
+      parts.push(`myrating=${this.fMyRating}`);
+    }
+    if (this.fCollection.length > 0) {
+      parts.push(`collection=${this.fCollection}`);
+    }
+    if (this.keyword.length > 0) {
+      // 服务端 browse 的 q：拆词 AND 命中番号/标题/演员/系列，并按相关性排在前
+      parts.push(`q=${encodeURIComponent(this.keyword)}`);
     }
     return `${Store.I.user}/api/user/browse?${parts.join('&')}`;
   }
@@ -254,7 +275,10 @@ export struct BrowseGrid {
     this.fSub = '';
     this.fScore = '';
     this.fYear = '';
+    this.fAge = '';
     this.fState = '';
+    this.fMyRating = '';
+    this.fCollection = '';
   }
 
   /** 抽卡空墙文案里用的库名（0 = 全部库）。 */
@@ -270,10 +294,30 @@ export struct BrowseGrid {
     return '';
   }
 
+  /** 清单内关键词搜索：不动筛选条件，只在当前结果里按相关性缩小。 */
+  @Builder
+  SearchBar() {
+    Row() {
+      KeywordBox({
+        placeholder: '搜索番号 / 标题 / 演员 / 系列',
+        onCommit: (kw: string) => {
+          const next: string = kw.trim();
+          if (next === this.keyword) {
+            return;
+          }
+          this.keyword = next;
+          this.reload();
+        }
+      })
+    }
+    .width('100%')
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
+  }
+
   @Builder
   Toolbar() {
     Row({ space: 8 }) {
-      Text(`${this.total} 部`)
+      Text(this.keyword.length > 0 ? `「${this.keyword}」${this.total} 部` : `${this.total} 部`)
         .fontSize(11)
         .fontColor(Theme.TEXT_FAINT)
         .layoutWeight(1)
@@ -288,25 +332,21 @@ export struct BrowseGrid {
         })
       }
 
-      Text(`⇅ ${sortLabelOf(this.sort)}${this.sort === 'random' ? '' : (this.order === 'asc' ? ' ↑' : ' ↓')}`)
-        .fontSize(12)
-        .fontColor(Theme.TEXT_DIM)
-        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-        .backgroundColor(Theme.CARD)
-        .borderRadius(12)
-        .onClick(() => {
+      ToolPill({
+        label: `⇅ ${sortLabelWith(this.sort, this.fAgeGender)}` +
+          (this.sort === 'random' ? '' : (this.order === 'asc' ? ' ↑' : ' ↓')),
+        onTap: () => {
           this.showSort = true;
-        })
+        }
+      })
 
-      Text(this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选')
-        .fontSize(12)
-        .fontColor(this.filterCount() > 0 ? '#FFFFFF' : Theme.TEXT_DIM)
-        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-        .backgroundColor(this.filterCount() > 0 ? Theme.ACCENT : Theme.CARD)
-        .borderRadius(12)
-        .onClick(() => {
+      ToolPill({
+        label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+        active: this.filterCount() > 0,
+        onTap: () => {
           this.showFilter = true;
-        })
+        }
+      })
     }
     .width('100%')
     .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4, bottom: 8 })
@@ -348,149 +388,99 @@ export struct BrowseGrid {
     })
   }
 
-  @Builder
-  SortPanel() {
-    Column() {
-      Row() {
-        Text('排序方式')
-          .fontSize(15)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.TEXT)
-        Blank()
-        Text('关闭')
-          .fontSize(13)
-          .fontColor(Theme.TEXT_FAINT)
-          .onClick(() => {
-            this.showSort = false;
-          })
-      }
-      .width('100%')
-      .padding({ left: 20, right: 20, top: 16, bottom: 6 })
-
-      ForEach(SORT_OPTIONS, (opt: SortOption) => {
-        Row() {
-          Text(opt.label)
-            .fontSize(14)
-            .fontColor(this.sort === opt.key ? Theme.ACCENT : Theme.TEXT)
-            .layoutWeight(1)
-          if (this.sort === opt.key && opt.key !== 'random') {
-            Text(this.order === 'asc' ? '↑ 正序' : '↓ 倒序')
-              .fontSize(11)
-              .fontColor(Theme.TEXT)
-              .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-              .backgroundColor(Theme.CARD_HI)
-              .borderRadius(8)
-              .onClick(() => {
-                this.order = this.order === 'asc' ? 'desc' : 'asc';
-                this.reload();
-              })
-          }
-        }
-        .width('100%')
-        .height(46)
-        .padding({ left: 20, right: 20 })
-        .onClick(() => {
-          if (this.sort === opt.key) {
-            this.showSort = false;
-            return;
-          }
-          this.sort = opt.key;
-          this.order = opt.def;
-          this.reload();
-          this.showSort = false;
-        })
-      }, (opt: SortOption) => opt.key)
-
-      Blank().height(20)
+  /** 排序项按当前性别换标签（出演年龄 → 女优年龄 / 男优年龄），抽屉与工具条同一口径。 */
+  private sortOptions(): SortOption[] {
+    const out: SortOption[] = [];
+    for (let i = 0; i < SORT_OPTIONS.length; i++) {
+      const opt: SortOption = SORT_OPTIONS[i];
+      out.push({ key: opt.key, label: sortLabelWith(opt.key, this.fAgeGender), def: opt.def });
     }
-    .width('100%')
-    .backgroundColor(Theme.BG_RAISED)
-    .borderRadius({ topLeft: 18, topRight: 18 })
+    return out;
   }
 
   @Builder
-  FilterPanel() {
-    Column() {
-      Row() {
-        Text('筛选')
-          .fontSize(15)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.TEXT)
-        Blank()
-        Text('重置')
-          .fontSize(13)
-          .fontColor(Theme.TEXT_DIM)
-          .onClick(() => {
-            this.resetFilters();
-            this.reload();
-          })
-      }
-      .width('100%')
-      .padding({ left: 20, right: 20, top: 16, bottom: 10 })
-
-      Scroll() {
-        Column({ space: 14 }) {
-          FilterChips({
-            title: '马赛克', options: MOSAIC_OPTIONS, current: this.fMosaic,
-            onPick: (key: string) => {
-              this.fMosaic = key;
-              this.reload();
-            }
-          })
-          FilterChips({
-            title: '类型', options: CTYPE_OPTIONS, current: this.fCtype,
-            onPick: (key: string) => {
-              this.fCtype = key;
-              this.reload();
-            }
-          })
-          FilterChips({
-            title: '字幕', options: SUB_OPTIONS, current: this.fSub,
-            onPick: (key: string) => {
-              this.fSub = key;
-              this.reload();
-            }
-          })
-          FilterChips({
-            title: '评分', options: SCORE_OPTIONS, current: this.fScore,
-            onPick: (key: string) => {
-              this.fScore = key;
-              this.reload();
-            }
-          })
-          FilterChips({
-            title: '年份', options: YEAR_OPTIONS, current: this.fYear,
-            onPick: (key: string) => {
-              this.fYear = key;
-              this.reload();
-            }
-          })
-          Blank().height(10)
+  FilterSheet() {
+    BottomSheet({
+      title: '筛选',
+      actionLabel: '重置',
+      onAction: () => {
+        this.resetFilters();
+        this.reload();
+      },
+      onConfirm: () => {
+        this.showFilter = false;
+      },
+      tabInset: this.tabInset
+    }) {
+      ChipGroup({
+        title: '马赛克', options: MOSAIC_OPTIONS, current: this.fMosaic,
+        onPick: (key: string) => {
+          this.fMosaic = key;
+          this.reload();
         }
-        .width('100%')
-        .padding({ left: 20, right: 20 })
+      })
+      ChipGroup({
+        title: '类型', options: CTYPE_OPTIONS, current: this.fCtype,
+        onPick: (key: string) => {
+          this.fCtype = key;
+          this.reload();
+        }
+      })
+      ChipGroup({
+        title: '字幕', options: SUB_OPTIONS, current: this.fSub,
+        onPick: (key: string) => {
+          this.fSub = key;
+          this.reload();
+        }
+      })
+      ChipGroup({
+        title: '评分', options: SCORE_OPTIONS, current: this.fScore,
+        onPick: (key: string) => {
+          this.fScore = key;
+          this.reload();
+        }
+      })
+      ChipGroup({
+        title: '年份', options: YEAR_OPTIONS, current: this.fYear,
+        onPick: (key: string) => {
+          this.fYear = key;
+          this.reload();
+        }
+      })
+      ChipGroup({
+        title: `${ageGenderLabel(this.fAgeGender)}年龄`,
+        options: AGE_BANDS,
+        current: this.fAge,
+        trailing: this.fAgeGender === 'male' ? '♀ 换女优' : '♂ 换男优',
+        onTrailing: () => {
+          this.fAgeGender = this.fAgeGender === 'male' ? 'female' : 'male';
+          Store.I.prefSetString(PREF_AGE_GENDER, this.fAgeGender);
+          this.reload();
+        },
+        onPick: (key: string) => {
+          this.fAge = key;
+          this.reload();
+        }
+      })
+      if (BuildConfig.ENABLE_RATINGS) {
+        ChipGroup({
+          title: '我的评分', options: MYRATING_OPTIONS, current: this.fMyRating,
+          onPick: (key: string) => {
+            this.fMyRating = key;
+            this.reload();
+          }
+        })
       }
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
-
-      Row() {
-        Button('完成')
-          .width('100%')
-          .height(42)
-          .backgroundColor(Theme.ACCENT)
-          .fontColor('#FFFFFF')
-          .fontSize(14)
-          .onClick(() => {
-            this.showFilter = false;
-          })
+      if (BuildConfig.ENABLE_COLLECTIONS) {
+        ChipGroup({
+          title: '收藏夹', options: this.collectionOptions, current: this.fCollection,
+          onPick: (key: string) => {
+            this.fCollection = key;
+            this.reload();
+          }
+        })
       }
-      .width('100%')
-      .padding({ left: 20, right: 20, top: 8, bottom: 18 })
     }
-    .width('100%')
-    .height('84%')
-    .backgroundColor(Theme.BG_RAISED)
-    .borderRadius({ topLeft: 18, topRight: 18 })
   }
 
   build() {
@@ -499,6 +489,7 @@ export struct BrowseGrid {
         if (this.gachaOn) {
           this.GachaBar()
         } else {
+          this.SearchBar()
           this.Toolbar()
         }
 
@@ -509,11 +500,15 @@ export struct BrowseGrid {
                 scope: this.libraryId > 0 ? 'library' : 'all',
                 scopeId: this.libraryId,
                 label: this.scopeLabel(),
-                count: 0
+                count: 0,
+                gachaOn: this.gachaOn,
+                onToggleGacha: (v: boolean) => {
+                  this.gachaOn = v;
+                }
               })
             }
             .width('100%')
-            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 84 })
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: TAB_SAFE })
           }
           .layoutWeight(1)
           .align(Alignment.Top)
@@ -546,10 +541,16 @@ export struct BrowseGrid {
           .justifyContent(FlexAlign.Center)
         } else if (this.items.length === 0) {
           Column({ space: 8 }) {
-            Text(this.filterCount() > 0 ? '没有符合条件的影片' : '这个库还是空的')
+            Text(this.keyword.length > 0
+              ? `没有找到「${this.keyword}」`
+              : (this.filterCount() > 0 ? '没有符合条件的影片' : '这个库还是空的'))
               .fontSize(14)
               .fontColor(Theme.TEXT_DIM)
-            if (this.filterCount() > 0) {
+            if (this.keyword.length > 0) {
+              Text('换个关键词，或清空搜索看全部')
+                .fontSize(11)
+                .fontColor(Theme.TEXT_FAINT)
+            } else if (this.filterCount() > 0) {
               Text('试试放宽筛选条件')
                 .fontSize(11)
                 .fontColor(Theme.TEXT_FAINT)
@@ -600,7 +601,7 @@ export struct BrowseGrid {
           .columnsTemplate('1fr 1fr 1fr')
           .columnsGap(9)
           .rowsGap(14)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 84 })
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: TAB_SAFE })
           .layoutWeight(1)
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
@@ -623,10 +624,32 @@ export struct BrowseGrid {
           })
 
         if (this.showSort) {
-          this.SortPanel()
+          SortSheet({
+            options: this.sortOptions(),
+            current: this.sort,
+            order: this.order,
+            tabInset: this.tabInset,
+            onPick: (key: string) => {
+              if (this.sort === key) {
+                this.showSort = false;
+                return;
+              }
+              this.sort = key;
+              this.order = sortDefOf(key);
+              this.reload();
+              this.showSort = false;
+            },
+            onToggleOrder: () => {
+              this.order = this.order === 'asc' ? 'desc' : 'asc';
+              this.reload();
+            },
+            onClose: () => {
+              this.showSort = false;
+            }
+          })
         }
         if (this.showFilter) {
-          this.FilterPanel()
+          this.FilterSheet()
         }
       }
     }

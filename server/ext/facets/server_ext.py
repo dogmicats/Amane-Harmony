@@ -22,6 +22,7 @@ publisher / series / user_tag。本扩展只暴露「按分类浏览影片」这
 from __future__ import annotations
 
 import random
+import re
 
 A = None  # type: ignore[assignment]
 
@@ -202,6 +203,24 @@ def _like(value: str) -> str:
     return f"%{_esc(value)}%"
 
 
+# 核心 1.3.41+ 在每条 amane_db() 连接上注册了 amane_rel(name, kw)（关键词相关性
+# 分档）。只检测一次：老核心没有这个函数时退回 LIKE，「能搜到」比「排得好」重要。
+_REL_OK: bool | None = None
+
+
+def _has_rel() -> bool:
+    global _REL_OK
+    if _REL_OK is None:
+        try:
+            with A.amane_db() as conn:
+                conn.execute("SELECT amane_rel('a', 'a')").fetchone()
+            _REL_OK = True
+        except Exception:  # noqa: BLE001
+            _REL_OK = False
+            A.log("WARN facets: 核心未提供 amane_rel，搜索退回 LIKE")
+    return _REL_OK
+
+
 # 每个 metadata 的最新入库时间先聚一次再 JOIN：直接连 media_files 会按文件数放大行数，
 # 逼着外面用 COUNT(DISTINCT)，在 6 万行关联表上要多花几百毫秒。
 _RECENT_JOIN = ("LEFT JOIN (SELECT metadata_id, MAX(created_at) AS last_at "
@@ -213,12 +232,22 @@ def _agg_sql(kind: str, search: str, favorite: str, hidden: set | None = None) -
     """分类聚合子查询：实体行 + 片数 + 最新入库 / 最新发行。
 
     片数口径与上游一致（关联分类数挂载行、标量分类数同名 metadata 行）。
+
+    搜索（2.4.6.21）用核心的 `amane_rel()` 而不是 LIKE：归一化（全角/大小写/连字符）
+    之后再分档，「越精准越靠前」靠的是 SELECT 里的 rel 列，排序在 facets_list 里拼。
+    老核心没注册这个函数时退回 LIKE，至少还能搜到。
     """
     where: list[str] = []
     args: list = []
+    select_args: list = []
+    rel = search and _has_rel()
     if search:
-        where.append("e.name LIKE ? ESCAPE '\\'")
-        args.append(_like(search))
+        if rel:
+            where.append("amane_rel(e.name, ?) IS NOT NULL")
+            args.append(search)
+        else:
+            where.append("e.name LIKE ? ESCAPE '\\'")
+            args.append(_like(search))
     if favorite in ("true", "false"):
         where.append("e.is_favorite = ?")
         args.append(1 if favorite == "true" else 0)
@@ -237,9 +266,14 @@ def _agg_sql(kind: str, search: str, favorite: str, hidden: set | None = None) -
         head = f"FROM {table} e LEFT JOIN metadata m ON m.{col} = e.name "
     sql = ("SELECT e.id AS id, e.name AS name, e.is_favorite AS fav, "
            "COUNT(m.id) AS cnt, MAX(m.release) AS last_release, "
-           "MAX(f.last_at) AS last_added " + head + _RECENT_JOIN + cond +
-           "GROUP BY e.id")
-    return sql, args
+           "MAX(f.last_at) AS last_added")
+    if rel:
+        # 相关性档位要在 SELECT 里算：ORDER BY 直接引用 rel，翻页也不会变
+        sql += ", MIN(amane_rel(e.name, ?)) AS rel"
+        select_args.append(search)
+    sql += " " + head + _RECENT_JOIN + cond + "GROUP BY e.id"
+    # 参数按占位符出现顺序：SELECT 里的 rel 在 WHERE 之前
+    return sql, select_args + args
 
 
 _ORDER_COL = {
@@ -262,6 +296,84 @@ def _order_sql(sort_by: str, order: str, seed: int = 0) -> str:
     return f"({col} IS NULL) ASC, {col} {direction}, e.name COLLATE NOCASE ASC"
 
 
+_PREFIX_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9]{1,11})[\s_-]")
+
+
+def _prefix_of(number: str) -> str:
+    """单个番号的前缀（`SPSD-14` → `SPSD`）；认不出就回空串。
+
+    与 `_prefixes()` 用同一个正则，避免「厂牌页显示 SPSD、详情页却算成 SPS」这种不一致。
+    """
+    m = _PREFIX_RE.match(number or "")
+    return m.group(1).upper() if m else ""
+
+
+def on_browse_where(query: dict) -> dict:
+    """`?prefix=SPSD` —— 同番号前缀的影片（2.4.6.18）。
+
+    番号前缀是厂牌自己的编号体系（GIGA 的 SPSD、IDEA POCKET 的 IPZZ），
+    详情页点前缀就能看「这个系列编号的全部作品」。语义属于 facets（前缀就是从
+    分类统计里提炼出来的），所以放这里，核心 browse 只当普通筛选条件用。
+    """
+    raw = ((query.get("prefix") or [""])[0]).strip().upper()
+    if not raw:
+        return {}
+    if not re.fullmatch(r"[A-Z][A-Z0-9]{1,11}", raw):
+        return {"clauses": [("1 = 0", [])]}
+    # LIKE 里 `_` / `%` 是通配符，前缀只允许字母数字就能直接拼；参数仍然走占位符
+    return {"clauses": [("m.number LIKE ?", [f"{raw}%"])]}
+
+
+def _prefixes(kind: str, ids: list) -> dict:
+    """制片商 / 发行商的「番号前缀」TOP3（2.4.5.15）。
+
+    番号形如 `SPSD-14`、`IPZZ-037`，前缀就是厂牌自己的编号体系：看到 SPSD/GHKQ/THZ
+    就知道是 GIGA，看到 IPX/IPZZ 就知道是 IDEA POCKET —— 对不上日文厂牌名时，
+    这串字母比名字更容易认。同一厂牌常有多套前缀（不同系列 / 不同年代），
+    按作品数取前三，客户端用 `/` 连起来显示。
+
+    只对 studio / publisher 生效：标签、系列没有厂牌级番号体系。
+    一页最多 20 个厂牌，一次把这些厂牌的番号全捞出来在内存里归堆就够了，
+    不额外缓存（数据一入库就变，缓存反而要处理失效）。
+    """
+    if kind not in ("studio", "publisher") or not ids:
+        return {}
+    table, col = SCALAR_SPEC[kind]
+    marks = ",".join("?" * len(ids))
+    try:
+        with A.amane_db() as conn:
+            names = {_num(r["id"]): r["name"] for r in conn.execute(
+                f"SELECT id, name FROM {table} WHERE id IN ({marks})", ids)}
+            if not names:
+                return {}
+            keys = [n for n in names.values() if n]
+            rows = conn.execute(
+                f"SELECT m.{col} AS k, m.number AS n FROM metadata m "
+                f"WHERE m.{col} IN ({','.join('?' * len(keys))}) "
+                f"AND m.number IS NOT NULL AND m.number <> ''", keys).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"WARN facets 取番号前缀失败 {kind}: {exc}")
+        return {}
+
+    buckets: dict = {}
+    for row in rows:
+        m = _PREFIX_RE.match(row["n"] or "")
+        if m is None:
+            continue
+        bucket = buckets.setdefault(row["k"], {})
+        key = m.group(1).upper()
+        bucket[key] = bucket.get(key, 0) + 1
+
+    out: dict = {}
+    for fid, name in names.items():
+        counts = buckets.get(name) or {}
+        if not counts:
+            continue
+        top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+        out[fid] = [k for k, _c in top]
+    return out
+
+
 def _posters_of(rows, limit: int = 3) -> dict:
     out: dict = {}
     for row in rows:
@@ -275,24 +387,30 @@ def _posters_of(rows, limit: int = 3) -> dict:
     return out
 
 
-def _poster_map(kind: str, ids: list) -> dict:
-    """一页分类的缩略图：按发行时间倒序取前几张。
+def _poster_both(kind: str, ids: list, limit: int = 0) -> tuple[dict, dict]:
+    """一页分类的缩略图：URL 列表 + 带影片 id 的条目列表。
 
-    单条查询取全页，避免 40 个分类各查一次；结果在 Python 里按 POSTER_KINDS
-    截到每种版式需要的张数（标签/系列 3 张、导演/制片商 8 张）。
+    单条查询取全页，避免 40 个分类各查一次；张数默认按 POSTER_KINDS 的版式需求
+    （标签/系列 3 张、导演/制片商 8 张）。收藏页的横版行需要能一直往右滑
+    （2.4.5.13 用户反馈：标签/系列只出 3 部，演员与制片厂却能滑很多），
+    那里显式传 `limit=12`，让四类收藏的观感一致。
+
+    为什么要多回一份 `posterItems`：收藏页的行里点海报要直接进那部影片，
+    只有 URL 没有 id 就跳不了。原有 `posters`（纯 URL）保持不变，老页面不受影响。
     """
-    limit = POSTER_KINDS.get(kind, 0)
+    if limit <= 0:
+        limit = POSTER_KINDS.get(kind, 0)
     if not limit or not ids:
-        return {}
+        return {}, {}
     ph = ",".join("?" * len(ids))
     if kind in LINK_SPEC:
         _ent, link, fk = LINK_SPEC[kind]
-        sql = (f"SELECT l.{fk} AS k, m.poster_urls, m.thumb_urls FROM {link} l "
+        sql = (f"SELECT l.{fk} AS k, m.id AS mid, m.poster_urls, m.thumb_urls FROM {link} l "
                f"JOIN metadata m ON m.id = l.metadata_id "
                f"WHERE l.{fk} IN ({ph}) ORDER BY m.release DESC, m.id DESC")
     else:
         table, col = SCALAR_SPEC[kind]
-        sql = (f"SELECT e.id AS k, m.poster_urls, m.thumb_urls FROM {table} e "
+        sql = (f"SELECT e.id AS k, m.id AS mid, m.poster_urls, m.thumb_urls FROM {table} e "
                f"JOIN metadata m ON m.{col} = e.name "
                f"WHERE e.id IN ({ph}) ORDER BY m.release DESC, m.id DESC")
     try:
@@ -300,8 +418,66 @@ def _poster_map(kind: str, ids: list) -> dict:
             rows = conn.execute(sql, ids).fetchall()
     except Exception as exc:  # noqa: BLE001
         A.log(f"WARN facets 取分类缩略图失败: {exc}")
+        return {}, {}
+    urls: dict = {}
+    items: dict = {}
+    for row in rows:
+        key = row["k"]
+        bucket = urls.setdefault(key, [])
+        if len(bucket) >= limit:
+            continue
+        p = _poster_of(row)
+        if not p or p in bucket:
+            continue
+        bucket.append(p)
+        items.setdefault(key, []).append({"id": _num(row["mid"]), "url": p})
+    return urls, items
+
+
+def _poster_map(kind: str, ids: list) -> dict:
+    """一页分类的缩略图（只要 URL，给分类列表 / 详情头部用）。"""
+    return _poster_both(kind, ids)[0]
+
+
+def _series_top_tags(ids: list, counts: dict, hidden: set, per: int = 3) -> dict:
+    """每个系列占比最高的几个标签（排除隐藏标签）。
+
+    收藏页的「系列」横版行要把这几个标签画成属性胶囊，所以放在列表接口里一次算完，
+    不让客户端为每个系列各请求一次 `/tags`。`ratio` = 该标签片数 / 这个系列的片数，
+    与系列页顶部那份统计同口径。
+    """
+    if not ids:
         return {}
-    return _posters_of(rows, limit)
+    ph = ",".join("?" * len(ids))
+    sql = ("SELECT s.id AS sid, t.id AS tid, t.name AS tname, "
+           "COUNT(DISTINCT mt.metadata_id) AS n "
+           "FROM series s JOIN metadata m ON m.series = s.name "
+           "JOIN metadata_tags mt ON mt.metadata_id = m.id "
+           "JOIN tags t ON t.id = mt.tag_id "
+           f"WHERE s.id IN ({ph})")
+    args: list = list(ids)
+    if hidden:
+        sql += f" AND t.id NOT IN ({','.join('?' * len(hidden))})"
+        args.extend(sorted(hidden))
+    sql += " GROUP BY s.id, t.id ORDER BY s.id, n DESC"
+    out: dict = {}
+    try:
+        with A.amane_db() as conn:
+            for r in conn.execute(sql, args):
+                sid = _num(r["sid"])
+                bucket = out.setdefault(sid, [])
+                if len(bucket) >= per:
+                    continue
+                total = max(1, counts.get(sid, 0))
+                bucket.append({
+                    "id": _num(r["tid"]),
+                    "name": _text(r["tname"]),
+                    "ratio": round(_num(r["n"]) / total, 3),
+                })
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"WARN facets 取系列属性失败: {exc}")
+        return {}
+    return out
 
 
 def facets_list(handler, query, kind, *_):
@@ -340,18 +516,30 @@ def facets_list(handler, query, kind, *_):
     if sort_by == "random" and seed == 0:
         seed = random.randrange(1, 2 ** 31 - 1)
     agg, args = _agg_sql(kind, search, fav, hidden)
+    # 搜索时相关性是主序，用户选的排序退成次级：搜「三上」时「三上悠亜」必须排在
+    # 「三上理子」前面，而不是谁作品多谁在前。
+    order_sql = _order_sql(sort_by, order, seed)
+    if search and _has_rel():
+        order_sql = "rel ASC, " + order_sql
     try:
         with A.amane_db() as conn:
             total = _num(conn.execute(f"SELECT COUNT(*) FROM ({agg})", args).fetchone()[0])
             rows = conn.execute(
-                f"{agg} ORDER BY {_order_sql(sort_by, order, seed)} LIMIT ? OFFSET ?",
+                f"{agg} ORDER BY {order_sql} LIMIT ? OFFSET ?",
                 args + [params["limit"], params["offset"]],
             ).fetchall()
     except Exception as exc:  # noqa: BLE001
         A.log(f"ERROR facets 分类聚合失败 {kind}: {exc}")
         return handler._error(502, f"amane 分类数据不可用: {exc}")
     ids = [_num(r["id"]) for r in rows]
-    posters = _poster_map(kind, ids)
+    # 收藏页要能一直滑：四类统一给 12 张，而不是按分类版式各给 3/8 张
+    posters, poster_items = _poster_both(kind, ids, 12 if fav == "true" else 0)
+    prefixes = _prefixes(kind, ids)
+    # 系列的「属性」＝占比最高的几个标签（隐藏标签已排除），收藏页画成彩色胶囊
+    top_tags: dict = {}
+    if kind == "series" and fav == "true" and ids:
+        counts = {_num(r["id"]): _num(r["cnt"]) for r in rows}
+        top_tags = _series_top_tags(ids, counts, _hidden_ids("tag"))
     items = []
     for r in rows:
         fid = _num(r["id"])
@@ -361,6 +549,9 @@ def facets_list(handler, query, kind, *_):
             "count": _num(r["cnt"]),
             "isFavorite": bool(r["fav"]),
             "posters": posters.get(fid, []),
+            "posterItems": poster_items.get(fid, []),
+            "topTags": top_tags.get(fid, []),
+            "prefixes": prefixes.get(fid, []),
             "lastRelease": _text(r["last_release"])[:10],
             "lastAdded": _text(r["last_added"])[:10],
             "isHidden": fid in hidden_all,
@@ -511,6 +702,7 @@ def _facet_head(kind: str, fid: int) -> dict:
         "name": _text(row["name"]),
         "isFavorite": bool(row["is_favorite"]),
         "isHidden": fid in _hidden_ids(kind),
+        "prefixes": _prefixes(kind, [fid]).get(fid, []),
         "posters": _poster_map(kind, [fid]).get(fid, []),
     }
 
@@ -566,6 +758,11 @@ def facets_media(handler, query, kind, facet_id, *_):
         card = _card(m)
         card["marks"] = marks_map.get(card["id"], [])
         items.append(card)
+    # ratings / collections：海报角标要显示「我的评价」，这两项由扩展钩子补
+    try:
+        A.call("marks_extra", items)
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"WARN facets marks_extra: {exc}")
     handler._json({
         "kind": kind,
         "id": params[KIND_PARAM[kind]],
@@ -664,6 +861,7 @@ def item_facets(handler, query, metadata_id, *_):
 
     handler._json({
         "id": mid,
+        "prefix": _prefix_of(_text(meta.get("number"))),
         "series": dict(brief("series_id", "series", "series"), posters=_series_posters(_text(meta.get("series")))),
         "studio": brief("studio_id", "studio", "studio"),
         "publisher": brief("publisher_id", "publisher", "publisher"),
@@ -676,12 +874,191 @@ def item_facets(handler, query, metadata_id, *_):
     })
 
 
+def facets_tags(handler, query, kind, facet_id, *_):
+    """GET /api/user/facets/{kind}/{id}/tags —— 这个分类下最常出现的标签。
+
+    用途有两个，本质是同一件事「这一堆片共同的标签有哪些」：
+      * 系列页 → 提炼「系列属性」（一个系列里大多数片都有的标签，比如 NTR）；
+      * 标签页 → 再叠加第二个标签做 AND 收窄（既有 NTR 又有搜查官）。
+    ratio = count / 该分类影片总数，客户端据此把「≥50%」当属性、更低的当偶发。
+    """
+    if kind not in KIND_PARAM:
+        return handler._error(400, f"不支持的分类: {kind}")
+    fid = _int(facet_id, 0, 0, 10 ** 9)
+    limit = _int(_one(query, "limit", "16"), 16, 1, 64)
+    if kind == "tag":
+        cond, params = ("m.id IN (SELECT metadata_id FROM metadata_tags WHERE tag_id = ?)", [fid])
+    elif kind == "director":
+        cond, params = ("m.id IN (SELECT metadata_id FROM metadata_directors WHERE director_id = ?)", [fid])
+    elif kind in SCALAR_SPEC:
+        table, col = SCALAR_SPEC[kind]
+        cond, params = (f"m.{col} = (SELECT name FROM {table} WHERE id = ?)", [fid])
+    else:
+        return handler._error(400, f"不支持的分类: {kind}")
+    try:
+        with A.amane_db() as conn:
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM metadata m WHERE {cond}", params).fetchone()[0]
+            # 隐藏的标签是**全局隐藏**：既不能当「系列属性」，也不能出现在叠加筛选里，
+            # 所以在统计源头就剔掉，而不是等客户端过滤（客户端还有别的入口）。
+            hidden = _hidden_ids("tag")
+            extra = ""
+            args = list(params)
+            if hidden:
+                extra = f" AND t.id NOT IN ({','.join('?' * len(hidden))})"
+                args.extend(sorted(hidden))
+            rows = conn.execute(
+                "SELECT t.id, t.name, COUNT(DISTINCT mt.metadata_id) n "
+                "FROM metadata m JOIN metadata_tags mt ON mt.metadata_id = m.id "
+                "JOIN tags t ON t.id = mt.tag_id "
+                f"WHERE {cond}{extra} GROUP BY t.id ORDER BY n DESC, t.name LIMIT ?",
+                args + [limit]).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        return handler._error(500, f"取标签统计失败: {exc}")
+    total = max(1, int(total))
+    handler._json({
+        "kind": kind,
+        "id": fid,
+        "total": int(total),
+        "items": [
+            {"id": int(r["id"]), "name": r["name"] or "",
+             "count": int(r["n"]), "ratio": round(int(r["n"]) / total, 3)}
+            for r in rows
+        ],
+    })
+
+def series_by_tags(handler, query, *_):
+    """GET /api/user/facets/series/by-tags?tags=1,2 —— 同时具备这些标签的系列。
+
+    「这个系列大部分片都有 NTR」这种属性，本质上就是系列集合上的 AND 过滤：
+    只要某系列里同时出现这些标签，就算命中（不要求每一部都有）。
+    独立成端点而不是塞进 facets_list：那边有本地/上游两条取数路径，动它风险大。
+    """
+    raw = (_one(query, "tags") or "").strip()
+    ids = [int(x) for x in raw.split(",") if x.strip().isdigit()][:8]
+    if not ids:
+        return handler._json({"items": [], "total": 0})
+    limit = _int(_one(query, "limit", "40"), 40, 1, 80)
+    n = len(ids)
+    ph = ",".join("?" * n)
+    sql = (
+        "SELECT m.series AS name, COUNT(*) n, MIN(m.id) sample_id "
+        "FROM metadata m JOIN metadata_tags mt ON mt.metadata_id = m.id "
+        "WHERE m.series IS NOT NULL AND TRIM(m.series) <> '' "
+        f"AND mt.tag_id IN ({ph}) "
+        "GROUP BY m.series HAVING COUNT(DISTINCT mt.tag_id) = ? "
+        "ORDER BY n DESC LIMIT ?"
+    )
+    try:
+        with A.amane_db() as conn:
+            rows = conn.execute(sql, ids + [n, limit]).fetchall()
+            names = [r["name"] for r in rows]
+            id_map = {}
+            posters = {}
+            if names:
+                ph2 = ",".join("?" * len(names))
+                for r in conn.execute(f"SELECT id, name FROM series WHERE name IN ({ph2})", names):
+                    id_map[r["name"]] = int(r["id"])
+                sids = [int(r["sample_id"]) for r in rows]
+                ph3 = ",".join("?" * len(sids))
+                for r in conn.execute(
+                        f"SELECT id, poster_urls, thumb_urls FROM metadata WHERE id IN ({ph3})", sids):
+                    posters[int(r["id"])] = _poster_of(r)
+    except Exception as exc:  # noqa: BLE001
+        return handler._error(500, f"按属性筛系列失败: {exc}")
+    items = [{
+        "id": id_map.get(r["name"], 0),
+        "name": r["name"] or "",
+        "count": int(r["n"]),
+        "poster": posters.get(int(r["sample_id"]), ""),
+    } for r in rows]
+    handler._json({"items": items, "total": len(items), "tags": ids})
+
+def _score_num(raw) -> float:
+    """metadata.scores 是刮削来的 JSON，结构可能是 [{score:...}] 也可能直接 {score:...}。"""
+    try:
+        obj = A.json.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(obj, dict):
+            return float(obj.get("score") or 0)
+        if isinstance(obj, list) and obj and isinstance(obj[0], dict):
+            return float(obj[0].get("score") or 0)
+    except (TypeError, ValueError, AttributeError):
+        pass
+    return 0.0
+
+
+def item_siblings(handler, query, mid, *_):
+    """GET /api/user/item/{id}/siblings —— 同一系列的其它片（播放页选集面板用）。
+
+    播放页要能「顺手换一集」，所以返回的是同系列其它条目的卡片（海报 + 番号 +
+    标题 + 评分 + 演员），当前这部标 `current: true` 让客户端置灰。
+    系列在 metadata 上是**名字**列，series 表里才有 id，所以先按名字聚合。
+    """
+    mid_n = _int(mid, 0, 0, 10 ** 9)
+    limit = _int(_one(query, "limit", "40"), 40, 1, 80)
+    try:
+        with A.amane_db() as conn:
+            row = conn.execute("SELECT series FROM metadata WHERE id = ?", (mid_n,)).fetchone()
+            name = _text(row["series"]).strip() if row is not None else ""
+            if not name:
+                return handler._json({"series_id": 0, "name": "", "items": [], "total": 0})
+            sid_row = conn.execute("SELECT id FROM series WHERE name = ?", (name,)).fetchone()
+            sid = int(sid_row["id"]) if sid_row is not None else 0
+            rows = conn.execute(
+                "SELECT m.id, m.number, m.title, m.release, m.poster_urls, m.thumb_urls, m.scores "
+                "FROM metadata m WHERE m.series = ? ORDER BY m.release DESC, m.id DESC LIMIT ?",
+                (name, limit)).fetchall()
+            actors_map = _actors_of([int(r["id"]) for r in rows])
+    except Exception as exc:  # noqa: BLE001
+        return handler._error(500, f"取同系列失败: {exc}")
+    items = []
+    for r in rows:
+        d = dict(r)
+        rid = _num(d.get("id"))
+        items.append({
+            "id": rid,
+            "number": _text(d.get("number")),
+            "title": _text(d.get("title")),
+            "release": _text(d.get("release")),
+            "poster": _poster_of(d),
+            "score": round(_score_num(d.get("scores")), 1),
+            "actors": actors_map.get(rid, []),
+            "current": rid == mid_n,
+        })
+    handler._json({"series_id": sid, "name": name, "items": items, "total": len(items)})
+
+
+def _actors_of(ids: list[int]) -> dict:
+    """批量取每部片的演员名（前 3 个够选集面板显示）。跨表但同库，一次查完。"""
+    if not ids:
+        return {}
+    ph = ",".join("?" * len(ids))
+    out: dict = {}
+    try:
+        with A.amane_db() as conn:
+            for r in conn.execute(
+                "SELECT ma.metadata_id, a.name FROM metadata_actors ma "
+                "JOIN actors a ON a.id = ma.actor_id "
+                f"WHERE ma.metadata_id IN ({ph}) ORDER BY ma.metadata_id, a.name",
+                ids,
+            ):
+                bucket = out.setdefault(int(r["metadata_id"]), [])
+                if len(bucket) < 3 and r["name"]:
+                    bucket.append(r["name"])
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"WARN 取选集演员失败: {exc}")
+    return out
+
+
 ROUTES = [
     ("GET", r"/api/user/facets/([a-z_]+)", facets_list),
     ("GET", r"/api/user/facets/([a-z_]+)/(\d+)/media", facets_media),
+    ("GET", r"/api/user/facets/([a-z_]+)/(\d+)/tags", facets_tags),
+    ("GET", r"/api/user/facets/series/by-tags", series_by_tags),
     ("POST", r"/api/user/facets/([a-z_]+)/(\d+)/favorite", facet_favorite),
     ("POST", r"/api/user/facets/([a-z_]+)/(\d+)/hide", facet_hide),
     ("GET", r"/api/user/item/(\d+)/facets", item_facets),
+    ("GET", r"/api/user/item/(\d+)/siblings", item_siblings),
 ]
 
 
@@ -764,5 +1141,7 @@ def install(api) -> dict:
         api.route(method, pattern)(fn)
     api.hook("suggest_entities", suggest_entities)
     api.hook("suggest_kinds", suggest_kinds)
-    api.log(f"扩展 facets 已启用（{len(ROUTES)} 个公开端点 + 搜索联想）")
+    # 番号前缀过滤（详情页「同番号 SPSD」标签 → browse?prefix=SPSD）
+    api.hook("browse_where", on_browse_where)
+    api.log(f"扩展 facets 已启用（{len(ROUTES)} 个公开端点 + 搜索联想 + 前缀筛选）")
     return {"id": "facets", "enabled": True, "scope": "public"}

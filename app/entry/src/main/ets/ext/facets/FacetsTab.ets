@@ -4,41 +4,15 @@ import { httpGet, httpPost } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
 import { BuildConfig } from '../../common/BuildConfig';
+import { ChipOption, SortOption } from '../../common/BrowseOptions';
 import { MergeBar } from '../merge/MergeBar';
+import { KeywordBox } from '../../view/KeywordBox';
+import { BottomSheet, ChipGroup, ChipRow, SortSheet, ToolPill } from '../../view/ListSheets';
 import {
-  FacetItem, FacetList, FacetParams, facetLabel, safeFacetList
+  FacetItem, FacetList, FacetParams, FacetPick, facetLabel, pickOf, safeFacetList
 } from './FacetTypes';
 
 const PAGE_SIZE: number = 40;
-
-interface Choice {
-  key: string;
-  label: string;
-}
-
-/** chip 必须是子组件：@Builder 按值传参不刷新，选中态会停在初始值。 */
-@Component
-struct FacetChoiceChips {
-  options: Choice[] = [];
-  @Prop current: string = '';
-  onPick: (key: string) => void = () => {};
-
-  build() {
-    Row({ space: 7 }) {
-      ForEach(this.options, (opt: Choice) => {
-        Text(opt.label)
-          .fontSize(11)
-          .fontColor(this.current === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
-          .padding({ left: 11, right: 11, top: 5, bottom: 5 })
-          .backgroundColor(this.current === opt.key ? Theme.ACCENT : Theme.CARD)
-          .borderRadius(12)
-          .onClick(() => {
-            this.onPick(opt.key);
-          })
-      }, (opt: Choice) => `fchoice-${opt.key}`)
-    }
-  }
-}
 
 /**
  * 公开扩展 facets：底部「标签」Tab —— 分类浏览入口。
@@ -82,15 +56,21 @@ export struct FacetsTab {
   @State hiddenCount: number = 0;
   /** 多选合并态：长按卡片进入，这时候点卡片是「选中」而不是「进去」。 */
   @State selecting: boolean = false;
-  @State picked: number[] = [];
-  private searchTimer: number = -1;
+  /** 选中项自带名字/作品数：换搜索词、翻页后当前列表里可能已经没有它了。 */
+  @State picked: FacetPick[] = [];
+  @State showSort: boolean = false;
+  @State showFilter: boolean = false;
   private tipTimer: number = -1;
-  private kinds: Choice[] = [
+  private kinds: ChipOption[] = [
     { key: 'tag', label: '标签' },
     { key: 'series', label: '系列' },
     { key: 'director', label: '导演' },
     { key: 'studio', label: '制片商' },
     { key: 'user_tag', label: '我的标签' }
+  ];
+  private favOptions: ChipOption[] = [
+    { key: '', label: '不限' },
+    { key: '1', label: '♥ 只看收藏' }
   ];
 
   aboutToAppear(): void {
@@ -98,10 +78,6 @@ export struct FacetsTab {
   }
 
   aboutToDisappear(): void {
-    if (this.searchTimer >= 0) {
-      clearTimeout(this.searchTimer);
-      this.searchTimer = -1;
-    }
     if (this.tipTimer >= 0) {
       clearTimeout(this.tipTimer);
       this.tipTimer = -1;
@@ -133,20 +109,40 @@ export struct FacetsTab {
     return this.isLane() ? 20 : PAGE_SIZE;
   }
 
-  private sortOptions(): Choice[] {
+  private sortOptions(): SortOption[] {
     if (this.hasTimeSort()) {
       return [
-        { key: 'count', label: '作品数' },
-        { key: 'name', label: '名称' },
-        { key: 'recent_update', label: '最近更新' },
-        { key: 'recent_release', label: '最新发布' },
-        { key: 'random', label: '随机' }
+        { key: 'count', label: '作品数', def: 'desc' },
+        { key: 'name', label: '名称', def: 'asc' },
+        { key: 'recent_update', label: '最近更新', def: 'desc' },
+        { key: 'recent_release', label: '最新发布', def: 'desc' },
+        { key: 'random', label: '随机', def: 'desc' }
       ];
     }
     return [
-      { key: 'count', label: '作品数' },
-      { key: 'name', label: '名称' }
+      { key: 'count', label: '作品数', def: 'desc' },
+      { key: 'name', label: '名称', def: 'asc' }
     ];
+  }
+
+  /** 抽屉里「隐藏」这一组的文案：把数量写进选项里，不用再单开一行提示。 */
+  private hiddenOptions(): ChipOption[] {
+    return [
+      { key: '', label: '不列出' },
+      { key: '1', label: this.hiddenCount > 0 ? `列出隐藏 ${this.hiddenCount}` : '列出隐藏' }
+    ];
+  }
+
+  /** 生效的筛选条数（排序不算）：只看收藏 / 列出隐藏。 */
+  private filterCount(): number {
+    let n: number = 0;
+    if (this.onlyFav) {
+      n++;
+    }
+    if (this.includeHidden) {
+      n++;
+    }
+    return n;
   }
 
   private buildUrl(offset: number): string {
@@ -211,19 +207,6 @@ export struct FacetsTab {
     });
   }
 
-  private onKeyword(value: string): void {
-    if (this.searchTimer >= 0) {
-      clearTimeout(this.searchTimer);
-      this.searchTimer = -1;
-    }
-    const kw: string = value;
-    this.searchTimer = setTimeout(() => {
-      this.searchTimer = -1;
-      this.keyword = kw;
-      this.reload();
-    }, 350);
-  }
-
   private showTip(text: string): void {
     if (this.tipTimer >= 0) {
       clearTimeout(this.tipTimer);
@@ -236,20 +219,47 @@ export struct FacetsTab {
     }, 2600);
   }
 
+  /**
+   * 换大类。切走时要顺手清掉这个大类不支持的筛选/排序，
+   * 否则会出现「按钮消失了但条件还在生效」——用户看到一个筛过的列表却找不到原因。
+   */
+  private pickKind(key: string): void {
+    if (this.kind === key) {
+      return;
+    }
+    this.kind = key;
+    this.endSelect();
+    // user_tag 不支持 favorite 筛选
+    if (key === 'user_tag') {
+      this.onlyFav = false;
+    }
+    // 只有标签有隐藏位
+    if (key !== 'tag') {
+      this.includeHidden = false;
+    }
+    // 切到不支持时间排序的分类时把排序拉回作品数，否则会带一个它没有的排序值
+    if (!this.hasTimeSort() && (this.sortBy === 'recent_update' ||
+      this.sortBy === 'recent_release')) {
+      this.sortBy = 'count';
+      this.order = 'desc';
+    }
+    this.showSort = false;
+    this.showFilter = false;
+    this.reload();
+  }
+
+  /**
+   * 点排序项：只负责「换成这一项」，方向由抽屉里当前行的 ↑/↓ 单独控制。
+   * 再点一次「随机」= 重摇一批（清掉 seed，让服务端重新发一个）。
+   */
   private pickSort(key: string): void {
+    this.sortBy = key;
     if (key === 'random') {
-      // 再点一次「随机」= 重摇一批（清掉 seed，让服务端重新发一个）
-      this.sortBy = 'random';
       this.seed = 0;
       this.reload();
       return;
     }
-    if (this.sortBy === key) {
-      this.order = this.order === 'desc' ? 'asc' : 'desc';
-    } else {
-      this.sortBy = key;
-      this.order = key === 'name' ? 'asc' : 'desc';
-    }
+    this.order = key === 'name' ? 'asc' : 'desc';
     this.seed = 0;
     this.reload();
   }
@@ -259,21 +269,14 @@ export struct FacetsTab {
     this.reload();
   }
 
+  /** 工具条胶囊上的短标签（长句塞不进胶囊）。 */
   private sortLabel(): string {
-    // 作品数用「从多到少」更好懂，名称用「A→Z / Z→A」
-    if (this.sortBy === 'name') {
-      return this.order === 'asc' ? '名称 A→Z' : '名称 Z→A';
+    for (let i = 0; i < this.sortOptions().length; i++) {
+      if (this.sortOptions()[i].key === this.sortBy) {
+        return this.sortOptions()[i].label;
+      }
     }
-    if (this.sortBy === 'recent_update') {
-      return this.order === 'desc' ? '最近更新 新→旧' : '最近更新 旧→新';
-    }
-    if (this.sortBy === 'recent_release') {
-      return this.order === 'desc' ? '最新发布 新→旧' : '最新发布 旧→新';
-    }
-    if (this.sortBy === 'random') {
-      return '随机 · 再点一次重摇';
-    }
-    return this.order === 'desc' ? '作品数 多→少' : '作品数 少→多';
+    return '作品数';
   }
 
   private open(f: FacetItem): void {
@@ -282,7 +285,12 @@ export struct FacetsTab {
   }
 
   private isPicked(id: number): boolean {
-    return this.picked.indexOf(id) >= 0;
+    for (let i = 0; i < this.picked.length; i++) {
+      if (this.picked[i].id === id) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** 长按起手：进入多选并把按住的这一项捎上。 */
@@ -291,26 +299,47 @@ export struct FacetsTab {
       return;
     }
     this.selecting = true;
-    this.picked = [f.id];
+    if (!this.isPicked(f.id)) {
+      this.picked = this.picked.concat([pickOf(f)]);
+    }
   }
 
+  /**
+   * 点选 / 取消。选中项连名字和作品数一起存，所以换搜索词、翻页之后
+   * 它即使不在当前列表里，也仍然是一个完整可用的选中项。
+   */
   private togglePick(f: FacetItem): void {
-    const next: number[] = [];
+    const next: FacetPick[] = [];
     let removed: boolean = false;
     for (let i = 0; i < this.picked.length; i++) {
-      if (this.picked[i] === f.id) {
+      if (this.picked[i].id === f.id) {
         removed = true;
       } else {
         next.push(this.picked[i]);
       }
     }
     if (!removed) {
-      next.push(f.id);
+      next.push(pickOf(f));
     }
     this.picked = next;
     if (next.length === 0) {
       this.selecting = false;
     }
+  }
+
+  /**
+   * 「已选」面板里摘掉一项。摘空了也**不退**多选：
+   * 面板正开着的时候把操作条抽掉，等于在弹层上抽掉自己的宿主，容易闪一下。
+   * 退出多选只走「取消」那一路。
+   */
+  private removePick(id: number): void {
+    const next: FacetPick[] = [];
+    for (let i = 0; i < this.picked.length; i++) {
+      if (this.picked[i].id !== id) {
+        next.push(this.picked[i]);
+      }
+    }
+    this.picked = next;
   }
 
   private endSelect(): void {
@@ -361,8 +390,10 @@ export struct FacetsTab {
       }
       next.push({
         id: it.id, name: it.name, count: it.count, posters: it.posters,
+        posterItems: it.posterItems,
+        topTags: it.topTags,
         isFavorite: fav, lastRelease: it.lastRelease, lastAdded: it.lastAdded,
-        isHidden: it.isHidden
+        isHidden: it.isHidden, prefixes: it.prefixes
       });
     }
     this.items = next;
@@ -568,9 +599,13 @@ export struct FacetsTab {
     )
   }
 
-  /** 长条卡副标题：片数 + 最近上映（日期都没有时只说片数）。 */
+  /** 长条卡副标题：片数 + 番号前缀 + 最近上映（没有的就跳过）。 */
   private laneSub(f: FacetItem): string {
     const parts: string[] = [`${f.count} 部`];
+    // 制片商 / 发行商才带前缀：日文厂牌名认不出来时，SPSD/GHKQ 这种字母更好认
+    if (f.prefixes.length > 0) {
+      parts.push(f.prefixes.join('/'));
+    }
     if (f.lastRelease.length > 0) {
       parts.push(`最近 ${f.lastRelease}`);
     }
@@ -581,256 +616,329 @@ export struct FacetsTab {
   }
 
   @Builder
-  Toolbar() {
-    Column({ space: 8 }) {
-      Row({ space: 10 }) {
-        Text(facetLabel(this.kind))
-          .fontSize(19)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
-        Blank()
-        Text(`${this.total} 项 · ${this.sortLabel()}`)
-          .fontSize(10)
-          .fontColor(Theme.TEXT_FAINT)
-      }
-      .width('100%')
+  Header() {
+    Row({ space: 10 }) {
+      Text(facetLabel(this.kind))
+        .fontSize(19)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(Theme.TEXT)
+      Blank()
+      Text(this.loading ? '' : `${this.total} 项`)
+        .fontSize(10)
+        .fontColor(Theme.TEXT_FAINT)
+        .maxLines(1)
+    }
+    .width('100%')
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 8, bottom: 6 })
+  }
 
-      Scroll() {
-        FacetChoiceChips({
-          options: this.kinds,
-          current: this.kind,
-          onPick: (key: string) => {
-            if (this.kind === key) {
-              return;
-            }
-            this.kind = key;
-            this.endSelect();
-            // user_tag 不支持 favorite 筛选，切过去时清掉，避免按钮消失但条件还生效
-            if (key === 'user_tag') {
-              this.onlyFav = false;
-            }
-            // 切到不支持时间排序的分类时把排序拉回作品数，否则会带一个它没有的排序值
-            if (!this.hasTimeSort() && (this.sortBy === 'recent_update' ||
-              this.sortBy === 'recent_release')) {
-              this.sortBy = 'count';
-              this.order = 'desc';
-            }
-            this.reload();
+  /** 标签 / 系列 / 导演 / 制片商 / 我的标签：换大类，属于导航不是筛选。 */
+  @Builder
+  KindRow() {
+    Scroll() {
+      ChipRow({
+        options: this.kinds,
+        current: this.kind,
+        onPick: (key: string) => {
+          this.pickKind(key);
+        }
+      })
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .width('100%')
+    .align(Alignment.Start)
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
+  }
+
+  @Builder
+  SearchBar() {
+    Row() {
+      KeywordBox({
+        placeholder: `搜索${facetLabel(this.kind)}名`,
+        onCommit: (kw: string) => {
+          const next: string = kw.trim();
+          if (next === this.keyword) {
+            return;
+          }
+          this.keyword = next;
+          this.reload();
+        }
+      })
+    }
+    .width('100%')
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
+  }
+
+  @Builder
+  Toolbar() {
+    Row({ space: 8 }) {
+      Text(this.keyword.length > 0 ? '相关度优先' : '')
+        .fontSize(11)
+        .fontColor(Theme.TEXT_FAINT)
+        .maxLines(1)
+        .layoutWeight(1)
+
+      ToolPill({
+        label: `⇅ ${this.sortLabel()}` +
+          (this.sortBy === 'random' ? '' : (this.order === 'desc' ? ' ↓' : ' ↑')),
+        onTap: () => {
+          this.showSort = true;
+        }
+      })
+
+      // user_tag 既没有收藏位也没有隐藏位，抽屉会是空的 —— 干脆不给入口
+      if (this.kind !== 'user_tag') {
+        ToolPill({
+          label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+          active: this.filterCount() > 0,
+          onTap: () => {
+            this.showFilter = true;
           }
         })
-      }
-      .scrollable(ScrollDirection.Horizontal)
-      .scrollBar(BarState.Off)
-      .width('100%')
-      .align(Alignment.Start)
-
-      TextInput({ placeholder: `搜索${facetLabel(this.kind)}名` })
-        .height(38)
-        .fontSize(13)
-        .fontColor(Theme.TEXT)
-        .placeholderColor(Theme.TEXT_FAINT)
-        .placeholderFont({ size: 12 })
-        .backgroundColor(Theme.CARD)
-        .borderRadius(10)
-        .padding({ left: 12, right: 12 })
-        .width('100%')
-        .onChange((value: string) => {
-          this.onKeyword(value);
-        })
-
-      Row({ space: 8 }) {
-        Scroll() {
-          FacetChoiceChips({
-            options: this.sortOptions(),
-            current: this.sortBy,
-            onPick: (key: string) => {
-              this.pickSort(key);
-            }
-          })
-        }
-        .scrollable(ScrollDirection.Horizontal)
-        .scrollBar(BarState.Off)
-        .layoutWeight(1)
-        .align(Alignment.Start)
-
-        // 显式方向开关：↓ = 多到少 / Z→A / 新到旧，↑ = 反向
-        Text(this.order === 'desc' ? '↓' : '↑')
-          .fontSize(13)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#FFFFFF')
-          .width(30)
-          .height(26)
-          .textAlign(TextAlign.Center)
-          .backgroundColor(this.order === 'desc' ? Theme.ACCENT : Theme.CARD_HI)
-          .borderRadius(13)
-          .visibility(this.sortBy === 'random' ? Visibility.None : Visibility.Visible)
-          .onClick(() => {
-            this.toggleOrder();
-          })
-
-      }
-      .width('100%')
-
-      // 「收藏 / 显示隐藏」单独一行：和排序 chip 挤一行会把「随机」挤到屏幕外，
-      // 用户根本不知道有随机排序。
-      Row({ space: 8 }) {
-        if (this.kind !== 'user_tag') {
-          Text(this.onlyFav ? '♥ 只看收藏' : '♡ 只看收藏')
-            .fontSize(11)
-            .fontColor(this.onlyFav ? '#FFFFFF' : Theme.TEXT_DIM)
-            .padding({ left: 11, right: 11, top: 5, bottom: 5 })
-            .backgroundColor(this.onlyFav ? Theme.ACCENT : Theme.CARD)
-            .borderRadius(12)
-            .onClick(() => {
-              this.onlyFav = !this.onlyFav;
-              this.reload();
-            })
-        }
-
-        // 隐藏是标签自己的偏好：默认不列出来，想找回来看这里
-        if (this.kind === 'tag') {
-          Text(this.includeHidden
-            ? (this.hiddenCount > 0 ? `⊘ 列出隐藏中 ${this.hiddenCount}` : '⊘ 列出隐藏')
-            : (this.hiddenCount > 0 ? `◎ 显示隐藏 ${this.hiddenCount}` : '◎ 显示隐藏'))
-            .fontSize(11)
-            .fontColor(this.includeHidden ? '#FFFFFF' : Theme.TEXT_DIM)
-            .padding({ left: 11, right: 11, top: 5, bottom: 5 })
-            .backgroundColor(this.includeHidden ? Theme.CARD_HI : Theme.CARD)
-            .borderRadius(12)
-            .onClick(() => {
-              this.includeHidden = !this.includeHidden;
-              this.reload();
-            })
-        }
-        Blank()
-      }
-      .width('100%')
-
-      if (this.tip.length > 0) {
-        Text(this.tip)
-          .fontSize(10)
-          .fontColor(Theme.DANGER)
-          .width('100%')
       }
     }
     .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 12, bottom: 8 })
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 8 })
+  }
+
+  @Builder
+  FilterSheet() {
+    BottomSheet({
+      title: `筛选${facetLabel(this.kind)}`,
+      actionLabel: '重置',
+      onAction: () => {
+        this.onlyFav = false;
+        this.includeHidden = false;
+        this.reload();
+      },
+      onConfirm: () => {
+        this.showFilter = false;
+      },
+      tabInset: 84
+    }) {
+      if (this.kind !== 'user_tag') {
+        ChipGroup({
+          title: '收藏', options: this.favOptions, current: this.onlyFav ? '1' : '',
+          onPick: (key: string) => {
+            const want: boolean = key === '1';
+            if (this.onlyFav === want) {
+              return;
+            }
+            this.onlyFav = want;
+            this.reload();
+          }
+        })
+      }
+      if (this.kind === 'tag') {
+        ChipGroup({
+          title: '隐藏', options: this.hiddenOptions(), current: this.includeHidden ? '1' : '',
+          onPick: (key: string) => {
+            const want: boolean = key === '1';
+            if (this.includeHidden === want) {
+              return;
+            }
+            this.includeHidden = want;
+            this.reload();
+          }
+        })
+      }
+      if (this.kind === 'series') {
+        Row({ space: 8 }) {
+          Column({ space: 2 }) {
+            Text('按属性筛系列')
+              .fontSize(13)
+              .fontColor(Theme.TEXT)
+            Text('选若干标签，找同时具备这些属性的系列')
+              .fontSize(10)
+              .fontColor(Theme.TEXT_FAINT)
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          Text('›')
+            .fontSize(16)
+            .fontColor(Theme.TEXT_FAINT)
+        }
+        .width('100%')
+        .padding({ top: 2, bottom: 2 })
+        .onClick(() => {
+          router.pushUrl({ url: 'ext/facets/SeriesByTagPage' });
+        })
+      }
+    }
   }
 
   build() {
-    Column() {
-      this.Toolbar()
+    Stack({ alignContent: Alignment.Bottom }) {
+      Column() {
+        this.Header()
+        this.KindRow()
+        this.SearchBar()
+        this.Toolbar()
 
-      if (this.loading) {
-        Column() {
-          LoadingProgress()
-            .width(28)
-            .height(28)
-            .color(Theme.ACCENT)
+        if (this.tip.length > 0) {
+          Text(this.tip)
+            .fontSize(10)
+            .fontColor(Theme.DANGER)
+            .width('100%')
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
         }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.error.length > 0) {
-        Column({ space: 10 }) {
-          Text('⌗')
-            .fontSize(32)
-            .fontColor(Theme.TEXT_FAINT)
-          Text(this.error)
-            .fontSize(12)
-            .fontColor(Theme.TEXT_DIM)
-            .onClick(() => {
-              this.reload();
-            })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.items.length === 0) {
-        Column({ space: 10 }) {
-          Text('⌗')
-            .fontSize(34)
-            .fontColor(Theme.TEXT_FAINT)
-          Text(this.keyword.length > 0
-            ? `没有找到「${this.keyword}」`
-            : (this.onlyFav ? '还没有收藏的分类' : `还没有${facetLabel(this.kind)}数据`))
-            .fontSize(14)
-            .fontColor(Theme.TEXT_DIM)
-          Text(this.keyword.length > 0
-            ? '换个关键字试试'
-            : (this.onlyFav ? '点卡片右下角的小心心收藏这个分类' : '先去媒体库刮削几部影片'))
-            .fontSize(11)
-            .fontColor(Theme.TEXT_FAINT)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        Grid() {
-          ForEach(this.items, (f: FacetItem) => {
-            GridItem() {
-              if (this.isLane()) {
-                this.LaneCell(f)
-              } else {
-                this.Cell(f)
-              }
-            }
-          }, (f: FacetItem) => `facet-${this.kind}-${f.id}-${f.isFavorite ? 1 : 0}` +
-            `-${this.selecting ? 1 : 0}${this.isPicked(f.id) ? 1 : 0}`)
 
-          if (this.items.length < this.total) {
-            GridItem() {
-              Column() {
-                if (this.loadingMore) {
-                  LoadingProgress()
-                    .width(20)
-                    .height(20)
-                    .color(Theme.TEXT_FAINT)
+        if (this.loading) {
+          Column() {
+            LoadingProgress()
+              .width(28)
+              .height(28)
+              .color(Theme.ACCENT)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.error.length > 0) {
+          Column({ space: 10 }) {
+            Text('⌗')
+              .fontSize(32)
+              .fontColor(Theme.TEXT_FAINT)
+            Text(this.error)
+              .fontSize(12)
+              .fontColor(Theme.TEXT_DIM)
+              .onClick(() => {
+                this.reload();
+              })
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.items.length === 0) {
+          Column({ space: 10 }) {
+            Text('⌗')
+              .fontSize(34)
+              .fontColor(Theme.TEXT_FAINT)
+            Text(this.keyword.length > 0
+              ? `没有找到「${this.keyword}」`
+              : (this.onlyFav ? '还没有收藏的分类' : `还没有${facetLabel(this.kind)}数据`))
+              .fontSize(14)
+              .fontColor(Theme.TEXT_DIM)
+            Text(this.keyword.length > 0
+              ? '换个关键字试试'
+              : (this.onlyFav ? '点卡片右下角的小心心收藏这个分类' : '先去媒体库刮削几部影片'))
+              .fontSize(11)
+              .fontColor(Theme.TEXT_FAINT)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          Grid() {
+            ForEach(this.items, (f: FacetItem) => {
+              GridItem() {
+                if (this.isLane()) {
+                  this.LaneCell(f)
                 } else {
-                  Text('加载更多')
-                    .fontSize(11)
-                    .fontColor(Theme.TEXT_FAINT)
+                  this.Cell(f)
                 }
               }
-              .width('100%')
-              .height(this.isLane() ? 52 : 92)
-              .justifyContent(FlexAlign.Center)
-              .onClick(() => {
-                this.loadMore();
-              })
+            }, (f: FacetItem) => `facet-${this.kind}-${f.id}-${f.isFavorite ? 1 : 0}` +
+              `-${this.selecting ? 1 : 0}${this.isPicked(f.id) ? 1 : 0}`)
+
+            if (this.items.length < this.total) {
+              GridItem() {
+                Column() {
+                  if (this.loadingMore) {
+                    LoadingProgress()
+                      .width(20)
+                      .height(20)
+                      .color(Theme.TEXT_FAINT)
+                  } else {
+                    Text('加载更多')
+                      .fontSize(11)
+                      .fontColor(Theme.TEXT_FAINT)
+                  }
+                }
+                .width('100%')
+                .height(this.isLane() ? 52 : 92)
+                .justifyContent(FlexAlign.Center)
+                .onClick(() => {
+                  this.loadMore();
+                })
+              }
             }
           }
+          .columnsTemplate(this.isLane() ? '1fr' : '1fr 1fr 1fr')
+          .columnsGap(9)
+          .rowsGap(9)
+          // 平时底部留 84 给悬浮胶囊；多选时操作条自己让出了胶囊的位置，这里就收回
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: this.selecting ? 10 : 84 })
+          .layoutWeight(1)
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring)
+          .onReachEnd(() => {
+            this.loadMore();
+          })
         }
-        .columnsTemplate(this.isLane() ? '1fr' : '1fr 1fr 1fr')
-        .columnsGap(9)
-        .rowsGap(9)
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 84 })
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
-        .onReachEnd(() => {
-          this.loadMore();
-        })
-      }
 
-      // 多选操作条：公版不含合并能力，这里是零尺寸空桩，不影响列表布局。
-      if (this.selecting) {
-        MergeBar({
-          kind: this.kind,
-          items: this.items,
-          picked: this.picked,
-          onCancel: () => {
-            this.endSelect();
-            this.reload();
-          },
-          onMerged: () => {
-            this.onMerged();
-          }
-        })
+        // 选中项自带名字，所以换搜索词继续选，已选的那几个不会丢。
+        if (this.selecting) {
+          MergeBar({
+            kind: this.kind,
+            picked: this.picked,
+            onRemove: (id: number) => {
+              this.removePick(id);
+            },
+            onCancel: () => {
+              this.endSelect();
+              this.reload();
+            },
+            onMerged: () => {
+              this.onMerged();
+            }
+          })
+        }
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
+
+      // 抽屉层：盖住整页，交给外层 Stack 贴底。和多选操作条同时出现时它在上面。
+      if (this.showSort || this.showFilter) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#99000000')
+          .onClick(() => {
+            this.showSort = false;
+            this.showFilter = false;
+          })
+
+        if (this.showSort) {
+          SortSheet({
+            options: this.sortOptions(),
+            current: this.sortBy,
+            order: this.order,
+            tabInset: 84,
+            onPick: (key: string) => {
+              // 已经选中的那一项：非随机就只是关掉抽屉；随机 = 重摇一批
+              if (this.sortBy === key && key !== 'random') {
+                this.showSort = false;
+                return;
+              }
+              this.pickSort(key);
+              this.showSort = false;
+            },
+            onToggleOrder: () => {
+              this.toggleOrder();
+            },
+            onClose: () => {
+              this.showSort = false;
+            }
+          })
+        }
+        if (this.showFilter) {
+          this.FilterSheet()
+        }
       }
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(Theme.BG)
   }
 }

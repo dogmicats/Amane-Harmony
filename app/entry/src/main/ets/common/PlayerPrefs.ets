@@ -16,7 +16,7 @@ import { util } from '@kit.ArkTS';
  */
 
 /** 播放参数版本：改默认值或字段含义时 +1，老配置会被重新生成。 */
-export const MPV_CONF_VERSION: string = 'amane-conf: 9';
+export const MPV_CONF_VERSION: string = 'amane-conf: 11';
 
 export interface PlayerTuning {
   /** 硬件解码（走 PlayerConfig，不进 conf）。 */
@@ -35,6 +35,12 @@ export interface PlayerTuning {
   hrSeek: boolean;
   /** 额外 mpv 参数，逐行追加。 */
   extra: string;
+  /**
+   * 本地磁盘缓存上限 MiB（0 = 不落盘）。
+   * 开了之后 `cache-on-disk=yes`，`demuxer-max-bytes` 也用它：
+   * 第二次播同一部片能命中大半，不用每次从网盘重拉（用户第 4 条）。
+   */
+  diskMiB: number;
 }
 
 export interface PresetOption {
@@ -65,7 +71,7 @@ export const PRESETS: PresetOption[] = [
  * 改这个函数必须同时升 `TUNING_LOCK` 与 `MPV_CONF_VERSION`，否则老设备上
  * 写脏的值会盖住新默认（`load()` 只在 lock 不匹配时整份重置）。
  */
-export const TUNING_LOCK: string = 'lock-v9';
+export const TUNING_LOCK: string = 'lock-v10';
 
 /** 锁定值单独导出：设置页与自检都用它，避免两处写死后对不上。 */
 export const LOCKED_PAUSE_WAIT: number = 1.0;
@@ -79,7 +85,8 @@ function baseTuning(): PlayerTuning {
     maxMiB: 64,
     backMiB: 32,
     hrSeek: false,
-    extra: ''
+    extra: '',
+    diskMiB: 0
   };
   return t;
 }
@@ -94,7 +101,8 @@ export function presetTuning(key: string, current: PlayerTuning): PlayerTuning {
     maxMiB: current.maxMiB,
     backMiB: current.backMiB,
     hrSeek: current.hrSeek,
-    extra: current.extra
+    extra: current.extra,
+    diskMiB: current.diskMiB
   };
   if (key === 'smooth') {
     t.pauseWait = 0.1;
@@ -129,15 +137,24 @@ export function confText(t: PlayerTuning): string {
     'vo=gpu-next',
     'osc=no',
     'osd-level=0',
+    // 画面比例：竖屏全屏时 surface 是 ~9:19，必须让 mpv 自己按 16:9 letterbox，
+    // 不许把画面拉满（用户报「竖屏放大被拉伸」）
+    'keepaspect=yes',
+    'video-unscaled=no',
+    'panscan=0.0',
     '',
     '# 缓存',
     'cache=yes',
     // mpv 默认 128KiB：网盘源读取是「一阵一阵」的，底层缓冲太小会
     // 把抖动直接暴露给 demuxer，拖动之后尤其明显（一秒一卡）。
     'stream-buffer-size=4MiB',
-    `demuxer-max-bytes=${t.maxMiB}MiB`,
-    `demuxer-max-back-bytes=${t.backMiB}MiB`,
+    `demuxer-max-bytes=${t.diskMiB > 0 ? t.diskMiB : t.maxMiB}MiB`,
+    `demuxer-max-back-bytes=${Math.min(t.backMiB, t.diskMiB > 0 ? t.diskMiB : t.maxMiB)}MiB`,
     `demuxer-readahead-secs=${t.readahead}`,
+    // 本地磁盘缓存：0 = 关；开了就把 demuxer 缓存落到 mpvconf 同级目录，
+    // 第二次打开同一部片能命中大半，不用每次从网盘重拉。
+    t.diskMiB > 0 ? 'cache-on-disk=yes' : 'cache-on-disk=no',
+    'cache-dir=~~/stream-cache',
     'cache-pause=yes',
     `cache-pause-wait=${t.pauseWait}`,
     'demuxer-seekable-cache=yes',
@@ -163,7 +180,8 @@ const PREF_TUNING_LOCK: string = 'tuning_lock';
 const KNOWN_KEYS: string[] = [
   'vo', 'osc', 'osd-level', 'cache', 'demuxer-max-bytes', 'demuxer-max-back-bytes',
   'demuxer-readahead-secs', 'cache-pause', 'cache-pause-wait', 'demuxer-seekable-cache',
-  'hr-seek', 'demuxer-lavf-probe-info', 'hwdec', 'stream-buffer-size'
+  'hr-seek', 'demuxer-lavf-probe-info', 'hwdec', 'stream-buffer-size',
+  'cache-on-disk', 'cache-dir', 'keepaspect', 'video-unscaled', 'panscan'
 ];
 
 export class PlayerPrefs {
@@ -260,6 +278,7 @@ export class PlayerPrefs {
         t.backMiB = raw.backMiB === undefined || raw.backMiB === null ? t.backMiB : Number(raw.backMiB);
         t.hrSeek = raw.hrSeek === true;
         t.extra = raw.extra === undefined || raw.extra === null ? '' : raw.extra;
+        t.diskMiB = raw.diskMiB === undefined || raw.diskMiB === null ? 0 : Number(raw.diskMiB);
         // 均衡档就是锁定值：设备上残留的 0.2 之类一律拉回，防止「改对了又被顶掉」
         if (t.preset === 'balanced' && t.pauseWait < LOCKED_PAUSE_WAIT) {
           t.pauseWait = LOCKED_PAUSE_WAIT;

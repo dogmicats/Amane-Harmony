@@ -20,6 +20,8 @@ export interface MediaItem {
   duration: number;
   /** 无码 / 破解 / 流出 / 中字，服务端汇总好直接给。 */
   marks?: string[];
+  /** 公开扩展 ratings：我给这部片打的分，0 = 没打过（老服务端没这字段）。 */
+  my_rating?: number;
   /** 横图真实宽高比（宽/高）：每日推荐桶幅按它定宽，不再强行 16:9。 */
   fanart_ratio?: number;
 }
@@ -58,6 +60,8 @@ export interface StreamList {
   metadata_id: number;
 }
 
+
+
 export interface ItemDetail {
   id: number;
   number: string;
@@ -83,7 +87,25 @@ export interface ItemDetail {
   stills: string[];
   /** 与 stills 等长的宽高比（w/h）；0 = 服务端也没量过，由详情页按图片实测补。 */
   still_ratios: number[];
+  /**
+   * 公开扩展 stills：这部片里已经被我「喜爱」的剧照地址（老服务端没这字段）。
+   * 与 `stills` 里的元素逐字比对，决定心形是实心还是空心。
+   */
+  still_likes?: string[];
+  /** 公开扩展 watch_later：这部片在不在「稍后再看」队列里（老服务端没这字段）。 */
+  watch_later?: boolean;
   comments: CommentItem[];
+  /** 公开扩展 ratings：我给这部片打的分，0 = 没打过（老服务端没这字段）。 */
+  my_rating?: number;
+  /** 公开扩展 collections：所属的自创清单 id（老服务端没这字段）。 */
+  collection_ids?: number[];
+  /**
+   * 公开扩展 highlights：没有刮削封面时，拿我截的关键帧当封面（R25）。
+   * 只在 scraped poster 为空时兜底，不覆盖已有封面。
+   */
+  frame_cover?: string;
+  /** 公开扩展 highlights：我自己截的帧（当剧照用），排在刮削剧照前面。 */
+  my_stills?: string[];
 }
 
 export interface HomeRow {
@@ -143,6 +165,9 @@ export interface HistoryItem {
   finished: boolean;
   /** 观看记录同样是影片列表，标记必须带上。 */
   marks?: string[];
+  /** 公开扩展 ratings / collections：历史记录页按这两项本地筛选排序（不分页，一次 120 条）。 */
+  my_rating?: number;
+  collection_ids?: number[];
 }
 
 export interface HistoryList {
@@ -161,6 +186,14 @@ export interface DetailParams {
   id: number;
   /** 从盲盒点进来的那张剧照；详情页用它做「从中心放大铺满 → 扩散淡出」的转场。 */
   heroUrl?: string;
+  /**
+   * 进来就开播（观看记录 / 我的弹幕 / 截帧管理点进来的跳转）。
+   * 详情页顶部直接起播放器，切回竖屏时下面仍然是完整详情页。
+   */
+  autoplay?: boolean;
+  position?: number;
+  fileKey?: string;
+  fileName?: string;
 }
 
 /** amane 的「评价」：网友推荐 / 官方评价摘录。 */
@@ -169,6 +202,8 @@ export interface CommentItem {
   body: string;
   created_at: string;
   updated_at: string;
+  /** 我自己写的那条（存 user.db，详情接口插在最前）。 */
+  mine?: boolean;
 }
 
 export interface PlayerParams {
@@ -182,9 +217,26 @@ export interface PlayerParams {
   fileName?: string;
 }
 
+/**
+ * 一张可点击的海报：影片 id + 已代理的图片地址。
+ *
+ * 分类列表与演员收藏都用它（服务端的 `posterItems` / `posters`），
+ * 这样「点海报直接进那部片」不需要客户端再按 URL 反查 id。
+ */
+export interface PosterRef {
+  id: number;
+  url: string;
+}
+
 export interface BrowseParams {
   libraryId: number;
   title: string;
+  /** 从详情页点「N 岁」进来：预置出演年龄分桶，key 见 common/BrowseOptions.ets。 */
+  ageBand?: string;
+  /** 预置排序键，例如 cast_age；缺省用 BrowseGrid 默认的最近更新。 */
+  sort?: string;
+  /** 预置年龄性别（female / male）；缺省读全局偏好，默认 female。 */
+  ageGender?: string;
 }
 
 /**

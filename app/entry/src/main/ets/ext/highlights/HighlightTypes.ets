@@ -13,6 +13,8 @@ export interface HighlightItem {
   ms: number;
   /** `/api/user/highlights/<file_id>/<ms>.jpg`，用 Store.I.img() 补 host + token。 */
   url: string;
+  /** 用户在播放页自己截的帧（R25）：条里要标出来，别和随机抽的混在一起。 */
+  picked?: boolean;
 }
 
 export interface HighlightList {
@@ -53,7 +55,7 @@ function safeItems(raw: HighlightItem[] | null | undefined): HighlightItem[] {
     if (url.length === 0) {
       continue;
     }
-    out.push({ t: num(it.t), ms: Math.trunc(num(it.ms)), url: url });
+    out.push({ t: num(it.t), ms: Math.trunc(num(it.ms)), url: url, picked: it.picked === true });
   }
   return out;
 }

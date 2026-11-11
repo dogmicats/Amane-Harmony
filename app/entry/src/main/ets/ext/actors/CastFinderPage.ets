@@ -5,6 +5,9 @@ import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
 import { DetailParams } from '../../common/Types';
 import { MarkBadges } from '../../view/MarkBadges';
+import { MyFilterBar } from '../../view/MyFilterBar';
+import { BottomSheet, SortSheet, ToolPill } from '../../view/ListSheets';
+import { SortOption, sortDefOf } from '../../common/BrowseOptions';
 import { BuildConfig } from '../../common/BuildConfig';
 import { GachaSwitch } from '../stills/GachaSwitch';
 import { GachaWall } from '../stills/GachaWall';
@@ -215,6 +218,9 @@ struct CastFinderPage {
   private dirTimer: number = -1;
   @State sortBy: string = 'release';
   @State order: string = 'desc';
+  /** 条件抽屉与排序抽屉（2.4.6.26 起与媒体库同一套形状）。 */
+  @State showSort: boolean = false;
+  @State showFilter: boolean = false;
   @State onlySub: boolean = false;
   @State mosaic: string = '';
   @State picking: boolean = false;
@@ -223,12 +229,16 @@ struct CastFinderPage {
   @State hits: ActorItem[] = [];
   /** 抽卡模式：按当前这套筛选条件抽随机剧照，替代结果列表。 */
   @State gachaOn: boolean = false;
+  /** 我的评分 / 收藏夹：走服务端 cast_find 的同名参数。 */
+  @State fMyRating: string = '';
+  @State fCollection: string = '';
   private searchTimer: number = -1;
-  private sorts: Choice[] = [
-    { key: 'release', label: '发行时间' },
-    { key: 'number', label: '番号' },
-    { key: 'score', label: '评分' },
-    { key: 'runtime', label: '时长' }
+  private sorts: SortOption[] = [
+    { key: 'release', label: '发行时间', def: 'desc' },
+    { key: 'number', label: '番号', def: 'asc' },
+    { key: 'score', label: '评分', def: 'desc' },
+    { key: 'runtime', label: '时长', def: 'desc' },
+    { key: 'myrating', label: '我的评分', def: 'desc' }
   ];
   private mosaics: Choice[] = [
     { key: '', label: '不限' },
@@ -319,6 +329,12 @@ struct CastFinderPage {
     if (c[0] > 0 || c[1] < 99) {
       parts.push(`cast_min=${c[0]}`);
       parts.push(`cast_max=${c[1]}`);
+    }
+    if (this.fMyRating.length > 0) {
+      parts.push(`myrating=${this.fMyRating}`);
+    }
+    if (this.fCollection.length > 0) {
+      parts.push(`collection=${this.fCollection}`);
     }
     return parts.join('&');
   }
@@ -619,7 +635,7 @@ struct CastFinderPage {
       if (this.picked.length >= 6) {
         return;
       }
-      const m: CastMember = { id: a.id, name: a.name, gender: a.gender, avatar: a.avatar };
+      const m: CastMember = { id: a.id, name: a.name, gender: a.gender, avatar: a.avatar, age: 0 };
       this.picked = this.picked.concat([safeCastMember(m)]);
     }
     this.runQuery();
@@ -677,8 +693,76 @@ struct CastFinderPage {
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
+    }
+    .width('100%')
+    .padding({ left: 10, right: Theme.PAGE_PAD, top: 10, bottom: 2 })
+  }
 
-      // 抽卡：按当前这套筛选条件抽随机剧照（服务端 scope=cast 走 actors 的筛选 SQL）
+  private sortLabel(): string {
+    for (let i = 0; i < this.sorts.length; i++) {
+      if (this.sorts[i].key === this.sortBy) {
+        return this.sorts[i].label;
+      }
+    }
+    return '发行时间';
+  }
+
+  private filterCount(): number {
+    let n: number = 0;
+    if (this.picked.length > 0) {
+      n++;
+    }
+    if (this.hasFemale()) {
+      n++;
+    }
+    if (this.hasMale()) {
+      n++;
+    }
+    if (this.castN.length > 0) {
+      n++;
+    }
+    if (this.dirs.length > 0) {
+      n++;
+    }
+    if (this.onlySub) {
+      n++;
+    }
+    if (this.mosaic.length > 0) {
+      n++;
+    }
+    if (this.fMyRating.length > 0) {
+      n++;
+    }
+    if (this.fCollection.length > 0) {
+      n++;
+    }
+    return n;
+  }
+
+  private clearAll(): void {
+    this.picked = [];
+    this.femaleN = [];
+    this.female5 = false;
+    this.maleN = [];
+    this.male5 = false;
+    this.castN = '';
+    this.dirs = [];
+    this.onlySub = false;
+    this.mosaic = '';
+    this.fMyRating = '';
+    this.fCollection = '';
+    this.runQuery();
+  }
+
+  @Builder
+  Toolbar() {
+    Row({ space: 8 }) {
+      Text(this.total > 0 ? `${this.total} 部符合条件` : '选人 + 人数条件，找共演作品')
+        .fontSize(11)
+        .fontColor(Theme.TEXT_FAINT)
+        .maxLines(1)
+        .layoutWeight(1)
+
       if (BuildConfig.ENABLE_GACHA) {
         GachaSwitch({
           on: this.gachaOn,
@@ -687,9 +771,45 @@ struct CastFinderPage {
           }
         })
       }
+
+      ToolPill({
+        label: `⇅ ${this.sortLabel()}${this.order === 'asc' ? ' ↑' : ' ↓'}`,
+        onTap: () => {
+          this.showSort = true;
+        }
+      })
+
+      ToolPill({
+        label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+        active: this.filterCount() > 0,
+        onTap: () => {
+          this.showFilter = true;
+        }
+      })
     }
     .width('100%')
-    .padding({ left: 10, right: Theme.PAGE_PAD, top: 10, bottom: 6 })
+    .alignItems(VerticalAlign.Center)
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 8 })
+  }
+
+  @Builder
+  FilterSheet() {
+    BottomSheet({
+      title: '筛选条件',
+      actionLabel: '清空',
+      onAction: () => {
+        this.clearAll();
+      },
+      onConfirm: () => {
+        this.showFilter = false;
+      },
+      sheetHeight: '88%'
+    }) {
+      this.Picked()
+      this.Conditions()
+      this.DirectorBar()
+      Blank().height(20)
+    }
   }
 
   @Builder
@@ -909,37 +1029,17 @@ struct CastFinderPage {
         }
       })
 
-      Row({ space: 8 }) {
-        Text('排序')
-          .fontSize(11)
-          .fontColor(Theme.TEXT_FAINT)
-        Blank()
-        Text(this.order === 'desc' ? '↓' : '↑')
-          .fontSize(12)
-          .fontColor('#FFFFFF')
-          .width(26)
-          .height(24)
-          .textAlign(TextAlign.Center)
-          .backgroundColor(Theme.ACCENT)
-          .borderRadius(12)
-          .onClick(() => {
-            this.order = this.order === 'desc' ? 'asc' : 'desc';
-            this.runQuery();
-          })
-      }
-      .width('100%')
-      .margin({ top: 2 })
+      // 排序不在条件里了：2.4.6.26 起和媒体库一样收进「⇅ 排序」抽屉
 
-      PickChips({
-        options: this.sorts,
-        current: this.sortBy,
-        onPick: (key: string) => {
-          if (this.sortBy === key) {
-            this.order = this.order === 'desc' ? 'asc' : 'desc';
-          } else {
-            this.sortBy = key;
-            this.order = key === 'number' ? 'asc' : 'desc';
-          }
+      MyFilterBar({
+        myRating: this.fMyRating,
+        collection: this.fCollection,
+        onMyRating: (k: string) => {
+          this.fMyRating = k;
+          this.runQuery();
+        },
+        onCollection: (k: string) => {
+          this.fCollection = k;
           this.runQuery();
         }
       })
@@ -1240,111 +1340,164 @@ struct CastFinderPage {
   }
 
   build() {
-    Column() {
-      this.Header()
+    Stack({ alignContent: Alignment.Bottom }) {
+      Column() {
+        this.Header()
+        this.Toolbar()
 
-      Scroll() {
-        Column({ space: 10 }) {
-          this.Picked()
-          this.Conditions()
-          this.DirectorBar()
+        // 旧服务端把导演/人数集合参数静默丢掉时，必须显式说出来 ——
+        // 否则「只看导演 X 却出现全库 5000 多部」会被当成功能坏了。
+        if (this.capsWarn.length > 0) {
+          Text(this.capsWarn)
+            .fontSize(10)
+            .fontColor('#FFB74D')
+            .padding({ left: 10, right: 10, top: 7, bottom: 7 })
+            .backgroundColor('#26FFB74D')
+            .borderRadius(8)
+            .margin({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
+        }
 
-          // 旧服务端把导演/人数集合参数静默丢掉时，必须显式说出来 ——
-          // 否则「只看导演 X 却出现全库 5000 多部」会被当成功能坏了。
-          if (this.capsWarn.length > 0) {
-            Text(this.capsWarn)
-              .fontSize(10)
-              .fontColor('#FFB74D')
-              .padding({ left: 10, right: 10, top: 7, bottom: 7 })
-              .backgroundColor('#26FFB74D')
-              .borderRadius(8)
-              .width('100%')
-          }
-
-          if (this.gachaOn) {
-            // 抽卡墙按同一套筛选条件抽片：extra 就是上面那串条件，
-            // 条件一变（字符串变了）GachaWall 会自己重抽。
-            GachaWall({
-              scope: 'cast',
-              scopeId: 0,
-              label: this.conditionText(),
-              count: 0,
-              extra: this.filterQuery()
-            })
-          } else if (this.loading) {
-            Column() {
-              LoadingProgress()
-                .width(26)
-                .height(26)
-                .color(Theme.ACCENT)
-            }
-            .width('100%')
-            .height(120)
-            .justifyContent(FlexAlign.Center)
-          } else if (this.error.length > 0) {
-            Text(this.error)
-              .fontSize(12)
-              .fontColor(Theme.TEXT_DIM)
-              .padding(20)
-              .onClick(() => {
-                this.runQuery();
+        Scroll() {
+          Column({ space: 10 }) {
+            if (this.gachaOn) {
+              // 抽卡墙按同一套筛选条件抽片：extra 就是 filterQuery，
+              // 条件一变（字符串变了）GachaWall 会自己重抽。
+              GachaWall({
+                scope: 'cast',
+                scopeId: 0,
+                label: this.conditionText(),
+                count: 0,
+                extra: this.filterQuery(),
+                gachaOn: this.gachaOn,
+                onToggleGacha: (v: boolean) => {
+                  this.gachaOn = v;
+                }
               })
-          } else if (this.results.length === 0) {
-            Column({ space: 8 }) {
-              Text('◎')
-                .fontSize(30)
-                .fontColor(Theme.TEXT_FAINT)
-              Text(this.picked.length === 0 && !this.hasFemale()
-                && !this.hasMale() && this.castN.length === 0 && this.dirs.length === 0
-                ? '先选人或选一个条件'
-                : '没有符合的共演作品')
+            } else if (this.loading) {
+              Column() {
+                LoadingProgress()
+                  .width(26)
+                  .height(26)
+                  .color(Theme.ACCENT)
+              }
+              .width('100%')
+              .height(120)
+              .justifyContent(FlexAlign.Center)
+            } else if (this.error.length > 0) {
+              Text(this.error)
                 .fontSize(12)
                 .fontColor(Theme.TEXT_DIM)
-            }
-            .width('100%')
-            .height(140)
-            .justifyContent(FlexAlign.Center)
-          } else {
-            // 条件摘要：改了条件但结果看起来一样时，这行能证明查询确实重发了
-            Row({ space: 6 }) {
-              Text(this.conditionText())
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .layoutWeight(1)
-              Text(`共 ${this.total} 部`)
-                .fontSize(10)
-                .fontColor(Theme.ACCENT)
-            }
-            .width('100%')
-            .padding({ left: 14, right: 14, bottom: 6 })
-
-            ForEach(this.rows, (row: CastFindItem[], idx: number) => {
-              this.Row2(row)
-            }, (row: CastFindItem[], idx: number) => `cfr-${this.seq}-${idx}-${row[0].id}`)
-
-            if (this.results.length < this.total) {
-              Text(this.loadingMore ? '加载中…' : '加载更多')
-                .fontSize(12)
-                .fontColor(Theme.ACCENT)
-                .padding({ top: 10, bottom: 10 })
-                .width('100%')
-                .textAlign(TextAlign.Center)
+                .padding(20)
                 .onClick(() => {
-                  this.loadMore();
+                  this.runQuery();
                 })
+            } else if (this.results.length === 0) {
+              Column({ space: 8 }) {
+                Text('◎')
+                  .fontSize(30)
+                  .fontColor(Theme.TEXT_FAINT)
+                Text(this.filterCount() === 0
+                  ? '点右上角「⚙ 筛选」选人或选一个条件'
+                  : '没有符合的共演作品')
+                  .fontSize(12)
+                  .fontColor(Theme.TEXT_DIM)
+                if (this.filterCount() > 0) {
+                  Text('清空条件')
+                    .fontSize(12)
+                    .fontColor(Theme.ACCENT)
+                    .padding({ left: 16, right: 16, top: 6, bottom: 6 })
+                    .backgroundColor(Theme.ACCENT_SOFT)
+                    .borderRadius(14)
+                    .onClick(() => {
+                      this.clearAll();
+                    })
+                }
+              }
+              .width('100%')
+              .height(180)
+              .justifyContent(FlexAlign.Center)
+            } else {
+              // 条件摘要：改了条件但结果看起来一样时，这行能证明查询确实重发了
+              Row({ space: 6 }) {
+                Text(this.conditionText())
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .layoutWeight(1)
+                Text(`共 ${this.total} 部`)
+                  .fontSize(10)
+                  .fontColor(Theme.ACCENT)
+              }
+              .width('100%')
+              .padding({ left: 4, right: 4, bottom: 2 })
+
+              ForEach(this.rows, (row: CastFindItem[], idx: number) => {
+                this.Row2(row)
+              }, (row: CastFindItem[], idx: number) => `cfr-${this.seq}-${idx}-${row[0].id}`)
+
+              if (this.results.length < this.total) {
+                Text(this.loadingMore ? '加载中…' : '加载更多')
+                  .fontSize(12)
+                  .fontColor(Theme.ACCENT)
+                  .padding({ top: 10, bottom: 10 })
+                  .width('100%')
+                  .textAlign(TextAlign.Center)
+                  .onClick(() => {
+                    this.loadMore();
+                  })
+              }
             }
           }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 20 })
         }
         .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 20 })
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+        .align(Alignment.Top)
       }
       .width('100%')
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
-      .align(Alignment.Top)
+      .height('100%')
+
+      if (this.showSort || this.showFilter) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#99000000')
+          .onClick(() => {
+            this.showSort = false;
+            this.showFilter = false;
+          })
+
+        if (this.showSort) {
+          SortSheet({
+            options: this.sorts,
+            current: this.sortBy,
+            order: this.order,
+            tabInset: 0,
+            onPick: (key: string) => {
+              if (this.sortBy !== key) {
+                this.sortBy = key;
+                this.order = sortDefOf(key);
+              }
+              this.runQuery();
+              this.showSort = false;
+            },
+            onToggleOrder: () => {
+              this.order = this.order === 'asc' ? 'desc' : 'asc';
+              this.runQuery();
+            },
+            onClose: () => {
+              this.showSort = false;
+            }
+          })
+        }
+        if (this.showFilter) {
+          this.FilterSheet()
+        }
+      }
     }
     .width('100%')
     .height('100%')

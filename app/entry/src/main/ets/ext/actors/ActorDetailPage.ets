@@ -45,6 +45,20 @@ interface ViewerParams {
  * 也避免 ArkUI 里嵌套滚动容器抢手势的问题。作品按「每 3 个一组」拆成
  * Row 渲染，宽度自适应不同屏幕，不需要给 Grid 硬算高度。
  */
+interface ActorSeriesItem {
+  id: number;
+  name: string;
+  count: number;
+  poster: string;
+}
+
+/** 跳系列页用的参数（结构同 FacetParams，这里只用到三项）。 */
+interface SeriesNav {
+  kind: string;
+  id: number;
+  name: string;
+}
+
 @Entry
 @Component
 struct ActorDetailPage {
@@ -75,8 +89,13 @@ struct ActorDetailPage {
   @State addingPhoto: boolean = false;
   @State fetchingPhoto: boolean = false;
   @State stillsLoading: boolean = false;
+  /** 参演系列（服务端聚合，按参演片数倒序）。 */
+  @State series: ActorSeriesItem[] = [];
   @State error: string = '';
   @State toast: string = '';
+  /** 是否已收藏这位演员（旁挂 user.db；上游 actors 没有收藏列）。 */
+  @State fav: boolean = false;
+  @State favBusy: boolean = false;
   private actorId: number = 0;
   private pendingName: string = '';
 
@@ -86,6 +105,8 @@ struct ActorDetailPage {
       this.actorId = Number(p.id);
       this.pendingName = p.name === undefined || p.name === null ? '' : p.name;
     }
+    this.load();
+    this.loadSeries();
     this.load();
   }
 
@@ -99,6 +120,7 @@ struct ActorDetailPage {
       const text: string = await httpGet(
         `${Store.I.user}/api/user/actors/${this.actorId}`, Store.I.token);
       this.data = safeActorDetail(JSON.parse(text) as ActorDetail);
+      this.fav = this.data.isFavorite;
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] actor detail: ${e.code} ${e.message}`);
@@ -275,6 +297,28 @@ struct ActorDetailPage {
     }, 2400);
   }
 
+  /** 收藏 / 取消收藏这位演员：先本地翻状态（点了立刻有反馈），失败再翻回来。 */
+  private async toggleFav(): Promise<void> {
+    if (this.actorId <= 0 || this.favBusy) {
+      return;
+    }
+    this.favBusy = true;
+    const want: boolean = !this.fav;
+    this.fav = want;
+    try {
+      await httpPost(`${Store.I.user}/api/user/actors/${this.actorId}/favorite`, Store.I.token,
+        JSON.stringify({ favorite: want }));
+      this.toast = want ? '已收藏这位演员' : '已取消收藏';
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error(`[amane] actor favorite: ${e.code} ${e.message}`);
+      this.fav = !want;
+      this.toast = e.code === 404 ? '服务端还没有这个功能（需 1.3.26+）' : '保存失败，请检查连接';
+    }
+    this.favBusy = false;
+    this.clearToast();
+  }
+
   private clearToast(): void {
     if (this.toast === '正在找图…') {
       return;
@@ -333,6 +377,92 @@ struct ActorDetailPage {
       out.push(row);
     }
     return out;
+  }
+
+  /** 参演系列：一位演员常在几个系列里反复出现，比一堆散片更好认。
+   *  按参演片数倒序；点卡片进系列页，那里还能按系列属性继续收窄。 */
+  private async loadSeries(): Promise<void> {
+    if (this.actorId <= 0) {
+      return;
+    }
+    try {
+      const url: string = Store.I.user + '/api/user/actors/' + this.actorId + '/series?limit=24';
+      const text: string = await httpGet(url, Store.I.token);
+      const obj = JSON.parse(text) as Record<string, Object>;
+      const raw = obj.items;
+      const out: ActorSeriesItem[] = [];
+      if (Array.isArray(raw)) {
+        for (let i = 0; i < raw.length; i++) {
+          const it = raw[i] as ActorSeriesItem;
+          out.push({ id: Number(it.id), name: String(it.name),
+            count: Number(it.count), poster: String(it.poster) });
+        }
+      }
+      this.series = out;
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error('[amane] actor series: ' + e.message);
+    }
+  }
+
+  @Builder
+  SeriesBlock() {
+    if (this.series.length > 0) {
+      Column({ space: 10 }) {
+        Row({ space: 6 }) {
+          Text('参演系列')
+            .fontSize(15)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TEXT)
+          Text(this.series.length.toString())
+            .fontSize(9)
+            .fontColor('#FFFFFF')
+            .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+            .backgroundColor(Theme.ACCENT)
+            .borderRadius(6)
+          Blank()
+        }
+        .width('100%')
+        Scroll() {
+          Row({ space: 10 }) {
+            ForEach(this.series, (s: ActorSeriesItem) => {
+              Column({ space: 5 }) {
+                Image(Store.I.img(s.poster))
+                  .width(96)
+                  .aspectRatio(0.704)
+                  .objectFit(ImageFit.Cover)
+                  .borderRadius(9)
+                  .backgroundColor(Theme.CARD)
+                Text(s.name)
+                  .fontSize(11)
+                  .fontColor(Theme.TEXT)
+                  .maxLines(2)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .width('100%')
+                Text(s.count.toString() + ' 部')
+                  .fontSize(9)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .width('100%')
+              }
+              .width(96)
+              .alignItems(HorizontalAlign.Start)
+              .onClick(() => {
+                const p: SeriesNav = { kind: 'series', id: s.id, name: s.name };
+                router.pushUrl({ url: 'ext/facets/FacetPage', params: p }).catch((e: BusinessError) => {
+                  console.error('[amane] push facet: ' + e.message);
+                });
+              })
+            }, (s: ActorSeriesItem) => 'as-' + s.id)
+          }
+        }
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
+        .align(Alignment.Start)
+        .width('100%')
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+    }
   }
 
   private async loadWorks(offset: number, append: boolean): Promise<void> {
@@ -454,7 +584,8 @@ struct ActorDetailPage {
     // 不必每个页面各画一套（之前这里就是漏掉来源标记的地方）。
     Column() {
       PosterCard({
-        item: posterItem(m.id, m.number, m.title, m.release, m.poster, m.score, m.marks),
+        item: posterItem(m.id, m.number, m.title, m.release, m.poster, m.score, m.marks,
+          m.my_rating === undefined ? 0 : m.my_rating),
         fluid: true,
         showTitle: false,
         onTap: () => {
@@ -719,6 +850,15 @@ struct ActorDetailPage {
                 .margin({ top: 18, bottom: 18 })
               }
 
+              // 参演系列：独立于剧照（没剧照也要显示），点了进系列页
+              if (this.series.length > 0) {
+                Column() {
+                  this.SeriesBlock()
+                }
+                .width('100%')
+                .margin({ top: 18, bottom: 18 })
+              }
+
               Row({ space: 8 }) {
                 Text(`作品 · ${this.total}`)
                   .fontSize(14)
@@ -795,19 +935,38 @@ struct ActorDetailPage {
         .padding({ bottom: 0 })
       }
 
-      Text('‹')
-        .fontSize(24)
-        .fontColor('#FFFFFF')
-        .width(36)
-        .height(36)
-        .textAlign(TextAlign.Center)
-        .borderRadius(18)
-        .backgroundColor('#40000000')
-        .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
-        .margin({ left: 12, top: 8 })
-        .onClick(() => {
-          router.back();
-        })
+      // 顶栏：返回 + 收藏。两枚按钮都压在大图上，用同一套半透明玻璃底。
+      Row() {
+        Text('‹')
+          .fontSize(24)
+          .fontColor('#FFFFFF')
+          .width(36)
+          .height(36)
+          .textAlign(TextAlign.Center)
+          .borderRadius(18)
+          .backgroundColor('#40000000')
+          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
+          .onClick(() => {
+            router.back();
+          })
+
+        Blank()
+
+        Text(this.fav ? '♥' : '♡')
+          .fontSize(18)
+          .fontColor(this.fav ? '#FF6B93' : '#FFFFFF')
+          .width(36)
+          .height(36)
+          .textAlign(TextAlign.Center)
+          .borderRadius(18)
+          .backgroundColor('#40000000')
+          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
+          .onClick(() => {
+            this.toggleFav();
+          })
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 8 })
 
       if (this.zoomOn) {
         Stack() {

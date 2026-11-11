@@ -114,20 +114,35 @@ export struct HighlightStrip {
 
   @Builder
   Cell(item: HighlightItem) {
-    Stack({ alignContent: Alignment.BottomEnd }) {
-      Image(Store.I.img(item.url))
-        .width(CARD_W)
-        .height(CARD_H)
-        .objectFit(ImageFit.Cover)
-        .borderRadius(8)
-        .backgroundColor(Theme.CARD)
-      Text(clock(item.t))
-        .fontSize(9)
-        .fontColor('#FFFFFF')
-        .padding({ left: 5, right: 5, top: 1, bottom: 1 })
-        .backgroundColor('#A6000000')
-        .borderRadius(5)
-        .margin(5)
+    Stack({ alignContent: Alignment.TopStart }) {
+      Stack({ alignContent: Alignment.BottomEnd }) {
+        Image(Store.I.img(item.url))
+          .width(CARD_W)
+          .height(CARD_H)
+          .objectFit(ImageFit.Cover)
+          .borderRadius(8)
+          .backgroundColor(Theme.CARD)
+        Text(clock(item.t))
+          .fontSize(9)
+          .fontColor('#FFFFFF')
+          .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+          .backgroundColor('#A6000000')
+          .borderRadius(5)
+          .margin(5)
+      }
+      .width(CARD_W)
+      .height(CARD_H)
+
+      // 我截的那几张：左上角标一下，和随机抽的区分开
+      if (item.picked === true) {
+        Text('我选的')
+          .fontSize(8)
+          .fontColor('#FFFFFF')
+          .padding({ left: 4, right: 4, top: 1, bottom: 1 })
+          .backgroundColor(Theme.ACCENT)
+          .borderRadius(4)
+          .margin(5)
+      }
     }
     .width(CARD_W)
     .height(CARD_H)

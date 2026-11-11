@@ -5,41 +5,30 @@ import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
 import { DetailParams, MediaItem } from '../../common/Types';
 import { posterItem } from '../../common/Util';
+import { ChipOption, MYRATING_OPTIONS, SortOption, sortDefOf } from '../../common/BrowseOptions';
 import { PosterCard } from '../../view/PosterCard';
+import { KeywordBox } from '../../view/KeywordBox';
+import { BottomSheet, ChipGroup, ChipRow, ListToolbar, SortSheet } from '../../view/ListSheets';
+import { collectionChipOptions } from '../collections/CollectionTypes';
+import { BuildConfig } from '../../common/BuildConfig';
 import {
-  ActorItem, ActorList, ActorParams, CastFindItem, CastFindList, safeActorList, safeCastFindList
+  ActorParams, CastFindItem, CastFindList, CoActorItem, CoActorList,
+  safeCastFindList, safeCoActors
 } from './ActorTypes';
 import { FacetItem, FacetList, safeFacetList } from '../facets/FacetTypes';
 
 const PAGE: number = 24;
 
-interface Choice {
-  key: string;
-  label: string;
-}
+const SUB_OPTIONS: ChipOption[] = [
+  { key: '', label: '全部' },
+  { key: '1', label: '只看有字幕' }
+];
 
-@Component
-struct MiniChips {
-  options: Choice[] = [];
-  @Prop current: string = '';
-  onPick: (key: string) => void = () => {};
-
-  build() {
-    Row({ space: 7 }) {
-      ForEach(this.options, (opt: Choice) => {
-        Text(opt.label)
-          .fontSize(11)
-          .fontColor(this.current === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-          .backgroundColor(this.current === opt.key ? Theme.ACCENT : Theme.CARD)
-          .borderRadius(11)
-          .onClick(() => {
-            this.onPick(opt.key);
-          })
-      }, (opt: Choice) => `mc-${opt.key}`)
-    }
-  }
-}
+const CO_GENDERS: ChipOption[] = [
+  { key: '', label: '全部' },
+  { key: 'female', label: '女' },
+  { key: 'male', label: '男' }
+];
 
 /** 「min2 / eq2」→ [min, max]。 */
 function band(key: string): number[] {
@@ -70,6 +59,10 @@ function band(key: string): number[] {
  * 既能做「和谁共演」，也能做「这部片里有几个女演员」——上游的
  * `/api/metadata?actor_id=` 只能做「谁参演」，答不了人数。
  * 卡片复用媒体库的 PosterCard，视觉与影片库一致。
+ *
+ * 2.4.6.26 起版式与媒体库统一：搜索框 + 一行工具条（部数 / ⇅ 排序 / ⚙ 筛选），
+ * 标签、合作演员、人数、画质、字幕、评分、清单全部收进底部抽屉。合作演员候选
+ * 带头像、可按男女收窄（服务端 `/actors/{id}/co-actors?gender=`）。
  */
 @Entry
 @Component
@@ -89,36 +82,45 @@ struct ActorWorksPage {
   @State mosaic: string = '';
   @State female: string = '';
   @State male: string = '';
+  @State showSort: boolean = false;
   @State showFilter: boolean = false;
+  /** 我的评分 / 收藏夹：走服务端 cast_find 的同名参数（与媒体库同口径）。 */
+  @State fMyRating: string = '';
+  @State fCollection: string = '';
+  @State collectionOptions: ChipOption[] = [];
   @State picking: string = '';
   @State query: string = '';
+  /** 这一页自己的关键词（搜 TA 的作品，不跳全库搜索页）。 */
+  @State keyword: string = '';
+  /** 合作演员候选只看女 / 只看男 / 全部。 */
+  @State coGender: string = 'female';
   @State tagHits: FacetItem[] = [];
-  @State actorHits: ActorItem[] = [];
+  @State coHits: CoActorItem[] = [];
   private actorId: number = 0;
   private actorName: string = '';
-  private searchTimer: number = -1;
-  private sorts: Choice[] = [
-    { key: 'release', label: '发行日期' },
-    { key: 'score', label: '评分' },
-    { key: 'number', label: '番号' },
-    { key: 'updated_at', label: '更新' },
-    { key: 'random', label: '随机' }
+  private sorts: SortOption[] = [
+    { key: 'release', label: '发行日期', def: 'desc' },
+    { key: 'score', label: '评分', def: 'desc' },
+    { key: 'number', label: '番号', def: 'asc' },
+    { key: 'updated_at', label: '更新时间', def: 'desc' },
+    { key: 'myrating', label: '我的评分', def: 'desc' },
+    { key: 'random', label: '随机', def: 'desc' }
   ];
-  private mosaics: Choice[] = [
+  private mosaics: ChipOption[] = [
     { key: '', label: '不限' },
     { key: 'uncensored', label: '无码' },
     { key: 'cracked', label: '破解' },
     { key: 'leaked', label: '流出' }
   ];
-  private females: Choice[] = [
-    { key: '', label: '女演员不限' },
+  private females: ChipOption[] = [
+    { key: '', label: '不限' },
     { key: 'min2', label: '≥2 女' },
     { key: 'min3', label: '≥3 女' },
     { key: 'min5', label: '≥5 女' },
     { key: 'eq2', label: '恰好 2 女' }
   ];
-  private males: Choice[] = [
-    { key: '', label: '男演员不限' },
+  private males: ChipOption[] = [
+    { key: '', label: '不限' },
     { key: 'eq0', label: '0 男' },
     { key: 'min1', label: '≥1 男' },
     { key: 'min2', label: '≥2 男' }
@@ -130,14 +132,15 @@ struct ActorWorksPage {
       this.actorId = Number(p.id);
       this.actorName = p.name === undefined || p.name === null ? '' : p.name;
     }
+    this.loadCollections();
     this.reload();
   }
 
-  aboutToDisappear(): void {
-    if (this.searchTimer >= 0) {
-      clearTimeout(this.searchTimer);
-      this.searchTimer = -1;
+  private async loadCollections(): Promise<void> {
+    if (!BuildConfig.ENABLE_COLLECTIONS) {
+      return;
     }
+    this.collectionOptions = await collectionChipOptions();
   }
 
   private buildUrl(offset: number): string {
@@ -171,6 +174,15 @@ struct ActorWorksPage {
     if (m[0] > 0 || m[1] < 99) {
       parts.push(`male_min=${m[0]}`);
       parts.push(`male_max=${m[1]}`);
+    }
+    if (this.fMyRating.length > 0) {
+      parts.push(`myrating=${this.fMyRating}`);
+    }
+    if (this.fCollection.length > 0) {
+      parts.push(`collection=${this.fCollection}`);
+    }
+    if (this.keyword.length > 0) {
+      parts.push(`search=${encodeURIComponent(this.keyword)}`);
     }
     return `${Store.I.user}/api/user/cast/find?${parts.join('&')}`;
   }
@@ -230,24 +242,50 @@ struct ActorWorksPage {
     if (this.male.length > 0) {
       n++;
     }
+    if (this.fMyRating.length > 0) {
+      n++;
+    }
+    if (this.fCollection.length > 0) {
+      n++;
+    }
     return n;
   }
 
-  private onQuery(value: string): void {
-    if (this.searchTimer >= 0) {
-      clearTimeout(this.searchTimer);
-      this.searchTimer = -1;
+  private sortLabel(): string {
+    for (let i = 0; i < this.sorts.length; i++) {
+      if (this.sorts[i].key === this.sortBy) {
+        return this.sorts[i].label;
+      }
     }
-    const q: string = value;
-    this.searchTimer = setTimeout(() => {
-      this.searchTimer = -1;
-      this.query = q;
-      this.doPick();
-    }, 320);
+    return '发行日期';
   }
 
-  private async doPick(): Promise<void> {
-    const kw: string = this.query.trim();
+  private resetFilters(): void {
+    this.tagId = 0;
+    this.tagName = '';
+    this.coId = 0;
+    this.coName = '';
+    this.subOnly = false;
+    this.mosaic = '';
+    this.female = '';
+    this.male = '';
+    this.fMyRating = '';
+    this.fCollection = '';
+    this.reload();
+  }
+
+  /** 抽屉里「标签 / 合作演员」这种二级候选：点开才展开搜索与候选。 */
+  private openPick(kind: string): void {
+    this.picking = this.picking === kind ? '' : kind;
+    this.query = '';
+    this.tagHits = [];
+    this.coHits = [];
+    if (this.picking.length > 0) {
+      this.doPick('');
+    }
+  }
+
+  private async doPick(kw: string): Promise<void> {
     if (this.picking === 'tag') {
       try {
         const text: string = await httpGet(
@@ -259,37 +297,27 @@ struct ActorWorksPage {
         console.error(`[amane] tag pick: ${e.code} ${e.message}`);
       }
     } else if (this.picking === 'actor') {
+      // 合作演员候选走扩展自己的聚合接口：一次带出「与本人共演几部」+ 头像 + 性别，
+      // 不用先拉一堆演员卡再逐个算（3 万行演员表上那是 24 次查询）。
       try {
-        const text: string = await httpGet(
-          `${Store.I.user}/api/user/actors?search=${encodeURIComponent(kw)}&limit=24&has_image=false&sort_by=count&order=desc`,
-          Store.I.token);
-        const list: ActorList = safeActorList(JSON.parse(text) as ActorList);
-        const hits: ActorItem[] = [];
-        for (let i = 0; i < list.items.length; i++) {
-          if (list.items[i].id !== this.actorId) {
-            hits.push(list.items[i]);
-          }
+        let url: string = `${Store.I.user}/api/user/actors/${this.actorId}/co-actors` +
+          `?search=${encodeURIComponent(kw)}&limit=36`;
+        if (this.coGender.length > 0) {
+          url += `&gender=${this.coGender}`;
         }
-        this.actorHits = hits;
+        const text: string = await httpGet(url, Store.I.token);
+        this.coHits = safeCoActors(JSON.parse(text) as CoActorList);
       } catch (err) {
         const e = err as BusinessError;
         console.error(`[amane] co-actor pick: ${e.code} ${e.message}`);
+        this.coHits = [];
       }
     }
   }
 
-  private openPick(kind: string): void {
-    this.picking = this.picking === kind ? '' : kind;
-    this.query = '';
-    this.tagHits = [];
-    this.actorHits = [];
-    if (this.picking.length > 0) {
-      this.doPick();
-    }
-  }
-
   private cardOf(x: CastFindItem): MediaItem {
-    return posterItem(x.id, x.number, x.title, x.release, x.poster, x.score, x.marks);
+    return posterItem(x.id, x.number, x.title, x.release, x.poster, x.score, x.marks,
+      x.my_rating === undefined ? 0 : x.my_rating);
   }
 
   @Builder
@@ -312,7 +340,7 @@ struct ActorWorksPage {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
-        Text(`${this.total} 部` + (this.filterCount() > 0 ? ` · 已筛 ${this.filterCount()} 项` : ''))
+        Text(this.filterCount() > 0 ? `${this.total} 部 · 已筛 ${this.filterCount()} 项` : `${this.total} 部`)
           .fontSize(10)
           .fontColor(Theme.TEXT_FAINT)
           .width('100%')
@@ -321,40 +349,79 @@ struct ActorWorksPage {
       .layoutWeight(1)
     }
     .width('100%')
-    .padding({ left: 10, right: Theme.PAGE_PAD, top: 10, bottom: 6 })
+    .padding({ left: 10, right: Theme.PAGE_PAD, top: 10, bottom: 4 })
   }
 
+  /** 合作演员候选：有头像的给头像圈（女演员没头像也给占位圈，位置不跳），
+   *  男演员没头像就只留名字 —— 男优头像库里本来就少，留空圈反而更乱。 */
+  @Builder
+  CoActorChips() {
+    Flex({ wrap: FlexWrap.Wrap }) {
+      ForEach(this.coHits, (a: CoActorItem) => {
+        Row({ space: 6 }) {
+          if (a.avatar.length > 0) {
+            Image(Store.I.img(a.avatar))
+              .width(24)
+              .height(24)
+              .objectFit(ImageFit.Cover)
+              .borderRadius(12)
+              .backgroundColor(Theme.CARD)
+          } else if (a.gender !== 'male') {
+            Column() {
+              Text(a.name.length > 0 ? a.name.substring(0, 1) : '?')
+                .fontSize(11)
+                .fontColor(Theme.TEXT_FAINT)
+            }
+            .width(24)
+            .height(24)
+            .justifyContent(FlexAlign.Center)
+            .borderRadius(12)
+            .backgroundColor(Theme.CARD)
+          }
+          Text(a.name)
+            .fontSize(11)
+            .fontColor(this.coId === a.id ? '#FFFFFF' : Theme.TEXT_DIM)
+            .maxLines(1)
+          Text(`${a.shared}`)
+            .fontSize(10)
+            .fontColor(this.coId === a.id ? '#FFFFFF' : Theme.TEXT_FAINT)
+        }
+        .padding({ left: 4, right: 10, top: 3, bottom: 3 })
+        .backgroundColor(this.coId === a.id ? Theme.ACCENT : Theme.CARD_HI)
+        .borderRadius(14)
+        .margin({ right: 7, bottom: 7 })
+        .onClick(() => {
+          this.coId = this.coId === a.id ? 0 : a.id;
+          this.coName = this.coId > 0 ? a.name : '';
+          this.reload();
+        })
+      }, (a: CoActorItem) => `pick-a-${a.id}-${a.shared}-${a.avatar.length > 0 ? 1 : 0}`)
+    }
+    .width('100%')
+  }
+
+  /** 二级候选面板（抽屉里）：标签 / 合作演员共用，只是候选内容与性别条不同。 */
   @Builder
   PickerPanel() {
     Column({ space: 8 }) {
-      Text(this.picking === 'tag' ? '按标签收窄' : '按合作演员收窄（与本人共演）')
-        .fontSize(10)
-        .fontColor(Theme.TEXT_FAINT)
-        .width('100%')
-      TextInput({ placeholder: this.picking === 'tag' ? '搜索标签' : '搜索演员名', text: this.query })
-        .height(34)
-        .fontSize(12)
-        .fontColor(Theme.TEXT)
-        .placeholderColor(Theme.TEXT_FAINT)
-        .placeholderFont({ size: 11 })
-        .backgroundColor(Theme.CARD_HI)
-        .borderRadius(8)
-        .padding({ left: 10, right: 10 })
-        .width('100%')
-        .onChange((v: string) => {
-          this.onQuery(v);
+      if (this.picking === 'tag') {
+        KeywordBox({
+          placeholder: '搜索标签',
+          onCommit: (kw: string) => {
+            this.query = kw.trim();
+            this.doPick(this.query);
+          }
         })
-
-      Flex({ wrap: FlexWrap.Wrap }) {
-        if (this.picking === 'tag') {
+        Flex({ wrap: FlexWrap.Wrap }) {
           ForEach(this.tagHits, (t: FacetItem) => {
             Text(`${t.name} · ${t.count}`)
               .fontSize(11)
               .fontColor(this.tagId === t.id ? '#FFFFFF' : Theme.TEXT_DIM)
-              .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+              .padding({ left: 9, right: 9, top: 5, bottom: 5 })
               .backgroundColor(this.tagId === t.id ? Theme.ACCENT : Theme.CARD_HI)
-              .borderRadius(10)
+              .borderRadius(11)
               .margin({ right: 6, bottom: 6 })
+              .maxLines(1)
               .onClick(() => {
                 this.tagId = this.tagId === t.id ? 0 : t.id;
                 this.tagName = this.tagId > 0 ? t.name : '';
@@ -362,213 +429,201 @@ struct ActorWorksPage {
                 this.reload();
               })
           }, (t: FacetItem) => `pick-tag-${t.id}`)
-        } else {
-          ForEach(this.actorHits, (a: ActorItem) => {
-            Text(a.name)
-              .fontSize(11)
-              .fontColor(this.coId === a.id ? '#FFFFFF' : Theme.TEXT_DIM)
-              .padding({ left: 9, right: 9, top: 4, bottom: 4 })
-              .backgroundColor(this.coId === a.id ? Theme.ACCENT : Theme.CARD_HI)
-              .borderRadius(10)
-              .margin({ right: 6, bottom: 6 })
-              .onClick(() => {
-                this.coId = this.coId === a.id ? 0 : a.id;
-                this.coName = this.coId > 0 ? a.name : '';
-                this.picking = '';
-                this.reload();
-              })
-          }, (a: ActorItem) => `pick-a-${a.id}`)
         }
+        .width('100%')
+      } else {
+        Row({ space: 8 }) {
+          Text('性别')
+            .fontSize(10)
+            .fontColor(Theme.TEXT_FAINT)
+          ChipRow({
+            options: CO_GENDERS,
+            current: this.coGender,
+            onPick: (key: string) => {
+              this.coGender = key;
+              this.doPick(this.query);
+            }
+          })
+          Blank()
+        }
+        .width('100%')
+
+        KeywordBox({
+          placeholder: '搜索演员名',
+          onCommit: (kw: string) => {
+            this.query = kw.trim();
+            this.doPick(this.query);
+          }
+        })
+
+        this.CoActorChips()
+
+        Text('数字 = 与本人共演过几部；点一下筛，再点一下取消')
+          .fontSize(9)
+          .fontColor(Theme.TEXT_FAINT)
+          .width('100%')
       }
-      .width('100%')
     }
     .alignItems(HorizontalAlign.Start)
     .width('100%')
-    .padding(10)
-    .backgroundColor(Theme.CARD)
-    .borderRadius(Theme.RADIUS)
   }
 
   @Builder
-  Toolbar() {
-    Column({ space: 8 }) {
+  FilterSheet() {
+    BottomSheet({
+      title: '筛选',
+      actionLabel: '重置',
+      onAction: () => {
+        this.resetFilters();
+      },
+      onConfirm: () => {
+        this.showFilter = false;
+      },
+      sheetHeight: '86%'
+    }) {
+      // 标签 / 合作演员：入口一行，展开后才是候选
       Row({ space: 8 }) {
-        Scroll() {
-          MiniChips({
-            options: this.sorts,
-            current: this.sortBy,
-            onPick: (key: string) => {
-              if (this.sortBy === key) {
-                if (key !== 'random') {
-                  this.order = this.order === 'desc' ? 'asc' : 'desc';
-                }
-              } else {
-                this.sortBy = key;
-                this.order = key === 'number' ? 'asc' : 'desc';
-              }
-              this.reload();
-            }
-          })
-        }
-        .scrollable(ScrollDirection.Horizontal)
-        .scrollBar(BarState.Off)
-        .layoutWeight(1)
-        .align(Alignment.Start)
-
-        Text(this.order === 'desc' ? '↓' : '↑')
-          .fontSize(13)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#FFFFFF')
-          .width(30)
-          .height(26)
-          .textAlign(TextAlign.Center)
-          .backgroundColor(this.order === 'desc' ? Theme.ACCENT : Theme.CARD_HI)
-          .borderRadius(13)
-          .visibility(this.sortBy === 'random' ? Visibility.None : Visibility.Visible)
-          .onClick(() => {
-            this.order = this.order === 'desc' ? 'asc' : 'desc';
-            this.reload();
-          })
-      }
-      .width('100%')
-
-      Row({ space: 7 }) {
-        Text(this.tagId > 0 ? `标签·${this.tagName}` : '标签')
+        Text(this.tagId > 0 ? `标签 · ${this.tagName}` : '标签')
           .fontSize(11)
           .fontColor(this.tagId > 0 ? '#FFFFFF' : Theme.TEXT_DIM)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .constraintSize({ maxWidth: 110 })
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .constraintSize({ maxWidth: 150 })
+          .padding({ left: 11, right: 11, top: 6, bottom: 6 })
           .backgroundColor(this.tagId > 0 ? Theme.ACCENT : Theme.CARD)
-          .borderRadius(11)
+          .borderRadius(12)
           .onClick(() => {
             this.openPick('tag');
           })
-        Text(this.coId > 0 ? `共演·${this.coName}` : '合作演员')
+        Text(this.coId > 0 ? `共演 · ${this.coName}` : '合作演员')
           .fontSize(11)
           .fontColor(this.coId > 0 ? '#FFFFFF' : Theme.TEXT_DIM)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .constraintSize({ maxWidth: 110 })
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .constraintSize({ maxWidth: 150 })
+          .padding({ left: 11, right: 11, top: 6, bottom: 6 })
           .backgroundColor(this.coId > 0 ? Theme.ACCENT : Theme.CARD)
-          .borderRadius(11)
+          .borderRadius(12)
           .onClick(() => {
             this.openPick('actor');
           })
-        Text('有字幕')
-          .fontSize(11)
-          .fontColor(this.subOnly ? '#FFFFFF' : Theme.TEXT_DIM)
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-          .backgroundColor(this.subOnly ? Theme.ACCENT : Theme.CARD)
-          .borderRadius(11)
-          .onClick(() => {
-            this.subOnly = !this.subOnly;
-            this.reload();
-          })
         Blank()
-        Text(this.filterCount() > 0 ? `重置 ${this.filterCount()}` : '重置')
-          .fontSize(11)
-          .fontColor(Theme.TEXT_FAINT)
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-          .onClick(() => {
-            this.tagId = 0;
-            this.tagName = '';
-            this.coId = 0;
-            this.coName = '';
-            this.subOnly = false;
-            this.mosaic = '';
-            this.female = '';
-            this.male = '';
-            this.reload();
-          })
       }
       .width('100%')
-
-      Row({ space: 7 }) {
-        Text('画质')
-          .fontSize(10)
-          .fontColor(Theme.TEXT_FAINT)
-        MiniChips({
-          options: this.mosaics,
-          current: this.mosaic,
-          onPick: (key: string) => {
-            this.mosaic = key;
-            this.reload();
-          }
-        })
-      }
-      .width('100%')
-
-      // 人数条件：这是上游做不到、只有本项目能筛的维度
-      Scroll() {
-        Row({ space: 7 }) {
-          Text('人数')
-            .fontSize(10)
-            .fontColor(Theme.TEXT_FAINT)
-          MiniChips({
-            options: this.females,
-            current: this.female,
-            onPick: (key: string) => {
-              this.female = key;
-              this.reload();
-            }
-          })
-          MiniChips({
-            options: this.males,
-            current: this.male,
-            onPick: (key: string) => {
-              this.male = key;
-              this.reload();
-            }
-          })
-        }
-      }
-      .scrollable(ScrollDirection.Horizontal)
-      .scrollBar(BarState.Off)
-      .width('100%')
-      .align(Alignment.Start)
 
       if (this.picking.length > 0) {
         this.PickerPanel()
       }
+
+      ChipGroup({
+        title: '画质 / 片源', options: this.mosaics, current: this.mosaic,
+        onPick: (key: string) => {
+          this.mosaic = key;
+          this.reload();
+        }
+      })
+      ChipGroup({
+        title: '字幕', options: SUB_OPTIONS, current: this.subOnly ? '1' : '',
+        onPick: (key: string) => {
+          this.subOnly = key === '1';
+          this.reload();
+        }
+      })
+      // 人数条件：这是上游做不到、只有本项目能筛的维度
+      ChipGroup({
+        title: '女演员人数', options: this.females, current: this.female,
+        onPick: (key: string) => {
+          this.female = key;
+          this.reload();
+        }
+      })
+      ChipGroup({
+        title: '男演员人数', options: this.males, current: this.male,
+        onPick: (key: string) => {
+          this.male = key;
+          this.reload();
+        }
+      })
+      if (BuildConfig.ENABLE_RATINGS) {
+        ChipGroup({
+          title: '我的评分', options: MYRATING_OPTIONS, current: this.fMyRating,
+          onPick: (key: string) => {
+            this.fMyRating = key;
+            this.reload();
+          }
+        })
+      }
+      if (BuildConfig.ENABLE_COLLECTIONS && this.collectionOptions.length > 0) {
+        ChipGroup({
+          title: '收藏夹', options: this.collectionOptions, current: this.fCollection,
+          onPick: (key: string) => {
+            this.fCollection = key;
+            this.reload();
+          }
+        })
+      }
+      Blank().height(20)
     }
-    .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 8 })
   }
 
   build() {
-    Column() {
-      this.Header()
+    Stack({ alignContent: Alignment.Bottom }) {
+      Column() {
+        this.Header()
 
-      if (this.loading) {
-        Column() {
-          LoadingProgress()
-            .width(28)
-            .height(28)
-            .color(Theme.ACCENT)
+        Row() {
+          KeywordBox({
+            placeholder: '在 TA 的作品里搜番号 / 标题',
+            onCommit: (kw: string) => {
+              const next: string = kw.trim();
+              if (next === this.keyword) {
+                return;
+              }
+              this.keyword = next;
+              this.reload();
+            }
+          })
         }
         .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.error.length > 0) {
-        Column({ space: 10 }) {
-          Text(this.error)
-            .fontSize(13)
-            .fontColor(Theme.TEXT_DIM)
-            .onClick(() => {
-              this.loading = true;
-              this.load(0, false);
-            })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        this.Toolbar()
+        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 4 })
 
-        if (this.works.length === 0) {
+        ListToolbar({
+          label: this.keyword.length > 0 ? `「${this.keyword}」${this.total} 部` : `${this.total} 部`,
+          sortLabel: `${this.sortLabel()}${this.sortBy === 'random' ? '' : (this.order === 'asc' ? ' ↑' : ' ↓')}`,
+          filterCount: this.filterCount(),
+          showFilter: true,
+          onSort: () => {
+            this.showSort = true;
+          },
+          onFilter: () => {
+            this.showFilter = true;
+          }
+        })
+
+        if (this.loading) {
+          Column() {
+            LoadingProgress()
+              .width(28)
+              .height(28)
+              .color(Theme.ACCENT)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.error.length > 0) {
+          Column({ space: 10 }) {
+            Text(this.error)
+              .fontSize(13)
+              .fontColor(Theme.TEXT_DIM)
+              .onClick(() => {
+                this.loading = true;
+                this.load(0, false);
+              })
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.works.length === 0) {
           Column({ space: 10 }) {
             Text('▤')
               .fontSize(32)
@@ -576,6 +631,17 @@ struct ActorWorksPage {
             Text(this.filterCount() > 0 ? '没有符合筛选条件的作品' : '暂无作品')
               .fontSize(13)
               .fontColor(Theme.TEXT_DIM)
+            if (this.filterCount() > 0) {
+              Text('重置筛选')
+                .fontSize(12)
+                .fontColor(Theme.ACCENT)
+                .padding({ left: 16, right: 16, top: 6, bottom: 6 })
+                .backgroundColor(Theme.ACCENT_SOFT)
+                .borderRadius(14)
+                .onClick(() => {
+                  this.resetFilters();
+                })
+            }
           }
           .width('100%')
           .layoutWeight(1)
@@ -621,13 +687,54 @@ struct ActorWorksPage {
           .columnsTemplate('1fr 1fr 1fr')
           .columnsGap(8)
           .rowsGap(14)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 16 })
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
           .layoutWeight(1)
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
           .onReachEnd(() => {
             this.loadMore();
           })
+        }
+      }
+      .width('100%')
+      .height('100%')
+
+      if (this.showSort || this.showFilter) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#99000000')
+          .onClick(() => {
+            this.showSort = false;
+            this.showFilter = false;
+          })
+
+        if (this.showSort) {
+          SortSheet({
+            options: this.sorts,
+            current: this.sortBy,
+            order: this.order,
+            tabInset: 0,
+            onPick: (key: string) => {
+              // 随机再点一次 = 重摇一批（服务端每次回不同窗口）；其余项只是切换
+              if (this.sortBy !== key) {
+                this.sortBy = key;
+                this.order = sortDefOf(key);
+              }
+              this.reload();
+              this.showSort = false;
+            },
+            onToggleOrder: () => {
+              this.order = this.order === 'asc' ? 'desc' : 'asc';
+              this.reload();
+            },
+            onClose: () => {
+              this.showSort = false;
+            }
+          })
+        }
+        if (this.showFilter) {
+          this.FilterSheet()
         }
       }
     }

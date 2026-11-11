@@ -117,10 +117,12 @@ struct Index {
           .width(20)
           .height(20)
           .objectFit(ImageFit.Contain)
-          .fillColor(this.currentTab === index ? Theme.ACCENT : Theme.TEXT_FAINT)
+          // 未选中也要看得清：原来用 TEXT_FAINT(#6C6C78) 在深底上几乎糊成一团，
+          // 提到接近白的灰（选中才用紫色）
+          .fillColor(this.currentTab === index ? Theme.ACCENT : Theme.TAB_IDLE)
         Text(label)
           .fontSize(9)
-          .fontColor(this.currentTab === index ? Theme.TEXT : Theme.TEXT_FAINT)
+          .fontColor(this.currentTab === index ? Theme.TEXT : Theme.TAB_IDLE)
       }
       .width(56)
       .height(44)

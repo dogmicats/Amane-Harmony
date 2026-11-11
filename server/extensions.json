@@ -43,6 +43,27 @@
       "scope": "public",
       "entry": "ext/trailers/server_ext.py",
       "enabled": true
+    },
+    {
+      "id": "collections",
+      "title": "??????????????????",
+      "scope": "public",
+      "entry": "ext/collections/server_ext.py",
+      "enabled": true
+    },
+    {
+      "id": "ratings",
+      "title": "?????1?5 ?????????",
+      "scope": "public",
+      "entry": "ext/ratings/server_ext.py",
+      "enabled": true
+    },
+    {
+      "id": "watch_later",
+      "title": "稍后再看",
+      "scope": "public",
+      "entry": "ext/watch_later/server_ext.py",
+      "enabled": true
     }
   ]
 }

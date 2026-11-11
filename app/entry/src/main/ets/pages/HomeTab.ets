@@ -1,6 +1,6 @@
 import { router } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { httpGet } from '../common/Http';
+import { httpGet, httpGetCached, cachedBody } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { HomeData, HomeRow, MediaItem, BrowseParams, DetailParams, PlayerParams } from '../common/Types';
@@ -39,14 +39,30 @@ export struct HomeTab {
       return;
     }
     this.error = '';
+    const url: string = `${Store.I.user}/api/user/home`;
+    // 先用缓存把首页画出来（哪怕已过期）：来回切 tab 不用每次都看骨架屏
+    if (this.home.rows.length === 0 && this.home.hero.length === 0) {
+      const stale: string | undefined = cachedBody(url);
+      if (stale !== undefined) {
+        try {
+          this.home = safeHome(JSON.parse(stale) as HomeData);
+          this.loading = false;
+        } catch (err) {
+          console.info('[amane] home cache parse failed');
+        }
+      }
+    }
     try {
-      const text: string = await httpGet(`${Store.I.user}/api/user/home`, Store.I.token);
+      // 5 分钟内重复进入直接读缓存，不发请求
+      const text: string = await httpGetCached(url, Store.I.token, 300000);
       this.home = safeHome(JSON.parse(text) as HomeData);
       this.loading = false;
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] home: ${e.code} ${e.message}`);
-      this.error = '首页加载失败，下拉重试';
+      if (this.home.rows.length === 0) {
+        this.error = '首页加载失败，下拉重试';
+      }
       this.loading = false;
     }
   }
@@ -57,10 +73,8 @@ export struct HomeTab {
   }
 
   private openPlayer(item: MediaItem): void {
-    const params: PlayerParams = {
-      id: item.id, number: item.number, title: item.title, position: item.position
-    };
-    router.pushUrl({ url: 'pages/PlayerPage', params: params });
+    const params: DetailParams = { id: item.id, autoplay: true, position: item.position };
+    router.pushUrl({ url: 'pages/DetailPage', params: params });
   }
 
   private openLibrary(id: number, title: string): void {

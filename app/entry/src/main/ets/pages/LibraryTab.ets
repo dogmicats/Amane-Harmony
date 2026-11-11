@@ -2,7 +2,7 @@ import { router } from '@kit.ArkUI';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { LibraryInfo } from '../common/Types';
-import { BrowseGrid } from '../view/BrowseGrid';
+import { BrowseGrid, TAB_SAFE } from '../view/BrowseGrid';
 
 /** 媒体库 Tab：顶部库切换 + 浏览网格（排序/筛选在 BrowseGrid 里）。 */
 @Component
@@ -74,7 +74,11 @@ export struct LibraryTab {
       .width('100%')
       .height(44)
 
-      BrowseGrid({ libraryId: this.activeId, refreshKey: this.refreshKey })
+      BrowseGrid({
+        libraryId: this.activeId,
+        refreshKey: this.refreshKey,
+        tabInset: TAB_SAFE
+      })
         .layoutWeight(1)
     }
     .width('100%')

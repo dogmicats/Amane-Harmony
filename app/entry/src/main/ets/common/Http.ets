@@ -1,5 +1,6 @@
 import { http } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { cachePut, cacheRead, cacheReadStale } from './PageCache';
 
 /** 一次 HTTP 调用的结果。服务端约定是 JSON，失败时抛 HttpError。 */
 export class HttpError extends Error {
@@ -51,6 +52,31 @@ export async function httpGet(url: string, token: string): Promise<string> {
   return call(url, http.RequestMethod.GET, token, '');
 }
 
+/**
+ * 带页面缓存的 GET（用户第 9 条）。
+ *
+ * 命中未过期缓存就直接返回，**不发请求**——列表页/详情页第二次进来时
+ * 第一帧就有内容，不会先转圈再等一次网络。缓存未命中或已过期才走网络，
+ * 回来顺手落缓存（内存 + 磁盘，退出 App 再进来还在）。
+ *
+ * 写操作（POST/PUT/DELETE）永远不走这里：它们会改数据，缓存必须失效。
+ */
+export async function httpGetCached(url: string, token: string,
+  ttlMs: number = 600000): Promise<string> {
+  const hit: string | undefined = cacheRead(url);
+  if (hit !== undefined) {
+    return hit;
+  }
+  const text: string = await httpGet(url, token);
+  cachePut(url, text, ttlMs);
+  return text;
+}
+
+/** 缓存里有没有（不看是否过期）：页面首屏可以先拿它渲染。 */
+export function cachedBody(url: string): string | undefined {
+  return cacheReadStale(url);
+}
+
 export async function httpPost(url: string, token: string, body: string): Promise<string> {
   return call(url, http.RequestMethod.POST, token, body);
 }
@@ -61,6 +87,42 @@ export async function httpPut(url: string, token: string, body: string): Promise
 
 export async function httpDelete(url: string, token: string): Promise<string> {
   return call(url, http.RequestMethod.DELETE, token, '');
+}
+
+/**
+ * 取二进制（图片）：截帧「存到手机」要把它落到沙箱。
+ *
+ * 不走 call()：那边统一 `expectDataType: STRING`，二进制会被转成乱码字符串。
+ * 读取超时给得比 JSON 宽（大图 + 网盘源可能慢）。
+ */
+export async function httpGetBytes(url: string, token: string): Promise<ArrayBuffer> {
+  const request = http.createHttp();
+  try {
+    const header: Record<string, string> = {};
+    if (token.length > 0) {
+      header['Authorization'] = `Bearer ${token}`;
+    }
+    const response: http.HttpResponse = await request.request(url, {
+      method: http.RequestMethod.GET,
+      header: header,
+      connectTimeout: 8000,
+      readTimeout: 60000,
+      usingCache: false,
+      expectDataType: http.HttpDataType.ARRAY_BUFFER
+    });
+    if (response.responseCode >= 400) {
+      throw new HttpError(response.responseCode, `HTTP ${response.responseCode}`);
+    }
+    return response.result as ArrayBuffer;
+  } catch (error) {
+    if (error instanceof HttpError) {
+      throw error;
+    }
+    const err = error as BusinessError;
+    throw new HttpError(-1, `${err.code}: ${err.message}`);
+  } finally {
+    request.destroy();
+  }
 }
 
 /** 探活：拿到任意 HTTP 响应就算可达（401 也算）。 */

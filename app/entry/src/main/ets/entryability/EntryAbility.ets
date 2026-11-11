@@ -2,6 +2,7 @@ import { AbilityConstant, ConfigurationConstant, UIAbility, Want, errorManager }
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { fileIo as fs } from '@kit.CoreFileKit';
+import { cacheInit } from '../common/PageCache';
 
 const DOMAIN: number = 0x0000;
 const TAG: string = 'Amane';
@@ -13,6 +14,9 @@ export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     this.crashLog = `${this.context.filesDir}/crash.log`;
     this.installCrashGuard();
+
+    // 页面级缓存（用户第 9 条）：越早初始化越好，第一个页面就能读到上次的数据
+    cacheInit(this.context);
 
     try {
       // 影院界面只在深色下成立，跟系统设置解耦
@@ -74,6 +78,11 @@ export default class EntryAbility extends UIAbility {
     try {
       const mainWindow: window.Window = windowStage.getMainWindowSync();
       mainWindow.setWindowBackgroundColor('#0B0B0F');
+      // 重力感应全局生效（用户第 4 条）：整个 App 都跟着手机转，
+      // 播放页只是把某些形态额外锁一下（见 PlayerView.applyWindowMode）。
+      // 以前只有播放页会改方向，退出播放后窗口停在横屏、主页又是竖屏布局，
+      // 就成了「横着的主页 + 怎么转都不回来」。
+      mainWindow.setPreferredOrientation(window.Orientation.AUTO_ROTATION);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, '%{public}s', 'set window background failed');
     }

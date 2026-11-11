@@ -3,6 +3,7 @@ import { Store } from '../../common/Store';
 import { StillsWall } from '../../view/StillsWall';
 import { StillFeed, openStill } from './GachaFeed';
 import { GachaStill } from './GachaTypes';
+import { GachaSwitch } from './GachaSwitch';
 
 /**
  * 抽卡墙：列表页「抽卡模式」的全部内容（标题条 + 瀑布流 + 换一批）。
@@ -31,6 +32,9 @@ export struct GachaWall {
    * 条件变了（字符串变了）就自动重抽。
    */
   @Prop @Watch('onScopeChange') extra: string = '';
+  /** 抽卡开关：由页面持有，放在标题行右端 —— 开和关都在同一侧。 */
+  @Prop gachaOn: boolean = true;
+  onToggleGacha: (v: boolean) => void = (v: boolean) => {};
 
   @State stills: GachaStill[] = [];
   @State urls: string[] = [];
@@ -140,6 +144,14 @@ export struct GachaWall {
         Text(`${this.stills.length} 张`)
           .fontSize(10)
           .fontColor(Theme.TEXT_FAINT)
+      }
+      if (this.onToggleGacha !== undefined) {
+        GachaSwitch({
+          on: this.gachaOn,
+          onToggle: (v: boolean) => {
+            this.onToggleGacha(v);
+          }
+        })
       }
     }
     .width('100%')

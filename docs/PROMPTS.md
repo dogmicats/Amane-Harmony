@@ -41,7 +41,7 @@
 装 App 与部署旁挂服务是两件事：先按上面几节把服务起好，才轮到 [BUILD_HAP.md](BUILD_HAP.md)。不想自己看安装文档时，可以把这一句发给 AI 助手：
 
 ```
-请按 https://github.com/dogmicats/Amane-Harmony/blob/main/docs/BUILD_HAP.md 与 AGENTS.md，引导我把 Releases 里的 Amane-2.4.0-unsigned.hap 签名并安装到我的鸿蒙手机；先问我需要的信息，别猜配置、别代填账号密码，涉及签名和安装的操作先向我确认。
+请按 https://github.com/dogmicats/Amane-Harmony/blob/main/docs/BUILD_HAP.md 与 AGENTS.md，引导我把 Releases 里的 Amane-2.5.0-unsigned.hap 签名并安装到我的鸿蒙手机；先问我需要的信息，别猜配置、别代填账号密码，涉及签名和安装的操作先向我确认。
 ```
 
 这一条**不走 `agentctl.py`**：HAP 安装需要在手机上点「信任此设备」、登录华为账号，agent 只能做环境检查、给可直接执行的命令、逐步引导，不能也不应代替用户输入账号密码或托管 UDID。签名与安装动作一律先向用户确认。

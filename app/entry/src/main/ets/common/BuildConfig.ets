@@ -6,8 +6,8 @@
  */
 export class BuildConfig {
   static readonly CHANNEL: string = 'public';
-  static readonly APP_VERSION: string = '2.4.0';
-  static readonly MIN_SERVER: string = '2.4.0';
+  static readonly APP_VERSION: string = '2.5.0';
+  static readonly MIN_SERVER: string = '2.5.0';
   static readonly DEFAULT_AMANE: string = '';
   static readonly DEFAULT_USER: string = '';
   static readonly DEFAULT_WAN: string = '';
@@ -20,6 +20,9 @@ export class BuildConfig {
   static readonly ENABLE_SUBTITLES: boolean = true;
   static readonly ENABLE_GACHA: boolean = true;
   static readonly ENABLE_HIGHLIGHTS: boolean = true;
+  static readonly ENABLE_COLLECTIONS: boolean = true;
+  static readonly ENABLE_RATINGS: boolean = true;
+  static readonly ENABLE_WATCHLATER: boolean = true;
   // 分类列表的多选操作条在公版关闭（私有能力不随包）
   static readonly ENABLE_FACET_MULTISELECT: boolean = false;
 }

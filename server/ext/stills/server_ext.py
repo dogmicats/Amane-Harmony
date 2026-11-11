@@ -45,6 +45,26 @@ MEASURE_BUDGET: float = 2.0
 # 候选片数上限：一次最多看这么多部片的剧照（每部取一张，剩下的轮转）。
 CANDIDATE_CAP: int = 96
 
+# ---- 喜爱的剧照（用户数据，落 user.db，不写上游） -------------------------- #
+# 一条记录 = 「喜欢这部片里的这张图」。key 用 (影片 id, 图片地址)：
+# 地址就是客户端拿到的 /img?b=…&t=…（IMAGE_TOKEN 是持久化密钥，重启不变），
+# 所以同一张图在不同页面点两次不会重复，取消也按同一对键删。
+# ratio 是喜欢那一刻的宽高比，存下来后瀑布流不用再逐张量图。
+DDL = """
+CREATE TABLE IF NOT EXISTS still_likes (
+    metadata_id INTEGER NOT NULL,
+    url         TEXT NOT NULL,
+    ratio       REAL NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (metadata_id, url)
+);
+CREATE INDEX IF NOT EXISTS idx_still_likes_created ON still_likes(created_at DESC);
+"""
+
+# 图片地址一律走核心代理（/img?b=…）：只收这种形态，别把本表当任意 URL 仓库。
+_IMG_PREFIX = "/img?"
+MAX_URL_LEN = 2048
+
 
 def _one(query: dict, key: str, default: str = "") -> str:
     return (query.get(key) or [default])[0]
@@ -301,14 +321,135 @@ def stills(handler, query, *_):
     })
 
 
+# --------------------------------------------------------------------- hooks
+def on_item_extra(mid: int) -> dict:
+    """详情页补 `still_likes`：这部片里已经被喜欢的剧照地址。
+
+    只回地址数组，客户端拿它和 `stills` 逐个比对，决定心形实心还是空心 ——
+    不另开一次请求，也不把「第几张」这种易漂的序号写进库里。
+    """
+    try:
+        with A.user_db() as conn:
+            rows = conn.execute(
+                "SELECT url FROM still_likes WHERE metadata_id = ? ORDER BY created_at DESC",
+                (int(mid),),
+            ).fetchall()
+        return {"still_likes": [_text(r["url"]) for r in rows if _text(r["url"])]}
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"ERROR stills item_extra id={mid}: {exc}")
+        return {"still_likes": []}
+
+
+# --------------------------------------------------------------------- routes
+def like_still(handler, query, *_):
+    """POST /api/user/stills/like —— 喜欢 / 取消喜欢一张剧照。
+
+    body: {id: 影片 id, url: 图片地址, ratio?: 宽高比, liked?: true|false}
+    liked 缺省 true；传 false 就是取消。同一张图反复点只更新 ratio，不重复记。
+    """
+    body = handler._body() or {}
+    try:
+        mid = int(body.get("id") or 0)
+    except (TypeError, ValueError):
+        return handler._error(400, "id 必须是整数")
+    if mid <= 0:
+        return handler._error(400, "id 必填")
+    url = _text(body.get("url")).strip()
+    if not url.startswith(_IMG_PREFIX) or len(url) > MAX_URL_LEN:
+        return handler._error(400, "url 必须是本服务的图片代理地址")
+    try:
+        ratio = float(body.get("ratio") or 0)
+    except (TypeError, ValueError):
+        ratio = 0.0
+    if not (0.1 <= ratio <= 10):
+        ratio = 0.0
+    raw_liked = body.get("liked", True)
+    liked = not (raw_liked is False
+                 or str(raw_liked).strip().lower() in ("0", "false", "no"))
+    try:
+        with A.user_db() as conn:
+            if liked:
+                conn.execute(
+                    "INSERT INTO still_likes(metadata_id, url, ratio, created_at) "
+                    "VALUES(?, ?, ?, ?) "
+                    "ON CONFLICT(metadata_id, url) DO UPDATE SET ratio=excluded.ratio",
+                    (mid, url, ratio, A.now_iso()),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM still_likes WHERE metadata_id = ? AND url = ?", (mid, url))
+            total = int(conn.execute(
+                "SELECT COUNT(*) AS c FROM still_likes").fetchone()["c"])
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"ERROR stills like id={mid} liked={liked}: {exc}")
+        return handler._error(500, f"保存失败: {exc}")
+    handler._json({"ok": True, "liked": liked, "total": total})
+
+
+def liked_stills(handler, query, *_):
+    """GET /api/user/stills/liked —— 所有被喜欢的剧照。
+
+    `order` 默认 `recent`（喜欢时间倒序）；传 `random` 则每次重新打乱 ——
+    收藏页的瀑布流用随机，目的是「翻到哪张看哪张」，而不是反复看最近的三张。
+    分页在随机模式下没有稳定顺序，客户端一次取满即可。
+    """
+    limit = _int(_one(query, "limit", "200"), 200, 1, 200)
+    offset = _int(_one(query, "offset", "0"), 0, 0, 10 ** 9)
+    order = _one(query, "order", "recent").strip().lower()
+    order_sql = "RANDOM()" if order == "random" else "created_at DESC, rowid DESC"
+    try:
+        with A.user_db() as conn:
+            total = int(conn.execute(
+                "SELECT COUNT(*) AS c FROM still_likes").fetchone()["c"])
+            rows = conn.execute(
+                "SELECT metadata_id, url, ratio, created_at FROM still_likes "
+                f"ORDER BY {order_sql} LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"ERROR stills liked: {exc}")
+        return handler._error(500, f"读取喜爱的剧照失败: {exc}")
+
+    meta: dict = {}
+    ids = sorted({int(r["metadata_id"]) for r in rows})
+    if ids:
+        ph = ",".join("?" * len(ids))
+        try:
+            with A.amane_db() as conn:
+                for r in conn.execute(
+                        f"SELECT id, number, title FROM metadata WHERE id IN ({ph})", ids):
+                    meta[int(r["id"])] = (_text(r["number"]), _text(r["title"]))
+        except Exception as exc:  # noqa: BLE001
+            A.log(f"WARN stills liked 补片名失败: {exc}")
+
+    items = []
+    for r in rows:
+        mid = int(r["metadata_id"])
+        number, title = meta.get(mid, ("", ""))
+        items.append({
+            "id": mid,
+            "number": number,
+            "title": title,
+            "url": _text(r["url"]),
+            "ratio": round(float(r["ratio"] or 0), 3),
+            "created_at": _text(r["created_at"]),
+        })
+    handler._json({"items": items, "total": total, "offset": offset,
+                   "limit": limit, "order": order})
+
+
 ROUTES = [
     ("GET", r"/api/user/stills", stills),
+    ("GET", r"/api/user/stills/liked", liked_stills),
+    ("POST", r"/api/user/stills/like", like_still),
 ]
 
 
 def install(api) -> dict:
     global A
     A = api
+    api.add_ddl(DDL)
+    api.hook("item_extra", on_item_extra)
     for method, pattern, fn in ROUTES:
         api.route(method, pattern)(fn)
     return {"id": "stills", "routes": len(ROUTES), "scopes": sorted(SCOPES)}

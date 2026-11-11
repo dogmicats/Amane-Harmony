@@ -9,6 +9,11 @@ import {
   SuggestTotals, emptySuggestTotals
 } from '../common/Types';
 import { safeItems, safeSearchHistory, safeSuggestResult } from '../common/Safe';
+import {
+  AGE_BANDS, MYRATING_OPTIONS, PREF_AGE_GENDER, SORT_OPTIONS, ChipOption, SortOption,
+  ageBandParams, ageGenderParam, sortLabelWith
+} from '../common/BrowseOptions';
+import { CollectionInfo, fetchCollections } from '../ext/collections/CollectionTypes';
 import { PosterCard } from '../view/PosterCard';
 
 /** 联想 / 搜索可选的类型，顺序即 chip 顺序、也是结果分组顺序。 */
@@ -120,6 +125,15 @@ struct SearchPage {
   @State hist: SearchHistoryItem[] = [];
   /** 「清空」要点两次：第一次把文案换成确认词，3 秒内没再点就恢复。 */
   @State confirmClear: boolean = false;
+  /** 结果条件：出演年龄分桶 / 我的评分 / 收藏夹 + 排序，key 与媒体库共用一份。 */
+  @State fAge: string = '';
+  /** 出演年龄看哪个性别：female（默认）/ male，与媒体库、详情页共用一份偏好。 */
+  @State fAgeGender: string = 'female';
+  @State fMyRating: string = '';
+  @State fCollection: string = '';
+  @State collectionChips: ChipOption[] = [];
+  @State sort: string = 'recent';
+  @State order: string = 'desc';
   private seq: number = 0;
   private sugSeq: number = 0;
   private sugTimer: number = -1;
@@ -127,6 +141,8 @@ struct SearchPage {
 
   aboutToAppear(): void {
     this.loadHistory();
+    this.loadCollections();
+    this.fAgeGender = Store.I.prefString(PREF_AGE_GENDER, 'female');
     const saved: string = Store.I.prefString(KEY_SCOPE, '');
     if (saved.length === 0) {
       return;
@@ -341,6 +357,35 @@ struct SearchPage {
     }
   }
 
+  /** 收藏夹筛选项来自 collections 扩展；关掉扩展时整行不显示，条件也别带出去。 */
+  private async loadCollections(): Promise<void> {
+    if (!BuildConfig.ENABLE_COLLECTIONS) {
+      return;
+    }
+    try {
+      const lists: CollectionInfo[] = await fetchCollections();
+      const opts: ChipOption[] = [
+        { key: '', label: '全部' },
+        { key: 'none', label: '未归类' }
+      ];
+      for (let i = 0; i < lists.length; i++) {
+        opts.push({ key: `${lists[i].id}`, label: lists[i].name });
+      }
+      this.collectionChips = opts;
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error(`[amane] search collections: ${e.code} ${e.message}`);
+    }
+  }
+
+  /** 条件改了：已经在结果页就立刻按新条件重搜；还在联想态就留到下次点「搜索」。 */
+  private rerun(): void {
+    const q: string = this.keyword.trim();
+    if (this.searched && q.length > 0) {
+      this.search(q);
+    }
+  }
+
   /**
    * 完整结果：勾了影片就去 browse 拉网格；勾了实体再单独拉一遍联想接口
    * （那次只带实体类型，per 放宽到 8，够结果页顶部横条用）。
@@ -359,7 +404,25 @@ struct SearchPage {
     const kinds: string[] = this.entKinds();
     try {
       if (this.filmOn()) {
-        const url: string = `${Store.I.user}/api/user/browse?q=${encodeURIComponent(query)}&limit=60`;
+        const parts: string[] = [
+          `q=${encodeURIComponent(query)}`, `limit=60`,
+          `sort=${this.sort}`, `order=${this.order}`
+        ];
+        const ageParts: string[] = ageBandParams(this.fAge);
+        for (let i = 0; i < ageParts.length; i++) {
+          parts.push(ageParts[i]);
+        }
+        // 性别只在用到年龄时带上（区间筛选或按年龄排序）。
+        if (this.fAge.length > 0 || this.sort === 'cast_age') {
+          parts.push(ageGenderParam(this.fAgeGender));
+        }
+        if (this.fMyRating.length > 0) {
+          parts.push(`myrating=${this.fMyRating}`);
+        }
+        if (this.fCollection.length > 0) {
+          parts.push(`collection=${this.fCollection}`);
+        }
+        const url: string = `${Store.I.user}/api/user/browse?${parts.join('&')}`;
         const raw: string = await httpGet(url, Store.I.token);
         if (mine !== this.seq) {
           return;
@@ -599,6 +662,155 @@ struct SearchPage {
     }
     .width('100%')
     .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 8 })
+  }
+
+  /**
+   * 结果条件条：出演年龄分桶 + 排序。常驻而不藏进面板 —— 搜索页本就是
+   * 「给定关键词再看范围」，条件看得见才不会以为筛了没生效。
+   * key 全部取自 common/BrowseOptions，和媒体库筛选 / 详情页点岁数是同一套；
+   * 年龄前面的「♀ 女优 / ♂ 男优」是性别开关，默认女优。
+   */
+  @Builder
+  FilterBar() {
+    Column({ space: 6 }) {
+      Row({ space: 6 }) {
+        // 点它换性别：这个功能是给女演员做的，默认女优；符号 + 文字一起给，
+        // 免得「女优」被看成年龄档位。与详情页徽章、媒体库筛选共用同一份偏好。
+        Text(this.fAgeGender === 'male' ? '♂ 男优' : '♀ 女优')
+          .fontSize(10)
+          .fontColor(Theme.TEXT_DIM)
+          .width(46)
+          .height(24)
+          .textAlign(TextAlign.Center)
+          .backgroundColor(Theme.CARD)
+          .borderRadius(9)
+          .onClick(() => {
+            this.fAgeGender = this.fAgeGender === 'male' ? 'female' : 'male';
+            Store.I.prefSetString(PREF_AGE_GENDER, this.fAgeGender);
+            this.rerun();
+          })
+        Scroll() {
+          Row({ space: 6 }) {
+            ForEach(AGE_BANDS, (opt: ChipOption) => {
+              Text(opt.label)
+                .fontSize(11)
+                .fontColor(this.fAge === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
+                .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+                .backgroundColor(this.fAge === opt.key ? Theme.ACCENT : Theme.CARD)
+                .borderRadius(11)
+                .onClick(() => {
+                  this.fAge = opt.key;
+                  this.rerun();
+                })
+            }, (opt: ChipOption) => `sa-${opt.key}-${this.fAge === opt.key ? 1 : 0}`)
+          }
+        }
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
+        .height(30)
+        .layoutWeight(1)
+        .align(Alignment.Start)
+      }
+      .width('100%')
+
+      if (BuildConfig.ENABLE_RATINGS) {
+        Row({ space: 6 }) {
+          Text('评分')
+            .fontSize(10)
+            .fontColor(Theme.TEXT_FAINT)
+            .width(28)
+          Scroll() {
+            Row({ space: 6 }) {
+              ForEach(MYRATING_OPTIONS, (opt: ChipOption) => {
+                Text(opt.label)
+                  .fontSize(11)
+                  .fontColor(this.fMyRating === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
+                  .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+                  .backgroundColor(this.fMyRating === opt.key ? Theme.ACCENT : Theme.CARD)
+                  .borderRadius(11)
+                  .onClick(() => {
+                    this.fMyRating = opt.key;
+                    this.rerun();
+                  })
+              }, (opt: ChipOption) => `sr-${opt.key}-${this.fMyRating === opt.key ? 1 : 0}`)
+            }
+          }
+          .scrollable(ScrollDirection.Horizontal)
+          .scrollBar(BarState.Off)
+          .height(30)
+          .layoutWeight(1)
+          .align(Alignment.Start)
+        }
+        .width('100%')
+      }
+
+      if (BuildConfig.ENABLE_COLLECTIONS && this.collectionChips.length > 0) {
+        Row({ space: 6 }) {
+          Text('清单')
+            .fontSize(10)
+            .fontColor(Theme.TEXT_FAINT)
+            .width(28)
+          Scroll() {
+            Row({ space: 6 }) {
+              ForEach(this.collectionChips, (opt: ChipOption) => {
+                Text(opt.label)
+                  .fontSize(11)
+                  .fontColor(this.fCollection === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
+                  .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+                  .backgroundColor(this.fCollection === opt.key ? Theme.ACCENT : Theme.CARD)
+                  .borderRadius(11)
+                  .onClick(() => {
+                    this.fCollection = opt.key;
+                    this.rerun();
+                  })
+              }, (opt: ChipOption) => `sc-${opt.key}-${this.fCollection === opt.key ? 1 : 0}`)
+            }
+          }
+          .scrollable(ScrollDirection.Horizontal)
+          .scrollBar(BarState.Off)
+          .height(30)
+          .layoutWeight(1)
+          .align(Alignment.Start)
+        }
+        .width('100%')
+      }
+
+      Row({ space: 6 }) {
+        Text('排序')
+          .fontSize(10)
+          .fontColor(Theme.TEXT_FAINT)
+          .width(28)
+        Scroll() {
+          Row({ space: 6 }) {
+            ForEach(SORT_OPTIONS, (opt: SortOption) => {
+              Text(`${sortLabelWith(opt.key, this.fAgeGender)}${this.sort === opt.key && opt.key !== 'random' ? (this.order === 'asc' ? ' ↑' : ' ↓') : ''}`)
+                .fontSize(11)
+                .fontColor(this.sort === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
+                .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+                .backgroundColor(this.sort === opt.key ? Theme.ACCENT : Theme.CARD)
+                .borderRadius(11)
+                .onClick(() => {
+                  if (this.sort === opt.key && opt.key !== 'random') {
+                    this.order = this.order === 'asc' ? 'desc' : 'asc';
+                  } else {
+                    this.sort = opt.key;
+                    this.order = opt.def;
+                  }
+                  this.rerun();
+                })
+            }, (opt: SortOption) => `ss-${opt.key}-${this.sort === opt.key ? this.order : ''}`)
+          }
+        }
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
+        .height(30)
+        .layoutWeight(1)
+        .align(Alignment.Start)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
   }
 
   /** 一行三段的通用行：左缩略图 / 中两行文字 / 右箭头。影片与实体共用。 */
@@ -998,6 +1210,8 @@ struct SearchPage {
 
       // 搜索前先定范围：多选，勾什么搜什么
       this.ScopeBar()
+      // 结果条件：出演年龄 + 排序，与媒体库同一套 key
+      this.FilterBar()
 
       if (this.legacy) {
         Column({ space: 3 }) {

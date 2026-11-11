@@ -2,6 +2,7 @@ import { MediaItem } from '../common/Types';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { scoreText } from '../common/Util';
+import { rateLabel, rateColor } from '../ext/ratings/RatingStars';
 import { MarkBadges } from './MarkBadges';
 
 /**
@@ -29,6 +30,12 @@ export struct PosterCard {
       return [];
     }
     return this.item.marks;
+  }
+
+  /** 我打的分（0 = 没打过）。老服务端不返回该字段，safeItem 已兜成 0。 */
+  private myRating(): number {
+    const v: number = this.item.my_rating === undefined ? 0 : this.item.my_rating;
+    return v > 0 ? Math.min(5, Math.trunc(v)) : 0;
   }
 
   private ratio(): number {
@@ -74,23 +81,39 @@ export struct PosterCard {
         .borderRadius(Theme.RADIUS)
         .clip(true)
 
-        // 右上角一行：先标记、后评分。
-        // 左下/左上都会被海报裁切或圆角吃掉，右上角是唯一稳妥的位置。
-        if (scoreText(this.item.score).length > 0 || this.itemMarks().length > 0) {
-          Row({ space: 3 }) {
-            if (this.itemMarks().length > 0) {
-              MarkBadges({ marks: this.itemMarks(), max: 2, badgeSize: 8, fill: 'dark' })
+        // 右上角竖排两行：上行是标记 + 刮削评分，下行是「我的评价」。
+        // 左下单放不下（会被圆角吃掉），右上角是唯一稳妥的位置。
+        if (scoreText(this.item.score).length > 0 || this.itemMarks().length > 0 ||
+          this.myRating() > 0) {
+          Column({ space: 3 }) {
+            if (scoreText(this.item.score).length > 0 || this.itemMarks().length > 0) {
+              Row({ space: 3 }) {
+                if (this.itemMarks().length > 0) {
+                  MarkBadges({ marks: this.itemMarks(), max: 2, badgeSize: 8, fill: 'dark' })
+                }
+                if (scoreText(this.item.score).length > 0) {
+                  Text(scoreText(this.item.score))
+                    .fontSize(10)
+                    .fontColor(Theme.GOLD)
+                    .fontWeight(FontWeight.Medium)
+                    .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+                    .backgroundColor('#B3000000')
+                    .borderRadius(6)
+                }
+              }
             }
-            if (scoreText(this.item.score).length > 0) {
-              Text(scoreText(this.item.score))
-                .fontSize(10)
-                .fontColor(Theme.GOLD)
+            // 我的评价：刮削评分下面那一行，字用星级配色，一眼能分出「谁给的」
+            if (this.myRating() > 0) {
+              Text(rateLabel(this.myRating()))
+                .fontSize(9)
+                .fontColor(rateColor(this.myRating()))
                 .fontWeight(FontWeight.Medium)
-                .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+                .padding({ left: 5, right: 5, top: 1, bottom: 1 })
                 .backgroundColor('#B3000000')
                 .borderRadius(6)
             }
           }
+          .alignItems(HorizontalAlign.End)
           .margin(6)
         }
 

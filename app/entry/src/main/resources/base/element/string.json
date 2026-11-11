@@ -11,6 +11,10 @@
     {
       "name": "EntryAbility_label",
       "value": "Amane"
+    },
+    {
+      "name": "permission_gravity_reason",
+      "value": "判断你是否转动了手机，好转交横竖屏控制"
     }
   ]
 }

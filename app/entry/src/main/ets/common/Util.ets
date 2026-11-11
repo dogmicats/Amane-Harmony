@@ -78,12 +78,14 @@ export function scoreText(score: number): string {
  */
 export function posterItem(
   id: number, number: string, title: string, release: string, poster: string, score: number,
-  marks: string[] = []
+  marks: string[] = [], myRating: number = 0
 ): MediaItem {
   const item: MediaItem = {
     id: id, number: number, title: title, plot: '', actors: [], tags: [], studio: '', series: '',
     release: release, runtime: 0, content_type: '', score: score, poster: poster, fanart: '',
-    updated_at: '', position: 0, duration: 0, marks: marks
+    updated_at: '', position: 0, duration: 0, marks: marks,
+    // 重建字段表最容易漏的就是后加字段：漏了海报上就不会出现「我的评价」
+    my_rating: myRating
   };
   return item;
 }

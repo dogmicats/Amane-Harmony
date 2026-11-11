@@ -39,6 +39,25 @@ export interface GachaScope {
   label: string;
 }
 
+/**
+ * 一张「喜爱」过的剧照（GET /api/user/stills/liked）。
+ * 比 GachaStill 多 title、少 candidates：这里按喜欢时间倒序，不随机。
+ */
+export interface LikedStill {
+  /** 所属影片 id —— 片名查不到时也还能用。 */
+  id: number;
+  number: string;
+  title: string;
+  url: string;
+  /** 宽高比（喜欢那一刻记下的），瀑布流首帧就能摆对。 */
+  ratio: number;
+}
+
+export interface LikedStillPage {
+  items: LikedStill[];
+  total: number;
+}
+
 function s(v: string): string {
   return v === undefined || v === null ? '' : v;
 }
@@ -77,4 +96,41 @@ export function safeGachaPage(raw: GachaPage): GachaPage {
 /** 空范围（页面还没拿到参数时用，避免 undefined 判断散在各处）。 */
 export function emptyGachaScope(): GachaScope {
   return { scope: 'all', id: 0, label: '' };
+}
+
+/** 喜爱的剧照：丢掉没有地址的脏行，ratio 非法就归 0（由客户端实测补）。 */
+export function safeLikedStills(raw: LikedStillPage): LikedStill[] {
+  const out: LikedStill[] = [];
+  if (raw === undefined || raw === null) {
+    return out;
+  }
+  const src: LikedStill[] = Array.isArray(raw.items) ? raw.items : [];
+  for (let i = 0; i < src.length; i++) {
+    const it: LikedStill = src[i];
+    if (it === undefined || it === null) {
+      continue;
+    }
+    const url: string = s(it.url);
+    if (url.length === 0) {
+      continue;
+    }
+    const r: number = n(it.ratio);
+    out.push({
+      id: Math.trunc(n(it.id)),
+      number: s(it.number),
+      title: s(it.title),
+      url: url,
+      ratio: isFinite(r) && r > 0 ? r : 0
+    });
+  }
+  return out;
+}
+
+/** 总数：老服务端没给就按当前这批算。 */
+export function likedTotal(raw: LikedStillPage, fallback: number): number {
+  if (raw === undefined || raw === null) {
+    return fallback;
+  }
+  const t: number = Math.trunc(n(raw.total));
+  return t > 0 ? t : fallback;
 }

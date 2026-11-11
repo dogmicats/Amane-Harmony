@@ -3,77 +3,23 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
+import { ChipOption, SortOption } from '../../common/BrowseOptions';
 import { ActorItem, ActorList, ActorParams, safeActorList } from './ActorTypes';
+import { KeywordBox } from '../../view/KeywordBox';
+import { BottomSheet, ChipGroup, SortSheet, ToolPill } from '../../view/ListSheets';
 
 const PAGE_SIZE: number = 30;
-
-interface Choice {
-  key: string;
-  label: string;
-}
-
-/**
- * 单选 chip 行。必须是子组件：@Builder 按值传参不会刷新，选中态会停在初始值
- * （view/BrowseGrid.ets 里踩过同一个坑）。
- */
-@Component
-struct ActorFilterChips {
-  options: Choice[] = [];
-  @Prop current: string = '';
-  onPick: (key: string) => void = () => {};
-
-  build() {
-    Row({ space: 7 }) {
-      ForEach(this.options, (opt: Choice) => {
-        Text(opt.label)
-          .fontSize(11)
-          .fontColor(this.current === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
-          .padding({ left: 11, right: 11, top: 5, bottom: 5 })
-          .backgroundColor(this.current === opt.key ? Theme.ACCENT : Theme.CARD)
-          .borderRadius(12)
-          .onClick(() => {
-            this.onPick(opt.key);
-          })
-      }, (opt: Choice) => `fchip-${opt.key}`)
-    }
-  }
-}
-
-/** 自动换行的单选 chip 组：筛选面板里选项多，不能横向滚出屏幕。 */
-@Component
-struct ActorWrapChips {
-  options: Choice[] = [];
-  @Prop current: string = '';
-  onPick: (key: string) => void = () => {};
-
-  build() {
-    Flex({ wrap: FlexWrap.Wrap }) {
-      ForEach(this.options, (opt: Choice) => {
-        Text(opt.label)
-          .fontSize(11)
-          .fontColor(this.current === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-          .backgroundColor(this.current === opt.key ? Theme.ACCENT : Theme.CARD_HI)
-          .borderRadius(11)
-          .margin({ right: 6, bottom: 6 })
-          .onClick(() => {
-            this.onPick(opt.key);
-          })
-      }, (opt: Choice) => `wchip-${opt.key}`)
-    }
-    .width('100%')
-  }
-}
 
 /**
  * 公开扩展 actors：底部「演员」Tab。
  *
- * 排序：作品数 / 名字 / 生日 / 身高 / 胸围 / 腰围 / 臀围 / 罩杯 / 资料更新，
- * 方向由右侧独立的「↓ / ↑」开关控制，而不是靠「再点一次同一个 chip」这种隐式行为。
- * 只传上游 ActorBrowseParams 真实支持的字段，避免客户端排了个假序。
+ * 版式与媒体库对齐（2.4.6.24）：一行标题、一行搜索、一行工具条，
+ * 排序和筛选都收进底部抽屉。原来这里是「排序 chip 横滚 + 方向小球 + 性别/有头像/
+ * 有资料一行 + 内联筛选面板」四层，屏幕上半屏全是控件，一屏看不到几个演员。
  *
- * 筛选：性别 / 有头像 / 有资料是快筛；面板里是年龄、身高、罩杯、胸围、出生地，
- * 全部映射到上游的 *_min / *_max 区间参数，选中即生效，工具条显示生效条数。
+ * **筛选项没有增减**，只是换了入口：性别 / 有头像 / 有资料 / 年龄 / 身高 /
+ * 罩杯 / 胸围 / 出生地全部在「筛选」抽屉里，顺序也照旧。
+ * 排序方向不再靠「再点一次同一个 chip」，而是抽屉里当前行的 ↑/↓ 胶囊。
  */
 @Component
 export struct ActorsTab {
@@ -90,38 +36,47 @@ export struct ActorsTab {
   @State onlyPerson: boolean = false;
   // 默认只看女演员：这是绝大多数时候的意图，省一次点击
   @State gender: string = 'female';
+  @State showSort: boolean = false;
   @State showFilter: boolean = false;
   @State ageBand: string = '';
   @State heightBand: string = '';
   @State cupBand: string = '';
   @State bustBand: string = '';
   @State place: string = '';
-  private searchTimer: number = -1;
   private placeTimer: number = -1;
-  private sorts: Choice[] = [
-    { key: 'count', label: '作品数' },
-    { key: 'name', label: '名字' },
-    { key: 'birthday', label: '生日' },
-    { key: 'height', label: '身高' },
-    { key: 'bust', label: '胸围' },
-    { key: 'waist', label: '腰围' },
-    { key: 'hip', label: '臀围' },
-    { key: 'cup', label: '罩杯' },
-    { key: 'updated_at', label: '更新' }
+  private sorts: SortOption[] = [
+    { key: 'count', label: '作品数', def: 'desc' },
+    { key: 'name', label: '名字', def: 'asc' },
+    { key: 'birthday', label: '生日', def: 'desc' },
+    { key: 'height', label: '身高', def: 'desc' },
+    { key: 'bust', label: '胸围', def: 'desc' },
+    { key: 'waist', label: '腰围', def: 'desc' },
+    { key: 'hip', label: '臀围', def: 'desc' },
+    { key: 'cup', label: '罩杯', def: 'desc' },
+    { key: 'updated_at', label: '更新', def: 'desc' }
   ];
-  private genders: Choice[] = [
+  private genders: ChipOption[] = [
     { key: '', label: '全部' },
     { key: 'female', label: '女' },
     { key: 'male', label: '男' }
   ];
-  private ages: Choice[] = [
+  /** 头像是默认要求（默认只看有头像）；「不限」才把无头像的也放进来。 */
+  private images: ChipOption[] = [
+    { key: '', label: '不限' },
+    { key: '1', label: '只看有头像' }
+  ];
+  private persons: ChipOption[] = [
+    { key: '', label: '不限' },
+    { key: '1', label: '只看有资料' }
+  ];
+  private ages: ChipOption[] = [
     { key: '', label: '不限' },
     { key: '18-24', label: '18-24' },
     { key: '25-29', label: '25-29' },
     { key: '30-34', label: '30-34' },
     { key: '35+', label: '35+' }
   ];
-  private heights: Choice[] = [
+  private heights: ChipOption[] = [
     { key: '', label: '不限' },
     { key: '0-155', label: '≤155' },
     { key: '156-160', label: '156-160' },
@@ -129,13 +84,13 @@ export struct ActorsTab {
     { key: '166-170', label: '166-170' },
     { key: '171+', label: '171+' }
   ];
-  private cups: Choice[] = [
+  private cups: ChipOption[] = [
     { key: '', label: '不限' },
     { key: 'A-C', label: 'A-C' },
     { key: 'D-F', label: 'D-F' },
     { key: 'G+', label: 'G+' }
   ];
-  private busts: Choice[] = [
+  private busts: ChipOption[] = [
     { key: '', label: '不限' },
     { key: '0-84', label: '≤84' },
     { key: '85-89', label: '85-89' },
@@ -148,10 +103,6 @@ export struct ActorsTab {
   }
 
   aboutToDisappear(): void {
-    if (this.searchTimer >= 0) {
-      clearTimeout(this.searchTimer);
-      this.searchTimer = -1;
-    }
     if (this.placeTimer >= 0) {
       clearTimeout(this.placeTimer);
       this.placeTimer = -1;
@@ -203,9 +154,22 @@ export struct ActorsTab {
     return out;
   }
 
-  /** 生效的筛选条数（不含搜索框与性别这类快筛）。 */
+  /**
+   * 生效的筛选条数 = 偏离默认值的项数。
+   * 性别默认女、头像默认只看有头像，所以「改成全部 / 关掉有头像」才算一项，
+   * 否则工具条上永远挂着一个「筛选 2」，看着像是有条件没清掉。
+   */
   private filterCount(): number {
     let n: number = 0;
+    if (this.gender !== 'female') {
+      n++;
+    }
+    if (!this.onlyImage) {
+      n++;
+    }
+    if (this.onlyPerson) {
+      n++;
+    }
     if (this.ageBand.length > 0) {
       n++;
     }
@@ -312,19 +276,6 @@ export struct ActorsTab {
     });
   }
 
-  private onKeyword(value: string): void {
-    if (this.searchTimer >= 0) {
-      clearTimeout(this.searchTimer);
-      this.searchTimer = -1;
-    }
-    const kw: string = value;
-    this.searchTimer = setTimeout(() => {
-      this.searchTimer = -1;
-      this.keyword = kw;
-      this.reload();
-    }, 350);
-  }
-
   private onPlace(value: string): void {
     if (this.placeTimer >= 0) {
       clearTimeout(this.placeTimer);
@@ -343,12 +294,10 @@ export struct ActorsTab {
 
   private pickSort(key: string): void {
     if (this.sortBy === key) {
-      // 点当前排序 = 快捷切方向；工具条右侧还有显式方向开关
-      this.order = this.order === 'desc' ? 'asc' : 'desc';
-    } else {
-      this.sortBy = key;
-      this.order = key === 'name' ? 'asc' : 'desc';
+      return;
     }
+    this.sortBy = key;
+    this.order = key === 'name' ? 'asc' : 'desc';
     this.reload();
   }
 
@@ -358,7 +307,8 @@ export struct ActorsTab {
   }
 
   private resetFilters(): void {
-    this.gender = '';
+    this.gender = 'female';
+    this.onlyImage = true;
     this.onlyPerson = false;
     this.ageBand = '';
     this.heightBand = '';
@@ -467,91 +417,164 @@ export struct ActorsTab {
     })
   }
 
+  /** 标题行：页面名 + 共演入口（和媒体库右上角的搜索入口同一个位置关系）。 */
   @Builder
-  SortRow() {
+  Header() {
     Row({ space: 8 }) {
-      Scroll() {
-        ActorFilterChips({
-          options: this.sorts,
-          current: this.sortBy,
-          onPick: (key: string) => {
-            this.pickSort(key);
-          }
-        })
-      }
-      .scrollable(ScrollDirection.Horizontal)
-      .scrollBar(BarState.Off)
-      .layoutWeight(1)
-      .align(Alignment.Start)
-
-      // 显式方向开关：↓ = 从大到小 / 从晚到早，↑ = 从小到大
-      Text(this.order === 'desc' ? '↓' : '↑')
-        .fontSize(13)
+      Text('演员')
+        .fontSize(19)
         .fontWeight(FontWeight.Bold)
+        .fontColor(Theme.TEXT)
+      Blank()
+      Text('共演')
+        .fontSize(11)
         .fontColor('#FFFFFF')
-        .width(30)
-        .height(26)
-        .textAlign(TextAlign.Center)
-        .backgroundColor(this.order === 'desc' ? Theme.ACCENT : Theme.CARD_HI)
-        .borderRadius(13)
+        .padding({ left: 11, right: 11, top: 5, bottom: 5 })
+        .backgroundColor(Theme.ACCENT)
+        .borderRadius(11)
         .onClick(() => {
-          this.toggleOrder();
+          router.pushUrl({ url: 'ext/actors/CastFinderPage' });
         })
     }
     .width('100%')
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 8, bottom: 6 })
   }
 
   @Builder
-  FilterGroup(label: string, options: Choice[], current: string, onPick: (key: string) => void) {
-    Column({ space: 6 }) {
-      Text(label)
-        .fontSize(10)
-        .fontColor(Theme.TEXT_FAINT)
-        .width('100%')
-      ActorWrapChips({
-        options: options,
-        current: current,
-        onPick: onPick
+  SearchBar() {
+    Row() {
+      KeywordBox({
+        placeholder: '搜索演员名 / 别名',
+        onCommit: (kw: string) => {
+          const next: string = kw.trim();
+          if (next === this.keyword) {
+            return;
+          }
+          this.keyword = next;
+          this.reload();
+        }
       })
     }
-    .alignItems(HorizontalAlign.Start)
     .width('100%')
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
   }
 
   @Builder
-  FilterPanel() {
-    Column({ space: 10 }) {
-      this.FilterGroup('年龄', this.ages, this.ageBand, (key: string) => {
-        this.ageBand = key;
-        this.reload();
-      })
-      this.FilterGroup('身高 cm', this.heights, this.heightBand, (key: string) => {
-        this.heightBand = key;
-        this.reload();
-      })
-      this.FilterGroup('罩杯', this.cups, this.cupBand, (key: string) => {
-        this.cupBand = key;
-        this.reload();
-      })
-      this.FilterGroup('胸围 cm', this.busts, this.bustBand, (key: string) => {
-        this.bustBand = key;
-        this.reload();
-      })
+  Toolbar() {
+    Row({ space: 8 }) {
+      Text(this.keyword.length > 0
+        ? `「${this.keyword}」${this.total} 位 · 相关度优先`
+        : `${this.total} 位`)
+        .fontSize(11)
+        .fontColor(Theme.TEXT_FAINT)
+        .maxLines(1)
+        .layoutWeight(1)
 
-      Column({ space: 6 }) {
+      ToolPill({
+        label: `⇅ ${this.sortLabel()} ${this.order === 'desc' ? '↓' : '↑'}`,
+        onTap: () => {
+          this.showSort = true;
+        }
+      })
+      ToolPill({
+        label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+        active: this.filterCount() > 0,
+        onTap: () => {
+          this.showFilter = true;
+        }
+      })
+    }
+    .width('100%')
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 8 })
+  }
+
+  @Builder
+  FilterSheet() {
+    BottomSheet({
+      title: '筛选演员',
+      actionLabel: '重置',
+      onAction: () => {
+        this.resetFilters();
+      },
+      onConfirm: () => {
+        this.showFilter = false;
+      },
+      tabInset: 84
+    }) {
+      ChipGroup({
+        title: '性别', options: this.genders, current: this.gender,
+        onPick: (key: string) => {
+          if (this.gender === key) {
+            return;
+          }
+          this.gender = key;
+          this.reload();
+        }
+      })
+      ChipGroup({
+        title: '头像', options: this.images, current: this.onlyImage ? '1' : '',
+        onPick: (key: string) => {
+          const want: boolean = key === '1';
+          if (this.onlyImage === want) {
+            return;
+          }
+          this.onlyImage = want;
+          this.reload();
+        }
+      })
+      ChipGroup({
+        title: '资料', options: this.persons, current: this.onlyPerson ? '1' : '',
+        onPick: (key: string) => {
+          const want: boolean = key === '1';
+          if (this.onlyPerson === want) {
+            return;
+          }
+          this.onlyPerson = want;
+          this.reload();
+        }
+      })
+      ChipGroup({
+        title: '年龄', options: this.ages, current: this.ageBand,
+        onPick: (key: string) => {
+          this.ageBand = key;
+          this.reload();
+        }
+      })
+      ChipGroup({
+        title: '身高 cm', options: this.heights, current: this.heightBand,
+        onPick: (key: string) => {
+          this.heightBand = key;
+          this.reload();
+        }
+      })
+      ChipGroup({
+        title: '罩杯', options: this.cups, current: this.cupBand,
+        onPick: (key: string) => {
+          this.cupBand = key;
+          this.reload();
+        }
+      })
+      ChipGroup({
+        title: '胸围 cm', options: this.busts, current: this.bustBand,
+        onPick: (key: string) => {
+          this.bustBand = key;
+          this.reload();
+        }
+      })
+      Column({ space: 8 }) {
         Text('出生地')
-          .fontSize(10)
+          .fontSize(11)
           .fontColor(Theme.TEXT_FAINT)
           .width('100%')
-        TextInput({ placeholder: '出生地包含匹配，如 東京都 / 大阪', text: this.place })
-          .height(34)
+        TextInput({ placeholder: '包含匹配，如 東京都 / 大阪', text: this.place })
+          .height(38)
           .fontSize(12)
           .fontColor(Theme.TEXT)
           .placeholderColor(Theme.TEXT_FAINT)
           .placeholderFont({ size: 11 })
-          .backgroundColor(Theme.CARD_HI)
-          .borderRadius(8)
-          .padding({ left: 10, right: 10 })
+          .backgroundColor(Theme.CARD)
+          .borderRadius(10)
+          .padding({ left: 12, right: 12 })
           .width('100%')
           .onChange((value: string) => {
             this.onPlace(value);
@@ -559,238 +582,152 @@ export struct ActorsTab {
       }
       .alignItems(HorizontalAlign.Start)
       .width('100%')
-
-      Row({ space: 10 }) {
-        Text(`已选 ${this.filterCount()} 项`)
-          .fontSize(10)
-          .fontColor(Theme.TEXT_FAINT)
-        Blank()
-        Text('重置筛选')
-          .fontSize(11)
-          .fontColor(Theme.TEXT_DIM)
-          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          .backgroundColor(Theme.CARD_HI)
-          .borderRadius(14)
-          .onClick(() => {
-            this.resetFilters();
-          })
-        Text('收起')
-          .fontSize(11)
-          .fontColor('#FFFFFF')
-          .padding({ left: 14, right: 14, top: 6, bottom: 6 })
-          .backgroundColor(Theme.ACCENT)
-          .borderRadius(14)
-          .onClick(() => {
-            this.showFilter = false;
-          })
-      }
-      .width('100%')
     }
-    .width('100%')
-    .padding(12)
-    .backgroundColor(Theme.CARD)
-    .borderRadius(Theme.RADIUS)
-  }
-
-  @Builder
-  Toolbar() {
-    Column({ space: 8 }) {
-      Row({ space: 10 }) {
-        Text('演员')
-          .fontSize(19)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
-        Blank()
-        Text(`${this.total} 位 · ${this.sortLabel()}${this.order === 'desc' ? '↓' : '↑'}`)
-          .fontSize(10)
-          .fontColor(Theme.TEXT_FAINT)
-        Text('共演')
-          .fontSize(11)
-          .fontColor('#FFFFFF')
-          .padding({ left: 11, right: 11, top: 5, bottom: 5 })
-          .backgroundColor(Theme.ACCENT)
-          .borderRadius(11)
-          .onClick(() => {
-            router.pushUrl({ url: 'ext/actors/CastFinderPage' });
-          })
-      }
-      .width('100%')
-
-      TextInput({ placeholder: '搜索演员名 / 别名' })
-        .height(38)
-        .fontSize(13)
-        .fontColor(Theme.TEXT)
-        .placeholderColor(Theme.TEXT_FAINT)
-        .placeholderFont({ size: 12 })
-        .backgroundColor(Theme.CARD)
-        .borderRadius(10)
-        .padding({ left: 12, right: 12 })
-        .width('100%')
-        .onChange((value: string) => {
-          this.onKeyword(value);
-        })
-
-      this.SortRow()
-
-      Row({ space: 7 }) {
-        ActorFilterChips({
-          options: this.genders,
-          current: this.gender,
-          onPick: (key: string) => {
-            if (this.gender === key) {
-              return;
-            }
-            this.gender = key;
-            this.reload();
-          }
-        })
-        Blank()
-        Text('有头像')
-          .fontSize(11)
-          .fontColor(this.onlyImage ? '#FFFFFF' : Theme.TEXT_DIM)
-          .padding({ left: 11, right: 11, top: 5, bottom: 5 })
-          .backgroundColor(this.onlyImage ? Theme.ACCENT : Theme.CARD)
-          .borderRadius(12)
-          .onClick(() => {
-            this.onlyImage = !this.onlyImage;
-            this.reload();
-          })
-        Text('有资料')
-          .fontSize(11)
-          .fontColor(this.onlyPerson ? '#FFFFFF' : Theme.TEXT_DIM)
-          .padding({ left: 11, right: 11, top: 5, bottom: 5 })
-          .backgroundColor(this.onlyPerson ? Theme.ACCENT : Theme.CARD)
-          .borderRadius(12)
-          .onClick(() => {
-            this.onlyPerson = !this.onlyPerson;
-            this.reload();
-          })
-        Text(this.filterCount() > 0 ? `筛选 ${this.filterCount()}` : '筛选')
-          .fontSize(11)
-          .fontColor(this.filterCount() > 0 ? '#FFFFFF' : Theme.TEXT_DIM)
-          .padding({ left: 11, right: 11, top: 5, bottom: 5 })
-          .backgroundColor(this.filterCount() > 0 ? Theme.ACCENT : Theme.CARD)
-          .borderRadius(12)
-          .onClick(() => {
-            this.showFilter = !this.showFilter;
-          })
-      }
-      .width('100%')
-
-      if (this.showFilter) {
-        Scroll() {
-          this.FilterPanel()
-        }
-        .scrollable(ScrollDirection.Vertical)
-        .scrollBar(BarState.Off)
-        .constraintSize({ maxHeight: 300 })
-        .width('100%')
-      }
-    }
-    .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 12, bottom: 8 })
   }
 
   build() {
-    Column() {
-      this.Toolbar()
+    Stack({ alignContent: Alignment.Bottom }) {
+      Column() {
+        this.Header()
+        this.SearchBar()
+        this.Toolbar()
 
-      if (this.loading) {
-        Column() {
-          LoadingProgress()
-            .width(28)
-            .height(28)
-            .color(Theme.ACCENT)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.error.length > 0) {
-        Column({ space: 10 }) {
-          Text('⌁')
-            .fontSize(32)
-            .fontColor(Theme.TEXT_FAINT)
-          Text(this.error)
-            .fontSize(12)
-            .fontColor(Theme.TEXT_DIM)
-            .onClick(() => {
-              this.reload();
-            })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.items.length === 0) {
-        Column({ space: 10 }) {
-          Text('☺')
-            .fontSize(34)
-            .fontColor(Theme.TEXT_FAINT)
-          Text(this.keyword.length > 0 ? `没有找到「${this.keyword}」` : '没有符合条件的演员')
-            .fontSize(14)
-            .fontColor(Theme.TEXT_DIM)
-          Text(this.filterCount() > 0 || !this.onlyImage ? '试试放宽筛选条件' : '换个搜索词试试')
-            .fontSize(11)
-            .fontColor(Theme.TEXT_FAINT)
-          if (this.filterCount() > 0) {
-            Text('重置筛选')
+        if (this.loading) {
+          Column() {
+            LoadingProgress()
+              .width(28)
+              .height(28)
+              .color(Theme.ACCENT)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.error.length > 0) {
+          Column({ space: 10 }) {
+            Text('⌁')
+              .fontSize(32)
+              .fontColor(Theme.TEXT_FAINT)
+            Text(this.error)
               .fontSize(12)
-              .fontColor(Theme.ACCENT)
-              .padding({ left: 16, right: 16, top: 7, bottom: 7 })
-              .backgroundColor(Theme.ACCENT_SOFT)
-              .borderRadius(15)
+              .fontColor(Theme.TEXT_DIM)
               .onClick(() => {
-                this.resetFilters();
+                this.reload();
               })
           }
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        Grid() {
-          ForEach(this.items, (a: ActorItem) => {
-            GridItem() {
-              this.Cell(a)
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.items.length === 0) {
+          Column({ space: 10 }) {
+            Text('☺')
+              .fontSize(34)
+              .fontColor(Theme.TEXT_FAINT)
+            Text(this.keyword.length > 0 ? `没有找到「${this.keyword}」` : '没有符合条件的演员')
+              .fontSize(14)
+              .fontColor(Theme.TEXT_DIM)
+            Text(this.filterCount() > 0 || !this.onlyImage ? '试试放宽筛选条件' : '换个搜索词试试')
+              .fontSize(11)
+              .fontColor(Theme.TEXT_FAINT)
+            if (this.filterCount() > 0) {
+              Text('重置筛选')
+                .fontSize(12)
+                .fontColor(Theme.ACCENT)
+                .padding({ left: 16, right: 16, top: 7, bottom: 7 })
+                .backgroundColor(Theme.ACCENT_SOFT)
+                .borderRadius(15)
+                .onClick(() => {
+                  this.resetFilters();
+                })
             }
-          }, (a: ActorItem) => `actor-${a.id}`)
-
-          if (this.items.length < this.total) {
-            GridItem() {
-              Column() {
-                if (this.loadingMore) {
-                  LoadingProgress()
-                    .width(20)
-                    .height(20)
-                    .color(Theme.TEXT_FAINT)
-                } else {
-                  Text('加载更多')
-                    .fontSize(11)
-                    .fontColor(Theme.TEXT_FAINT)
-                }
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          Grid() {
+            ForEach(this.items, (a: ActorItem) => {
+              GridItem() {
+                this.Cell(a)
               }
-              .width('100%')
-              .height(120)
-              .justifyContent(FlexAlign.Center)
-              .onClick(() => {
-                this.loadMore();
-              })
+            }, (a: ActorItem) => `actor-${a.id}`)
+
+            if (this.items.length < this.total) {
+              GridItem() {
+                Column() {
+                  if (this.loadingMore) {
+                    LoadingProgress()
+                      .width(20)
+                      .height(20)
+                      .color(Theme.TEXT_FAINT)
+                  } else {
+                    Text('加载更多')
+                      .fontSize(11)
+                      .fontColor(Theme.TEXT_FAINT)
+                  }
+                }
+                .width('100%')
+                .height(120)
+                .justifyContent(FlexAlign.Center)
+                .onClick(() => {
+                  this.loadMore();
+                })
+              }
             }
           }
+          .columnsTemplate('1fr 1fr 1fr')
+          .columnsGap(9)
+          .rowsGap(12)
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 84 })
+          .layoutWeight(1)
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring)
+          .onReachEnd(() => {
+            this.loadMore();
+          })
         }
-        .columnsTemplate('1fr 1fr 1fr')
-        .columnsGap(9)
-        .rowsGap(12)
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 84 })
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
-        .onReachEnd(() => {
-          this.loadMore();
-        })
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
+
+      if (this.showSort || this.showFilter) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#99000000')
+          .onClick(() => {
+            this.showSort = false;
+            this.showFilter = false;
+          })
+
+        if (this.showSort) {
+          SortSheet({
+            options: this.sorts,
+            current: this.sortBy,
+            order: this.order,
+            tabInset: 84,
+            onPick: (key: string) => {
+              if (this.sortBy === key) {
+                this.showSort = false;
+                return;
+              }
+              this.pickSort(key);
+              this.showSort = false;
+            },
+            onToggleOrder: () => {
+              this.toggleOrder();
+            },
+            onClose: () => {
+              this.showSort = false;
+            }
+          })
+        }
+        if (this.showFilter) {
+          this.FilterSheet()
+        }
       }
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(Theme.BG)
   }
 }
