@@ -23,64 +23,43 @@
 
 <table>
   <tr>
-    <td width="170" valign="top"><img src="docs/screenshots/cast-finder.png" width="150"></td>
-    <td valign="top">
+    <td width="33%" align="center" valign="top">
+      <img src="docs/screenshots/cast-finder.png" width="210"><br><br>
       <strong>① 共演检索</strong><br>
-      <sub>最多 6 位演员同台；女 / 男人数离散多选（「1 女」和「2 女」同时要）；导演可只看、也可整片排除，结果卡直接标导演名。</sub>
+      <sub>最多 6 位演员同台；女 / 男人数离散多选（「1 女」和「2 女」同时要）；导演可只看、也可整片排除，结果卡标导演名。</sub>
     </td>
-  </tr>
-  <tr>
-    <td width="170" valign="top"><img src="docs/screenshots/gacha.png" width="150"></td>
-    <td valign="top">
+    <td width="33%" align="center" valign="top">
+      <img src="docs/screenshots/gacha.png" width="210"><br><br>
       <strong>② 抽卡</strong><br>
-      <sub>一键把列表换成当前范围的随机剧照，改筛选即重抽，点图进详情。媒体库、收藏、分类墙、共演结果都能开，演员页的「盲盒」是同一个入口。</sub>
+      <sub>一键把列表换成当前范围的随机剧照，改筛选即重抽，点图进详情。媒体库、收藏、分类墙、共演结果都能开。</sub>
     </td>
-  </tr>
-  <tr>
-    <td width="170" valign="top"><img src="docs/screenshots/facets.png" width="150"></td>
-    <td valign="top">
+    <td width="33%" align="center" valign="top">
+      <img src="docs/screenshots/facets.png" width="210"><br><br>
       <strong>③ 分类体系</strong><br>
-      <sub>标签、系列、制片商、发行商、导演五类都是能直接翻的入口；可收藏、可隐藏，导演与厂牌一行一条长图，靠作品认人。</sub>
+      <sub>标签、系列、制片商、发行商、导演五类都是能直接翻的入口；可收藏、可隐藏，导演与厂牌一行一条长图。</sub>
     </td>
   </tr>
   <tr>
-    <td colspan="2">④ <strong>亮点</strong>：详情页给 6 张<em>本片</em>画面，右下角标时间，点哪张就从哪秒开始播。</td>
-  </tr>
-  <tr>
-    <td colspan="2">⑤ <strong>就地起播</strong>：详情页点一下原地播，小窗 / 全屏 / 横屏随手切，退出进度照记。</td>
-  </tr>
-  <tr>
-    <td width="170" valign="top"><img src="docs/screenshots/my-danmu.png" width="150"></td>
-    <td valign="top">
-      <strong>⑥ 弹幕</strong><br>
-      <sub>飞行式滚动、样式可调，跟着文件记时间轴；「我的弹幕」按影片分组，点一条回到那一秒。</sub>
-    </td>
-  </tr>
-  <tr>
-    <td width="170" valign="top"><img src="docs/screenshots/frame-picks.png" width="150"></td>
-    <td valign="top">
-      <strong>⑦ 截帧与预览</strong><br>
-      <sub>随时截下当前画面，存手机或放进剧照墙；拖进度条能看那一秒的预览图。</sub>
-    </td>
-  </tr>
-  <tr>
-    <td colspan="2"><img src="docs/screenshots/cast-age-wide.png" width="100%"></td>
-  </tr>
-  <tr>
-    <td width="170" valign="top"><img src="docs/screenshots/cast-age-badge.png" width="150"></td>
-    <td valign="top">
-      <strong>⑧ 出演年龄</strong><br>
-      <sub>演员头像下标着出演<em>本片</em>时的岁数，点岁数翻同龄影片；结果按女优 / 男优年龄排序，还能接着筛。</sub>
-    </td>
-  </tr>
-  <tr>
-    <td width="170" valign="top"><img src="docs/screenshots/prefix.png" width="150"></td>
-    <td valign="top">
-      <strong>⑨ 系列属性 / 番号前缀</strong><br>
-      <sub>系列按自己的属性筛，制片商下按番号前缀翻片。</sub>
-    </td>
+    <td valign="top"><strong>④ 亮点</strong><br><sub>详情页给 6 张<em>本片</em>画面，右下角标时间，点哪张就从哪秒开始播。</sub></td>
+    <td valign="top"><strong>⑤ 就地起播</strong><br><sub>详情页点一下原地播，小窗 / 全屏 / 横屏随手切，退出进度照记。</sub></td>
+    <td valign="top"><strong>⑥ 弹幕</strong><br><sub>飞行式滚动、样式可调，跟着文件记时间轴；「我的弹幕」按影片分组回看。</sub></td>
   </tr>
 </table>
+
+<p align="center"><img src="docs/screenshots/frame-picks.png" width="460"></p>
+
+<p align="center"><strong>⑦ 截帧与预览</strong><br>
+<sub>随时截下当前画面，存手机或放进剧照墙；拖进度条能看那一秒的预览图。</sub></p>
+
+<p align="center"><img src="docs/screenshots/cast-age-wide.png" width="100%"></p>
+
+<p align="center"><strong>⑧ 出演年龄</strong><br>
+<sub>点演员行里的岁数就翻同龄影片（上面这套是 18–24 岁，2,598 部）；列表按女优 / 男优年龄排序，还能接着筛。</sub></p>
+
+<p align="center"><img src="docs/screenshots/prefix.png" width="460"></p>
+
+<p align="center"><strong>⑨ 系列属性 / 番号前缀</strong><br>
+<sub>系列按自己的属性筛，制片商下按番号前缀翻片。</sub></p>
 
 ## 完善的基础功能
 
