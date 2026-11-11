@@ -24,59 +24,59 @@
 <table>
   <tr>
     <td width="33%" valign="top">
-      <img src="docs/screenshots/cast-finder.png" width="210">
+      <img src="docs/screenshots/cast-finder.png" width="210"><br>
       <strong>① 共演检索</strong><br>
-      <sub>迷上某个导演的拍法，又想知道你追的那几个演员有没有在他片子里出现过？演员和导演一起筛，最多 6 位演员同框，「1 女 + 2 男」这种搭配也能指定。<br><strong>离散人数多选 · 导演可包含可排除</strong></sub>
+      <sub>想看导演 × 演员的合作、想看某几个人同台（男女、女女、男男都行）、还是就想找人多的大场面？一个筛选器全包：最多 6 位演员，「1 女 + 2 男」这种配比也能直接指定。<br><strong>离散人数多选 · 导演可包含可排除</strong></sub>
     </td>
     <td width="33%" valign="top">
-      <img src="docs/screenshots/gacha.png" width="210">
+      <img src="docs/screenshots/gacha.png" width="210"><br>
       <strong>② 抽卡</strong><br>
-      <sub>片荒、列表翻到麻木的时候，别选了——整屏随机剧照瀑布流，看上哪张点哪张。从媒体库到收藏、从演员的全部作品到搜索结果，任意清单，想抽就抽。<br><strong>整屏瀑布流 · 改筛选即重抽 · 全站通用</strong></sub>
+      <sub>片荒、列表翻到麻木的时候别选了——整屏随机剧照瀑布流，看上哪张看哪张；从媒体库到收藏、从演员的全部作品到搜索结果，任意清单都能抽。<br><strong>不满意随时重抽 · 全站清单通用</strong></sub>
     </td>
     <td width="33%" valign="top">
-      <img src="docs/screenshots/facets.png" width="210">
+      <img src="docs/screenshots/facets.png" width="210"><br>
       <strong>③ 分类体系</strong><br>
-      <sub>Emby 那种媒体库，标签得一个个点开才看得见东西。这里标签、系列、制片厂、发行商、导演五类全是能直接翻的入口，一行一条长图，靠作品认人，内容一眼铺开；想留的收藏，不想看的隐藏。<br><strong>五类入口 · 长图布局 · 收藏 / 隐藏</strong></sub>
+      <sub>Emby 连一个能翻的演员墙都没有——想看某个人的全部作品，得进设置翻 metadata 里的 people 文件夹自己导出来。这里标签、系列、制片厂、发行商、导演五类都是能直接翻的墙，一行一条长图。<br><strong>五类入口 · 长图布局 · 演员可收藏</strong></sub>
     </td>
   </tr>
 </table>
 
-④ **亮点**　自动生成带时间点的本片画面，点哪张从哪秒开始播。并支持观看过程中随手截图，插入亮点。还支持后台管理，列出所有你喜欢的截图，点击一键跳转播放。再也不用盯着剧照拉进度条，找到你最爱的场景在哪了
+<p><img src="docs/screenshots/frame-picks.png" width="460"></p>
 
-⑤ **就地起播**　告别旧 EMBY 式播放器的碍手，采用 B 站客户端模式，详情页原地起播，小窗 / 全屏 / 横屏随手切。
+④ **亮点**　自动生成带时间点的本片画面，点哪张从哪秒开始播；观看时随手截的帧也能插进亮点。后台管理列着你所有的截图，点一下直接空降你最爱的场景，再也不用盯着剧照拉进度条。
+
+⑤ **播放体验**　旧 Emby 式播放器一点就跳走一整页，回来还得重新找位置。这里换成 B 站客户端那套：详情页原地起播，小窗 / 全屏 / 横屏随手切，退出记着进度；倍速、手势、亮度音量都在手边。<br><strong>原地起播 · 三态窗口 · 记住进度</strong>
 
 ⑥ **弹幕与评价**　对整部片想锐评？看到一半想说点啥？增加了弹幕与评价功能。连接 Amane 的评价数据库，你的评价也能提交；看到一半可以发送弹幕，锐评场景。飞行式滚动、样式可调，还能在后台管理查看所有你自己的弹幕和评价，点击一键跳转详情页。
 
-<p><img src="docs/screenshots/frame-picks.png" width="460"></p>
-
-⑦ **截帧与预览**　拖进度条时能直接看到那一秒的画面，不用盲拖；看中的帧可以存进手机，也能直接扔到剧照墙。
-
 <p><img src="docs/screenshots/cast-age-wide.png" width="100%"></p>
 
-⑧ **出演年龄**　演员行标着出演本片时的岁数，点一下岁数就翻同龄的片，结果还能按女优 / 男优年龄排序。想知道「那年她多大」的作品，不用一部一部点进去看。
+⑦ **出演年龄**　演员行标着出演本片时的岁数，点一下岁数就翻同龄的片，结果还能按女优 / 男优年龄排序。想知道「那年她多大」的作品，不用一部一部点进去看。
 
 <p><img src="docs/screenshots/prefix.png" width="460"></p>
 
-⑨ **元数据管理**　系列能按自己的属性筛，制片厂底下按番号前缀连着翻。想看的很好找；不知道看什么，抽卡替你推；看对眼的，就一路看下去。<br><strong>系列属性 · 番号前缀 · 连续翻片</strong>
+⑧ **元数据价值最大化**　同一批元数据能干的活不少：系列按属性筛、制片厂按番号前缀连着翻、演员按年龄和身材当索引。想找的很好找，不知道看什么让抽卡推，看对眼的就一路看下去。<br><strong>系列属性 · 番号前缀 · 一路翻片</strong>
 
-⑩ **打分**　1–5 星，从「配菜」到「社保」，标准你自己定。
+⑨ **打分**　1–5 星，配菜、有意思、对味、反复、社保——本质是一个分了级的点赞：一眼看出这部片在你心里什么位置，顺手还能留句锐评。
 
 ## 完善的基础功能
 
 <table>
   <tr>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/home.png" width="120"><br><strong>首页</strong><br><sub>轮播 · 继续观看 · 每日推荐</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/library-250.png" width="120"><br><strong>媒体库</strong><br><sub>一条工具条 · 7 种排序 · 5 类筛选</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/actors.png" width="120"><br><strong>演员</strong><br><sub>9 种排序 · 身材段 · 可收藏</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/detail.png" width="120"><br><strong>详情</strong><br><sub>版本在前 · 系列卡 · 相似影片</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/home.png" width="120"><br><strong>首页</strong><br><sub>想放啥放啥 · 继续观看 · 每日推荐</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/library-250.png" width="120"><br><strong>媒体库</strong><br><sub>7 种排序 · 5 类筛选 · 抽卡</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/actors.png" width="120"><br><strong>演员</strong><br><sub>身材 · 年龄 · 收藏</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/detail.png" width="120"><br><strong>详情</strong><br><sub>一切信息 · 大众点评 · 相似影片</sub></td>
   </tr>
   <tr>
-    <td align="center" valign="top"><img src="docs/screenshots/detail-stills.png" width="120"><br><strong>剧照</strong><br><sub>瀑布流 · 标记喜爱 · 全屏</sub></td>
-    <td align="center" valign="top"><img src="docs/screenshots/filter-sheet.png" width="120"><br><strong>筛选</strong><br><sub>抽屉式 · 评分 · 年份</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/detail-stills.png" width="120"><br><strong>剧照</strong><br><sub>瀑布流 · 标记喜爱 · 尽收眼底</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/filter-sheet.png" width="120"><br><strong>筛选</strong><br><sub>想怎么筛就怎么筛</sub></td>
     <td align="center" valign="top"><img src="docs/screenshots/search.png" width="120"><br><strong>搜索</strong><br><sub>三档联想 · 别名 · 历史</sub></td>
-    <td align="center" valign="top"><img src="docs/screenshots/player-settings.png" width="120"><br><strong>播放器</strong><br><sub>mpv 参数 · 长按加速 · 手势</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/player-settings.png" width="120"><br><strong>播放器</strong><br><sub>内置 mpv · 倍速 · 手势 · 小窗</sub></td>
   </tr>
 </table>
+
+<sub>演员墙按身材和年龄挑：从娇小到丰满、从人妻到 JK，总有一款对味；想挑奶狗或大叔也不是不行。</sub>
 
 <sub>多清单 · 稍后再看 · 统一列表版式 · 设置分块 · 全矢量图标 · 横竖屏切换不抖动</sub>
 
