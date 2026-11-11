@@ -15,12 +15,14 @@
 2. **Badges**：Releases / HarmonyOS / ArkTS / mpv / Python / License，六个以内。
 3. **一句话定位 + 截图声明**：客户端做什么、旁挂服务补什么；紧跟一行「截图取自作者自建库，封面、横幅与剧照已打码」。
 4. **有趣的功能**（2026-11-11 起取代 2.4.0 时期的旧称）：**编号连续**，标题下直接进 ①，不要铺垫段落。
-   ①②③④ 是带图主推（共演检索 / 抽卡 / 分类体系 / 亮点）：前三条「图 + 一句」横向排列、亮点用一张宽幅特写独占一行；
-   ⑤ 起改成紧凑的编号短句，每条一句，没图就不硬凑。版本更新时把新能力续在编号后面，不重排既有顺序。
-   同一机制只占一个名额（抽卡与演员页「盲盒」是同一个随机剧照墙，合并为一条，盲盒放到「完善的基础功能」当入口）。
+   带图主推按「来访者一眼能不能看懂」挑，**不固定前四条**：最该展示的一条用宽幅特写独占一行
+   （当前是 ⑧ 出演年龄），其余用 150 宽「图 + 一句」；拍不到真画面、或独立页面内容偏空的用短句，没图就不硬凑。
+   **版本更新时重新判断展示价值、重拍并重新分配图位**：新点可以拿到宽幅主推位，旧点可以降为短句或
+   让出图位；但**编号顺序不变**，能力仍续在末尾，不要为了「保住原来那张图」把新能力一直写成文字。
+   同一机制只占一个名额（抽卡与演员页「盲盒」是同一个随机剧照墙，合并为一条；盲盒不再单独占图位）。
 5. **完善的基础功能**（2026-11-11 起取代 2.4.0 时期的旧称）：两行各四张小图
-   （首页 / 媒体库 / 演员 / 详情 / 剧照 / 盲盒 / 搜索 / 播放器设置），每张只给一个短语（≤ 10 字），不写解释句；
-   不便配图的能力在卡片下面补一行**纯词列表**，只列词、不解释。
+   （首页 / 媒体库 / 演员 / 详情 / 剧照 / 筛选 / 搜索 / 播放器设置），每张只给一个短语（≤ 10 字），不写解释句；
+   不便配图的能力在卡片下面补一行**纯词列表**，只列词、不解释。本次更新换过版式的页面用新截图，别留旧图。
 6. **播放链路**：`assets/architecture.png` + 4–6 条短句（块缓存、并行预取、硬解、玻璃控制层、参数锁定、外挂字幕）。
 7. **快速开始**：三步表格（部署服务 / 安装客户端 / 连接媒体库），细节链去 `docs/`。
 8. **文档**：Wiki 在前，仓库内文档一列排完。
@@ -48,27 +50,34 @@
 
 | 文件 | 用途 |
 |---|---|
-| `docs/screenshots/home.png` | Hero、完善的基础功能 |
-| `docs/screenshots/library.png` | 完善的基础功能 |
-| `docs/screenshots/actors.png` | 完善的基础功能 |
-| `docs/screenshots/detail.png` | 完善的基础功能（系列卡） |
 | `docs/screenshots/cast-finder.png` | **有趣的功能**（① 共演检索）+ Hero |
 | `docs/screenshots/gacha.png` | **有趣的功能**（② 抽卡，演员页盲盒是同一入口） |
 | `docs/screenshots/facets.png` | **有趣的功能**（③ 分类体系） |
-| `docs/screenshots/highlights.png` | **有趣的功能**（④ 亮点，宽幅特写） |
-| `docs/screenshots/blindbox.png` | 完善的基础功能（盲盒 = 抽卡的演员入口） |
+| `docs/screenshots/my-danmu.png` | **有趣的功能**（⑥ 弹幕，按影片分组带时间点） |
+| `docs/screenshots/frame-picks.png` | **有趣的功能**（⑦ 截帧，带时间戳与存图操作） |
+| `docs/screenshots/cast-age-wide.png` | **有趣的功能**（⑧ 出演年龄，宽幅主推：18–24 岁列表 + 女优年龄排序） |
+| `docs/screenshots/cast-age-badge.png` | **有趣的功能**（⑧ 出演年龄，详情页「出演 22 岁」徽章特写） |
+| `docs/screenshots/prefix.png` | **有趣的功能**（⑨ 系列属性 / 番号前缀，GHNU 番号 94 部） |
+| `docs/screenshots/home.png` | Hero、完善的基础功能 |
+| `docs/screenshots/library-250.png` | 完善的基础功能（媒体库，2.5.0 统一工具条 + 评分角标） |
+| `docs/screenshots/actors.png` | 完善的基础功能 |
+| `docs/screenshots/detail.png` | 完善的基础功能（系列卡） |
 | `docs/screenshots/detail-stills.png` | 完善的基础功能（剧照瀑布流） |
+| `docs/screenshots/filter-sheet.png` | 完善的基础功能（筛选抽屉：评分 / 年份 / 字幕 / 类型） |
 | `docs/screenshots/search.png` | 完善的基础功能（搜索） |
 | `docs/screenshots/player-settings.png` | 完善的基础功能（播放器设置） |
-| `docs/screenshots/library-filter.png` · `facet-media.png` · `favorites.png` | Wiki |
+| `docs/screenshots/highlights.png` · `blindbox.png` · `library.png` · `library-filter.png` · `facet-media.png` · `favorites.png` · `actor-detail.png` | Wiki / 历史存档，README 不再引用 |
 
 规格：
 
 - 整屏截图：1280×2832 原图裁掉状态栏后缩到 **720 宽**。状态栏高度随 UI 改版变过：
   旧版（`tailwind` 之前）是 152px，沉浸式 UI 之后是 **58px** —— 按 152 裁会把页头切掉，重拍时先确认。
-- 功能特写：允许宽幅（当前 `highlights.png` 是 1280×532），只保留能说明该功能的那一段，
-  避开标签墙、简介等容易带入露骨文案的区域。
-- 两张「一屏放不下」的图（`gacha` / `blindbox`）在 README 里按 150 宽显示，高度差在缩略尺寸下看不出来。
+- 功能特写：允许宽幅（当前 `cast-age-wide.png` 是 1280×880，含页头 + 工具条 + 第一排卡片；
+  旧 `highlights.png` 是 1280×532），只保留能说明该功能的那一段，避开标签墙、简介等容易带入露骨文案的区域。
+- 宽幅主推图给最该展示的那条，不是按编号轮；缩略小图统一 150 宽，整屏图在基础区按 120 宽显示。
+- **重拍前先确认客户端连的是哪个旁挂服务**：出演年龄 / 弹幕 / 截帧 / 清单这批扩展要连带完整
+  扩展集、且已有真实数据的那套服务；连到能力较旧的一套时，这些页面全是「还没有…」的空态，
+  拍出来没有说服力。拍摄前先打开「我的」页核一下版本号与扩展清单。
 
 ## 5. 文案约束（2026-11-10 加，用户明确要求）
 

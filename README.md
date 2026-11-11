@@ -44,38 +44,62 @@
     </td>
   </tr>
   <tr>
-    <td colspan="2">
-      <img src="docs/screenshots/highlights.png" width="100%"><br>
-      <strong>④ 亮点</strong><br>
-      <sub>详情页给 6 张<em>本片</em>画面，右下角标时间，点哪张就从哪秒开始播；抽帧一次永久缓存，抽不到自动隐藏。</sub>
+    <td colspan="2">④ <strong>亮点</strong>：详情页给 6 张<em>本片</em>画面，右下角标时间，点哪张就从哪秒开始播。</td>
+  </tr>
+  <tr>
+    <td colspan="2">⑤ <strong>就地起播</strong>：详情页点一下原地播，小窗 / 全屏 / 横屏随手切，退出进度照记。</td>
+  </tr>
+  <tr>
+    <td width="170" valign="top"><img src="docs/screenshots/my-danmu.png" width="150"></td>
+    <td valign="top">
+      <strong>⑥ 弹幕</strong><br>
+      <sub>飞行式滚动、样式可调，跟着文件记时间轴；「我的弹幕」按影片分组，点一条回到那一秒。</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="170" valign="top"><img src="docs/screenshots/frame-picks.png" width="150"></td>
+    <td valign="top">
+      <strong>⑦ 截帧与预览</strong><br>
+      <sub>随时截下当前画面，存手机或放进剧照墙；拖进度条能看那一秒的预览图。</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/cast-age-wide.png" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="170" valign="top"><img src="docs/screenshots/cast-age-badge.png" width="150"></td>
+    <td valign="top">
+      <strong>⑧ 出演年龄</strong><br>
+      <sub>演员头像下标着出演<em>本片</em>时的岁数，点岁数翻同龄影片；结果按女优 / 男优年龄排序，还能接着筛。</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="170" valign="top"><img src="docs/screenshots/prefix.png" width="150"></td>
+    <td valign="top">
+      <strong>⑨ 系列属性 / 番号前缀</strong><br>
+      <sub>系列按自己的属性筛，制片商下按番号前缀翻片。</sub>
     </td>
   </tr>
 </table>
-
-⑤ **就地起播**：详情页点一下原地播，小窗 / 全屏 / 横屏随手切，退出进度照记。<br>
-⑥ **弹幕**：飞行式滚动、样式可调，跟着文件记时间轴；「我的弹幕」按影片分组回看。<br>
-⑦ **截帧与预览**：随时截下当前画面，存手机或放进剧照墙；拖进度条能看那一秒的预览图。<br>
-⑧ **出演年龄**：演员在作品里显示当时的岁数，点岁数看同龄影片。<br>
-⑨ **系列属性 / 番号前缀**：系列按自己的属性筛，制片商下按番号前缀翻片。
 
 ## 完善的基础功能
 
 <table>
   <tr>
     <td width="25%" align="center" valign="top"><img src="docs/screenshots/home.png" width="120"><br><strong>首页</strong><br><sub>轮播、继续观看、每日推荐</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/library.png" width="120"><br><strong>媒体库</strong><br><sub>统一版式、7 种排序、5 类筛选</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/library-250.png" width="120"><br><strong>媒体库</strong><br><sub>统一版式、7 种排序、5 类筛选</sub></td>
     <td width="25%" align="center" valign="top"><img src="docs/screenshots/actors.png" width="120"><br><strong>演员</strong><br><sub>9 种排序、身材段、可收藏</sub></td>
     <td width="25%" align="center" valign="top"><img src="docs/screenshots/detail.png" width="120"><br><strong>详情</strong><br><sub>版本前置、系列卡、相似影片</sub></td>
   </tr>
   <tr>
     <td align="center" valign="top"><img src="docs/screenshots/detail-stills.png" width="120"><br><strong>剧照</strong><br><sub>两列瀑布流、喜爱、全屏</sub></td>
-    <td align="center" valign="top"><img src="docs/screenshots/blindbox.png" width="120"><br><strong>盲盒</strong><br><sub>抽卡的演员入口</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/filter-sheet.png" width="120"><br><strong>筛选</strong><br><sub>底部抽屉、评分、年份</sub></td>
     <td align="center" valign="top"><img src="docs/screenshots/search.png" width="120"><br><strong>搜索</strong><br><sub>三档联想、别名、历史</sub></td>
     <td align="center" valign="top"><img src="docs/screenshots/player-settings.png" width="120"><br><strong>播放器</strong><br><sub>mpv.conf、长按加速</sub></td>
   </tr>
 </table>
 
-<sub>多清单 · 稍后再看 · 1–5 星打分 · 多条评价 · 设置分块 · 全矢量图标 · 横竖屏切换不抖动</sub>
+<sub>多清单 · 稍后再看 · 1–5 星打分 · 多条评价 · 统一列表版式 · 设置分块 · 全矢量图标 · 横竖屏切换不抖动</sub>
 
 ## 播放链路
 
