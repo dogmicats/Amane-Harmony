@@ -26,17 +26,17 @@
     <td width="33%" valign="top">
       <img src="docs/screenshots/cast-finder.png" width="210">
       <strong>① 共演检索</strong><br>
-      <sub>想看谁和谁同台？最多 6 位演员一起筛，「1 女」「2 女」还能同时要；导演可以只看，也能整片排除。结果卡上直接标着谁导的。</sub>
+      <sub>迷上某个导演的拍法，又想知道你追的那几个演员有没有在他片子里出现过？演员和导演一起筛，最多 6 位演员同框，「1 女 + 2 男」这种搭配也能指定。<br><strong>离散人数多选 · 导演可包含可排除</strong></sub>
     </td>
     <td width="33%" valign="top">
       <img src="docs/screenshots/gacha.png" width="210">
       <strong>② 抽卡</strong><br>
-      <sub>片荒的时候抽一张：当前列表换成随机剧照，改个筛选就重抽一轮，点图直接进详情。媒体库、收藏、分类墙、共演结果都能开。</sub>
+      <sub>片荒、列表翻到麻木的时候，别选了——整屏随机剧照瀑布流，看上哪张点哪张。从媒体库到收藏、从演员的全部作品到搜索结果，任意清单，想抽就抽。<br><strong>整屏瀑布流 · 改筛选即重抽 · 全站通用</strong></sub>
     </td>
     <td width="33%" valign="top">
       <img src="docs/screenshots/facets.png" width="210">
       <strong>③ 分类体系</strong><br>
-      <sub>标签、系列、制片厂、发行商、导演五类都能当入口直接翻，能收藏也能隐藏；厂牌和导演是一行一条长图，靠作品认人。</sub>
+      <sub>Emby 那种媒体库，标签得一个个点开才看得见东西。这里标签、系列、制片厂、发行商、导演五类全是能直接翻的入口，一行一条长图，靠作品认人，内容一眼铺开；想留的收藏，不想看的隐藏。<br><strong>五类入口 · 长图布局 · 收藏 / 隐藏</strong></sub>
     </td>
   </tr>
 </table>
@@ -47,36 +47,38 @@
 
 ⑥ **弹幕与评价**　对整部片想锐评？看到一半想说点啥？增加了弹幕与评价功能。连接 Amane 的评价数据库，你的评价也能提交；看到一半可以发送弹幕，锐评场景。飞行式滚动、样式可调，还能在后台管理查看所有你自己的弹幕和评价，点击一键跳转详情页。
 
-<img src="docs/screenshots/frame-picks.png" width="460">
+<p><img src="docs/screenshots/frame-picks.png" width="460"></p>
 
 ⑦ **截帧与预览**　拖进度条时能直接看到那一秒的画面，不用盲拖；看中的帧可以存进手机，也能直接扔到剧照墙。
 
-<p align="center"><img src="docs/screenshots/cast-age-wide.png" width="100%"></p>
+<p><img src="docs/screenshots/cast-age-wide.png" width="100%"></p>
 
 ⑧ **出演年龄**　演员行标着出演本片时的岁数，点一下岁数就翻同龄的片，结果还能按女优 / 男优年龄排序。想知道「那年她多大」的作品，不用一部一部点进去看。
 
-<img src="docs/screenshots/prefix.png" width="460">
+<p><img src="docs/screenshots/prefix.png" width="460"></p>
 
-⑨ **系列属性 / 番号前缀**　系列能按自己的属性筛，制片厂下面按番号前缀翻片；同一个前缀几十部连着看，不用重新搜。
+⑨ **元数据管理**　系列能按自己的属性筛，制片厂底下按番号前缀连着翻。想看的很好找；不知道看什么，抽卡替你推；看对眼的，就一路看下去。<br><strong>系列属性 · 番号前缀 · 连续翻片</strong>
+
+⑩ **打分**　1–5 星，从「配菜」到「社保」，标准你自己定。
 
 ## 完善的基础功能
 
 <table>
   <tr>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/home.png" width="120"><br><strong>首页</strong><br><sub>轮播、继续观看、每日推荐</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/library-250.png" width="120"><br><strong>媒体库</strong><br><sub>统一版式、7 种排序、5 类筛选</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/actors.png" width="120"><br><strong>演员</strong><br><sub>9 种排序、身材段、可收藏</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/detail.png" width="120"><br><strong>详情</strong><br><sub>版本前置、系列卡、相似影片</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/home.png" width="120"><br><strong>首页</strong><br><sub>轮播 · 继续观看 · 每日推荐</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/library-250.png" width="120"><br><strong>媒体库</strong><br><sub>一条工具条 · 7 种排序 · 5 类筛选</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/actors.png" width="120"><br><strong>演员</strong><br><sub>9 种排序 · 身材段 · 可收藏</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/detail.png" width="120"><br><strong>详情</strong><br><sub>版本在前 · 系列卡 · 相似影片</sub></td>
   </tr>
   <tr>
-    <td align="center" valign="top"><img src="docs/screenshots/detail-stills.png" width="120"><br><strong>剧照</strong><br><sub>两列瀑布流、喜爱、全屏</sub></td>
-    <td align="center" valign="top"><img src="docs/screenshots/filter-sheet.png" width="120"><br><strong>筛选</strong><br><sub>底部抽屉、评分、年份</sub></td>
-    <td align="center" valign="top"><img src="docs/screenshots/search.png" width="120"><br><strong>搜索</strong><br><sub>三档联想、别名、历史</sub></td>
-    <td align="center" valign="top"><img src="docs/screenshots/player-settings.png" width="120"><br><strong>播放器</strong><br><sub>mpv.conf、长按加速</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/detail-stills.png" width="120"><br><strong>剧照</strong><br><sub>瀑布流 · 标记喜爱 · 全屏</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/filter-sheet.png" width="120"><br><strong>筛选</strong><br><sub>抽屉式 · 评分 · 年份</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/search.png" width="120"><br><strong>搜索</strong><br><sub>三档联想 · 别名 · 历史</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/player-settings.png" width="120"><br><strong>播放器</strong><br><sub>mpv 参数 · 长按加速 · 手势</sub></td>
   </tr>
 </table>
 
-<sub>多清单 · 稍后再看 · 1–5 星打分 · 统一列表版式 · 设置分块 · 全矢量图标 · 横竖屏切换不抖动</sub>
+<sub>多清单 · 稍后再看 · 统一列表版式 · 设置分块 · 全矢量图标 · 横竖屏切换不抖动</sub>
 
 ## 播放链路
 
