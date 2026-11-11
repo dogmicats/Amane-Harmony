@@ -19,7 +19,7 @@
 
 > 截图取自作者自建媒体库；封面、横幅与剧照已打码，演员头像保留原样。
 
-## 部分有趣功能展示，其他功能，等你来发现
+## 有趣的功能
 
 <table>
   <tr>
@@ -52,22 +52,30 @@
   </tr>
 </table>
 
-## 其他功能
+⑤ **就地起播**：详情页点一下原地播，小窗 / 全屏 / 横屏随手切，退出进度照记。<br>
+⑥ **弹幕**：飞行式滚动、样式可调，跟着文件记时间轴；「我的弹幕」按影片分组回看。<br>
+⑦ **截帧与预览**：随时截下当前画面，存手机或放进剧照墙；拖进度条能看那一秒的预览图。<br>
+⑧ **出演年龄**：演员在作品里显示当时的岁数，点岁数看同龄影片。<br>
+⑨ **系列属性 / 番号前缀**：系列按自己的属性筛，制片商下按番号前缀翻片。
+
+## 完善的基础功能
 
 <table>
   <tr>
     <td width="25%" align="center" valign="top"><img src="docs/screenshots/home.png" width="120"><br><strong>首页</strong><br><sub>轮播、继续观看、每日推荐</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/library.png" width="120"><br><strong>媒体库</strong><br><sub>7 种排序、5 类叠加筛选</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/actors.png" width="120"><br><strong>演员</strong><br><sub>9 种排序、身材段筛选</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/detail.png" width="120"><br><strong>详情</strong><br><sub>版本前置、系列卡、标记</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/library.png" width="120"><br><strong>媒体库</strong><br><sub>统一版式、7 种排序、5 类筛选</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/actors.png" width="120"><br><strong>演员</strong><br><sub>9 种排序、身材段、可收藏</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/detail.png" width="120"><br><strong>详情</strong><br><sub>版本前置、系列卡、相似影片</sub></td>
   </tr>
   <tr>
-    <td align="center" valign="top"><img src="docs/screenshots/detail-stills.png" width="120"><br><strong>剧照</strong><br><sub>两列瀑布流、全屏浏览</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/detail-stills.png" width="120"><br><strong>剧照</strong><br><sub>两列瀑布流、喜爱、全屏</sub></td>
     <td align="center" valign="top"><img src="docs/screenshots/blindbox.png" width="120"><br><strong>盲盒</strong><br><sub>抽卡的演员入口</sub></td>
     <td align="center" valign="top"><img src="docs/screenshots/search.png" width="120"><br><strong>搜索</strong><br><sub>三档联想、别名、历史</sub></td>
-    <td align="center" valign="top"><img src="docs/screenshots/player-settings.png" width="120"><br><strong>播放器</strong><br><sub>结构化参数生成 mpv.conf</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/player-settings.png" width="120"><br><strong>播放器</strong><br><sub>mpv.conf、长按加速</sub></td>
   </tr>
 </table>
+
+<sub>多清单 · 稍后再看 · 1–5 星打分 · 多条评价 · 设置分块 · 全矢量图标 · 横竖屏切换不抖动</sub>
 
 ## 播放链路
 
