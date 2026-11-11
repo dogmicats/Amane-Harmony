@@ -23,42 +23,41 @@
 
 <table>
   <tr>
-    <td width="33%" align="center" valign="top">
-      <img src="docs/screenshots/cast-finder.png" width="210"><br><br>
+    <td width="33%" valign="top">
+      <img src="docs/screenshots/cast-finder.png" width="210">
       <strong>① 共演检索</strong><br>
-      <sub>最多 6 位演员同台，女 / 男人数离散多选，导演可只看或排除。</sub>
+      <sub>想看谁和谁同台？最多 6 位演员一起筛，「1 女」「2 女」还能同时要；导演可以只看，也能整片排除。结果卡上直接标着谁导的。</sub>
     </td>
-    <td width="33%" align="center" valign="top">
-      <img src="docs/screenshots/gacha.png" width="210"><br><br>
+    <td width="33%" valign="top">
+      <img src="docs/screenshots/gacha.png" width="210">
       <strong>② 抽卡</strong><br>
-      <sub>把当前列表换成随机剧照，改筛选即重抽。</sub>
+      <sub>片荒的时候抽一张：当前列表换成随机剧照，改个筛选就重抽一轮，点图直接进详情。媒体库、收藏、分类墙、共演结果都能开。</sub>
     </td>
-    <td width="33%" align="center" valign="top">
-      <img src="docs/screenshots/facets.png" width="210"><br><br>
+    <td width="33%" valign="top">
+      <img src="docs/screenshots/facets.png" width="210">
       <strong>③ 分类体系</strong><br>
-      <sub>标签、系列、制片厂、发行商、导演五类都能直接翻。</sub>
+      <sub>标签、系列、制片厂、发行商、导演五类都能当入口直接翻，能收藏也能隐藏；厂牌和导演是一行一条长图，靠作品认人。</sub>
     </td>
   </tr>
 </table>
 
-④ **亮点**　自动生成带时间点的本片画面，点哪张从哪秒开始播。并支持观看过程中随手截图，插入亮点。还支持后台管理，列出所有你喜欢的截图，点击一键跳转播放。再也不用盯着剧照拉进度条，找到你最爱的场景在哪了<br>
-⑤ **就地起播**　告别旧EMBY式播放器的碍手，采用B站客户端模式，详情页原地起播，小窗 / 全屏 / 横屏随手切。<br>
-⑥ **弹幕与评价**　对整部片想锐评？看到一半想说点啥？增加了弹幕与评价功能。连接Amane的评价数据库，你的评价也能提交；看到一半可以发送弹幕，锐评场景。飞行式滚动、样式可调，还能在后台管理查看所有你自己的弹幕和评价，点击一键跳转详情页。
+④ **亮点**　自动生成带时间点的本片画面，点哪张从哪秒开始播。并支持观看过程中随手截图，插入亮点。还支持后台管理，列出所有你喜欢的截图，点击一键跳转播放。再也不用盯着剧照拉进度条，找到你最爱的场景在哪了
 
-<p align="center"><img src="docs/screenshots/frame-picks.png" width="460"></p>
+⑤ **就地起播**　告别旧 EMBY 式播放器的碍手，采用 B 站客户端模式，详情页原地起播，小窗 / 全屏 / 横屏随手切。
 
-<p align="center"><strong>⑦ 截帧与预览</strong><br>
-<sub>截下当前画面，存手机或放进剧照墙；拖进度条看那一秒的预览。</sub></p>
+⑥ **弹幕与评价**　对整部片想锐评？看到一半想说点啥？增加了弹幕与评价功能。连接 Amane 的评价数据库，你的评价也能提交；看到一半可以发送弹幕，锐评场景。飞行式滚动、样式可调，还能在后台管理查看所有你自己的弹幕和评价，点击一键跳转详情页。
+
+<img src="docs/screenshots/frame-picks.png" width="460">
+
+⑦ **截帧与预览**　拖进度条时能直接看到那一秒的画面，不用盲拖；看中的帧可以存进手机，也能直接扔到剧照墙。
 
 <p align="center"><img src="docs/screenshots/cast-age-wide.png" width="100%"></p>
 
-<p align="center"><strong>⑧ 出演年龄</strong><br>
-<sub>演员行标着出演本片时的岁数，点岁数翻同龄影片，结果按年龄排序。</sub></p>
+⑧ **出演年龄**　演员行标着出演本片时的岁数，点一下岁数就翻同龄的片，结果还能按女优 / 男优年龄排序。想知道「那年她多大」的作品，不用一部一部点进去看。
 
-<p align="center"><img src="docs/screenshots/prefix.png" width="460"></p>
+<img src="docs/screenshots/prefix.png" width="460">
 
-<p align="center"><strong>⑨ 系列属性 / 番号前缀</strong><br>
-<sub>系列按自身属性筛，制片厂下按番号前缀翻片。</sub></p>
+⑨ **系列属性 / 番号前缀**　系列能按自己的属性筛，制片厂下面按番号前缀翻片；同一个前缀几十部连着看，不用重新搜。
 
 ## 完善的基础功能
 
@@ -77,7 +76,7 @@
   </tr>
 </table>
 
-<sub>多清单 · 稍后再看 · 1–5 星打分 · 多条评价 · 统一列表版式 · 设置分块 · 全矢量图标 · 横竖屏切换不抖动</sub>
+<sub>多清单 · 稍后再看 · 1–5 星打分 · 统一列表版式 · 设置分块 · 全矢量图标 · 横竖屏切换不抖动</sub>
 
 ## 播放链路
 
