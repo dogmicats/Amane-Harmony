@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/hero-banner.png" alt="Amane-Harmony" width="100%">
+  <img src="assets/hero-banner.jpg" alt="Amane-Harmony" width="100%">
 </p>
 
 <p align="center">
@@ -36,7 +36,7 @@
     <td width="33%" valign="top">
       <img src="docs/screenshots/facets.png" width="210"><br>
       <strong>③ 分类体系</strong><br>
-      <sub>Emby 连一个能翻的演员墙都没有——想看某个人的全部作品，得进设置翻 metadata 里的 people 文件夹自己导出来。标签管理更是混乱的鸡肋功能。这里演员、标签、系列、制片厂、导演都是能直接翻的墙，视图多变，保你好看。<br><strong>多类入口 · 优化布局 ·横幅生成· 可隐藏、可收藏</strong></sub>
+      <sub>Emby 连一个能翻的演员墙都没有——想看某个人的全部作品，得进设置翻 metadata 里的 people 文件夹自己导出来。标签管理更是混乱的鸡肋功能。这里演员、标签、系列、制片厂、导演都是能直接翻的墙，视图多变，保你好看。<br><strong>多类入口 · 优化布局 · 横幅生成 · 可隐藏、可收藏</strong></sub>
     </td>
   </tr>
 </table>
@@ -51,13 +51,13 @@
 
 <p><img src="docs/screenshots/cast-age-wide.png" width="100%"></p>
 
-⑦ **出演年龄**　演员行标着出演本片时的岁数，点一下岁数就翻同龄的片，结果还能按女优 / 男优年龄排序。那年，她多大？。
+⑦ **出演年龄**　演员行标着出演本片时的岁数，点一下岁数就翻同龄的片，结果还能按女优 / 男优年龄排序。那年，她多大？
 
 <p><img src="docs/screenshots/prefix.png" width="460"></p>
 
 ⑧ **元数据价值最大化**　同一批元数据能干的活不少：系列按属性筛、制片厂按番号前缀连着翻、演员按年龄和身材当索引。想找的很好找，不知道看什么让抽卡推，看对眼的就一路看下去。<br><strong>系列属性 · 番号前缀 · 一路翻片</strong>
 
-⑨ **打分**　1–5 星，配菜、有意思、对味、反复、社保——JAV也有自己的从夯到拉：一眼看出这部片在你心里什么位置，顺手还能留句锐评。
+⑨ **打分**　1–5 星，配菜、有意思、对味、反复、社保——JAV 也有自己的从夯到拉：一眼看出这部片在你心里什么位置，顺手还能留句锐评。
 
 ## 完善的基础功能
 
