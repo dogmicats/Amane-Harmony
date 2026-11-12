@@ -59,6 +59,18 @@
 
 ⑨ **打分**　1–5 星，配菜、有意思、对味、反复、社保——JAV 也有自己的从夯到拉：一眼看出这部片在你心里什么位置，顺手还能留句锐评。
 
+<p><img src="docs/screenshots/stats-overview.png" width="460"></p>
+
+⑩ **观看统计**　看了那么多，到底看了啥？累计多少小时、连续几天没断、从哪一年开始入坑，一屏说清；还能点开任何一周、任何一段，看当时的数字。<br><strong>概览 · 12 周趋势 · 最热片段 · 偏好榜</strong>
+
+<p><img src="docs/screenshots/tier-board.png" width="460"></p>
+
+⑪ **从夯到拉**　五星打完就烂在库里太可惜。把星级直接排成一张座次图：夯、顶级、人上人、NPC、拉完了，谁在你心里什么位置一眼见底；能按类型 / 时间 / 性别筛，导出成图片存相册。<br><strong>五档座次 · 多维筛选 · 一键导图</strong>
+
+<p><img src="docs/screenshots/search-alias.png" width="460"></p>
+
+⑫ **搜索认俗称**　你嘴里叫「牛头人」，库里写的是「寝取」——以前搜不到，只能当没这片。现在拼音、繁体、日文写法、俗称全认，还会把俗称挂到你库里的正名上；搜空过的词会自动排队等你处理，不用事先维护词表。<br><strong>拼音 · 繁体 · 俗称 · 别名自助</strong>
+
 ## 完善的基础功能
 
 <table>
@@ -71,15 +83,14 @@
   <tr>
     <td align="center" valign="top"><img src="docs/screenshots/detail-stills.png" width="120"><br><strong>剧照</strong><br><sub>瀑布流 · 标记喜爱 · 尽收眼底</sub></td>
     <td align="center" valign="top"><img src="docs/screenshots/filter-sheet.png" width="120"><br><strong>筛选</strong><br><sub>想怎么筛就怎么筛</sub></td>
-    <td align="center" valign="top"><img src="docs/screenshots/search.png" width="120"><br><strong>搜索</strong><br><sub>三档联想 · 别名 · 历史</sub></td>
-    <td align="center" valign="top"><img src="docs/screenshots/player-settings.png" width="120"><br><strong>播放器</strong><br><sub>内置 mpv · 倍速 · 手势 · 小窗</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/search.png" width="120"><br><strong>搜索</strong><br><sub>联想 · 别名 · 拼音繁体</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/player-settings.png" width="120"><br><strong>播放器</strong><br><sub>内置 mpv · 在线字幕 · 手势</sub></td>
   </tr>
 </table>
 
 <sub>演员墙按身材和年龄挑：从娇小到丰满、从人妻到 JK，总有一款对味；想挑奶狗或大叔也不是不行。</sub>
 
-<sub>多清单 · 稍后再看 · 统一列表版式 · 设置分块 · 全矢量图标 · 横竖屏切换不抖动·更多功能，等你探索</sub>
-
+<sub>多清单 · 稍后再看 · 离线缓存 · 8 套主题 · 列数可调 · 首页可编排 · 编辑信息与封面 · 设置分块 · 全矢量图标 · 导出日志</sub>
 
 ## 播放链路
 
