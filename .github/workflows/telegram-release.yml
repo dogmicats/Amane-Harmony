@@ -1,0 +1,75 @@
+name: telegram-release
+
+# Release 发布后把版本信息推到 Telegram 更新频道。
+# 需要两个仓库 Secret：TELEGRAM_BOT_TOKEN、TELEGRAM_CHANNEL_ID（见 README「交流」与 wiki）。
+# 没配 Secret 时自动跳过，不会把 CI 变红。
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to announce (e.g. v2.6.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build message
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TITLE=$(gh release view "$TAG" --repo "$REPO" --json name --jq '.name')
+          URL=$(gh release view "$TAG" --repo "$REPO" --json url --jq '.url')
+          gh release view "$TAG" --repo "$REPO" --json body --jq '.body' > body.md
+
+          # Release 正文里可能有图片和标题记号，贴到 Telegram 会变成噪声，先洗一遍
+          python3 - <<'PY'
+          import re
+          raw = open('body.md', encoding='utf-8').read()
+          raw = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', raw)      # 图片
+          raw = re.sub(r'^#{1,6}\s*', '', raw, flags=re.M)     # 标题井号
+          raw = re.sub(r'\*\*|__', '', raw)                    # 粗体记号
+          raw = re.sub(r'\n{3,}', '\n\n', raw).strip()
+          if len(raw) > 700:
+              raw = raw[:700].rstrip() + '…'
+          with open('msg.txt', 'w', encoding='utf-8') as f:
+              f.write(raw)
+          PY
+
+          {
+            echo "Amane-Harmony ${TITLE}"
+            echo
+            cat msg.txt
+            echo
+            echo "下载与完整说明：${URL}"
+          } > message.txt
+          echo "----- message preview -----"
+          cat message.txt
+
+      - name: Send to Telegram
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TG_TOKEN}" ] || [ -z "${TG_CHAT}" ]; then
+            echo "::notice::TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID 未配置，跳过推送"
+            exit 0
+          fi
+          # 不设 parse_mode：正文里全是 Markdown 记号，转义漏一个就整条发不出去；
+          # 纯文本里 URL 也会自动变成可点的链接。
+          RESP=$(curl -sS -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TG_CHAT}" \
+            --data-urlencode "disable_web_page_preview=false" \
+            --data-urlencode "text@message.txt")
+          echo "$RESP"
+          echo "$RESP" | grep -q '"ok":true' || { echo "::error::Telegram 返回失败"; exit 1; }
