@@ -1,0 +1,7 @@
+在跑服务的那台机器上操作（不是手机上）：
+1. 备份：cp -r data data.bak-$(date +%Y%m%d)
+2. 到仓库目录：git pull
+3. 重建：docker compose -f deploy/compose.yml up -d --build
+   （当初把 compose 改成 image: 的，先把 tag 改成新版本号，再 docker compose pull && up -d）
+4. 回本页点「重新检查」，服务端那行会变成新版本号
+想退回上一版：把 data.bak-<日期> 换回 data，再做一次第 3 步
