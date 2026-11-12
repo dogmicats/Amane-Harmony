@@ -27,9 +27,20 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          TITLE=$(gh release view "$TAG" --repo "$REPO" --json name --jq '.name')
-          URL=$(gh release view "$TAG" --repo "$REPO" --json url --jq '.url')
-          gh release view "$TAG" --repo "$REPO" --json body --jq '.body' > body.md
+          # 手动触发时 tag 可能写成 2.6.0（Release 实际是 v2.6.0），两种都认
+          resolve() { gh release view "$1" --repo "$REPO" --json tagName --jq '.tagName' 2>/dev/null || true; }
+          RESOLVED=$(resolve "$TAG")
+          if [ -z "$RESOLVED" ]; then
+            RESOLVED=$(resolve "v${TAG#v}")
+          fi
+          if [ -z "$RESOLVED" ]; then
+            echo "::error::找不到 tag 为 '$TAG'（或 'v${TAG#v}'）的 Release，检查一下拼写"
+            exit 1
+          fi
+          echo "TAG=$RESOLVED" >> "$GITHUB_ENV"
+          TITLE=$(gh release view "$RESOLVED" --repo "$REPO" --json name --jq '.name')
+          URL=$(gh release view "$RESOLVED" --repo "$REPO" --json url --jq '.url')
+          gh release view "$RESOLVED" --repo "$REPO" --json body --jq '.body' > body.md
 
           # Release 正文里可能有图片和标题记号，贴到 Telegram 会变成噪声，先洗一遍
           python3 - <<'PY'
