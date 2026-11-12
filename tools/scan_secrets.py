@@ -41,6 +41,10 @@ PLACEHOLDER = re.compile(
 
 SKIP_FILES = {"tools/scan_secrets.py"}  # 自身含规则字面量
 SKIP_DIRS = {".git", "__pycache__", "node_modules", "oh_modules", ".hvigor", "build", "dist"}
+
+# 校验和是**故意公开**的：发布清单的 client.sha256、SHA256SUMS、Release 说明都要它。
+# 64 位十六进制必然命中 long_random，按“同行有摘要语义”豁免，否则每次发布 CI 必红。
+DIGEST_CTX = re.compile(r"(?:sha256|sha512|digest|checksum|SHA256SUMS)", re.IGNORECASE)
 BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".so", ".hap", ".abc", ".p12", ".p7b", ".cer"}
 # 原生库 / 编译产物里长字符串常量和邮箱形状是常态，跑这两条必然误报。
 # 二进制改由「有明确语义的规则 + --rules 精确黑名单」全量兜底。
@@ -63,6 +67,8 @@ def scan_text(text: str, label: str) -> list[dict]:
         if PLACEHOLDER.search(line):
             continue
         for name, rx, desc in COMPILED:
+            if name == "long_random" and DIGEST_CTX.search(line):
+                continue
             if rx.search(line):
                 hits.append({"file": label, "line": lineno, "rule": name, "desc": desc,
                              "excerpt": line.strip()[:120]})

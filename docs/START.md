@@ -157,7 +157,7 @@ docker compose -f deploy/compose.example.yml up -d
 | 用户数据服务地址 | `http://你的机器IP:8770` |
 | API Token | 第 2.2 步那个 token |
 
-IP 不知道：Windows 上开 `cmd` 输 `ipconfig`，看「IPv4 地址」，形如 `192.168.3.103`。
+IP 不知道：Windows 上开 `cmd` 输 `ipconfig`，看「IPv4 地址」，一般是 `192.168.` 开头的四个数字。
 
 **4.3** 点「测试连接」，看到版本号就通了；再点「保存并重连」。
 

@@ -78,9 +78,11 @@ jobs:
           fi
           # 不设 parse_mode：正文里全是 Markdown 记号，转义漏一个就整条发不出去；
           # 纯文本里 URL 也会自动变成可点的链接。
+          # 不用「把输入文件直接挂在参数后面」那种写法：它会把参数名和文件名挤成
+          # 一个带 @ 的串，脱敏扫描会当成邮箱。name=$(cat file) 同样会做 URL 编码，语义等价。
           RESP=$(curl -sS -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             --data-urlencode "chat_id=${TG_CHAT}" \
             --data-urlencode "disable_web_page_preview=false" \
-            --data-urlencode "text@message.txt")
+            --data-urlencode "text=$(cat message.txt)")
           echo "$RESP"
           echo "$RESP" | grep -q '"ok":true' || { echo "::error::Telegram 返回失败"; exit 1; }
