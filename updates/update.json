@@ -1,0 +1,17 @@
+{
+  "published_at": "2026-11-12T21:09+08:00",
+  "channel": "public",
+  "release": "v2.5.0",
+  "client": {
+    "version": "2.5.0",
+    "code": 2005000,
+    "url": "https://github.com/dogmicats/Amane-Harmony/releases/download/v2.5.0/Amane-2.5.0-unsigned.hap",
+    "size": 41885731,
+    "sha256": "463da38886ce5285e1bb806a4be60cd37dd06934e7d3e46403194cd1e593fb37",
+    "notes": "Amane-Harmony 2.5.0（v2.5.0）"
+  },
+  "server": {
+    "version": "2.5.0",
+    "notes": "服务端代码版本 2.5.0；升级步骤见 App 内「怎么升级服务端」"
+  }
+}
