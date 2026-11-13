@@ -11,9 +11,9 @@
 ```text
 请按 https://github.com/dogmicats/Amane-Harmony/blob/main/docs/UPGRADE.md 帮我把 amane-user 旁挂服务升级到最新版。
 三步走，每步先告诉我你要执行的命令、等我确认后再执行：
-1) 先判断这台机器当初是怎么装的：deploy/compose.yml 里是 `build:` 还是 `image:`，并读当前 /api/user/ping 的 version 告诉我起点版本；
+1) 先判断这台机器当初是怎么装的：deploy/compose.example.yml 里是 `build:` 还是 `image:`，并读当前 /api/user/ping 的 version 告诉我起点版本；
 2) 备份：把 data/ 整个复制成 data.bak-<日期>（这是我唯一不可再生的东西，不许跳过、不许只备份部分）；
-3) 升级：build 方式执行 git pull 然后 docker compose -f deploy/compose.yml up -d --build；image 方式先把 compose 里的 tag 改成新版本号再 docker compose pull && up -d。
+3) 升级：build 方式执行 git pull 然后 docker compose -f deploy/compose.example.yml up -d --build；image 方式先把 compose 里的 tag 改成新版本号再 docker compose pull && up -d。
 完成后轮询 http://127.0.0.1:8770/api/user/ping 直到 ok=true，把返回的 version 报给我，确认它变了；如果 3 分钟内没起来或 version 没变，用 data.bak-<日期> 还原并把容器重建回去，然后把错误原样贴给我。
 约束：不要动 data/ 里的任何文件、不要改 compose 的结构、不要碰反向代理和 DNS、不要回显任何 token；任何一步失败就停下报告，不要猜、不要重试超过两次。如果你访问不到这台机器，就只把命令给我，我自己执行。
 ```
@@ -31,10 +31,10 @@
 
 | compose 里写的 | 怎么升 | 说明 |
 |---|---|---|
-| `build: ../server`（**默认**） | `git pull` → `docker compose -f deploy/compose.yml up -d --build` | 跟着官方仓库走，永远能升到最新 |
+| `build: ../server`（**默认**） | `git pull` → `docker compose -f deploy/compose.example.yml up -d --build` | 跟着官方仓库走，永远能升到最新 |
 | `image: ghcr.io/dogmicats/amane-user:x.y.z` | 改 tag → `docker compose pull && up -d` | 镜像由打 tag 时自动构建；没推送成功时回退到 build 方式 |
 
-不确定就 `grep -n "build:\|image:" deploy/compose.yml` 看一眼。
+不确定就 `grep -n "build:\|image:" deploy/compose.example.yml` 看一眼。
 
 ## 什么时候不用 Docker
 
@@ -59,10 +59,10 @@ curl -s http://127.0.0.1:8770/api/user/ping
 ## 出问题怎么退回去
 
 ```bash
-docker compose -f deploy/compose.yml down
+docker compose -f deploy/compose.example.yml down
 mv data data.failed-$(date +%Y%m%d)
 mv data.bak-20261112 data          # 换成你备份的那个名字
-docker compose -f deploy/compose.yml up -d --build
+docker compose -f deploy/compose.example.yml up -d --build
 ```
 
 `data/` 里是收藏、历史、评分、你改过的片名 —— **换回去就回到升级前**，影片文件和库本身不受影响。
