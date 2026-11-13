@@ -6,6 +6,7 @@ import { util } from '@kit.ArkTS';
 import { httpGet, httpPost } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
+import { rateColor, rateLabel, StarPick } from '../../common/RateStyle';
 import { DetailParams, ItemDetail } from '../../common/Types';
 import { posterItem } from '../../common/Util';
 import { PosterCard } from '../../view/PosterCard';
@@ -121,6 +122,7 @@ struct ActorDetailPage {
         `${Store.I.user}/api/user/actors/${this.actorId}`, Store.I.token);
       this.data = safeActorDetail(JSON.parse(text) as ActorDetail);
       this.fav = this.data.isFavorite;
+      this.myStars = this.data.myRating === undefined ? 0 : this.data.myRating;
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] actor detail: ${e.code} ${e.message}`);
@@ -317,6 +319,63 @@ struct ActorDetailPage {
     }
     this.favBusy = false;
     this.clearToast();
+  }
+
+  /** 我给这位演员打的星（0 = 没打）。分类评分走 facets 的通用端点。 */
+  @State myStars: number = 0;
+  @State starBusy: boolean = false;
+
+  private async rate(stars: number): Promise<void> {
+    if (this.actorId <= 0 || this.starBusy) {
+      return;
+    }
+    const want: number = this.myStars === stars ? 0 : stars;
+    const before: number = this.myStars;
+    this.myStars = want;
+    this.starBusy = true;
+    try {
+      await httpPost(`${Store.I.user}/api/user/facets/actor/${this.actorId}/rating`,
+        Store.I.token, JSON.stringify({ stars: want }));
+      this.toast = want === 0 ? '已清除评分' : `已打分：${want} 星`;
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error(`[amane] actor rating: ${e.code} ${e.message}`);
+      this.myStars = before;
+      this.toast = e.code === 404 ? '服务端还不支持演员评分（需 1.3.54+）' : '评分保存失败';
+    }
+    this.starBusy = false;
+    this.clearToast();
+  }
+
+  @Builder
+  RateRow() {
+    // 纵向排：横排时「我的评分 + 五星 + 档位标签」会超过卡片宽度，
+    // 卡片就被撑出屏幕边缘（用户报的那个越界）。
+    Column({ space: 4 }) {
+      Row({ space: 8 }) {
+        Text('我的评分')
+          .fontSize(12)
+          .fontColor(Theme.TEXT_FAINT)
+        StarPick({
+          score: this.myStars,
+          starSize: 20,
+          onPick: (n: number) => {
+            this.rate(n);
+          }
+        })
+      }
+      .width('100%')
+
+      if (this.myStars > 0) {
+        Text(rateLabel(this.myStars))
+          .fontSize(11)
+          .fontColor(rateColor(this.myStars))
+          .width('100%')
+      }
+    }
+    .alignItems(HorizontalAlign.Start)
+    .width('100%')
+    .padding({ top: 2, bottom: 6 })
   }
 
   private clearToast(): void {
@@ -635,41 +694,72 @@ struct ActorDetailPage {
           colors: [['#00000000', 0.35], ['#990B0B0F', 0.82], ['#0B0B0F', 1.0]]
         })
         .hitTestBehavior(HitTestMode.None)
-      Column({ space: 5 }) {
+      Column({ space: 7 }) {
+        // 一小段强调色：这块面板是「压在照片上的一张卡」，给它一个视觉起点，
+        // 不然彩色大图下面半透明黑块会显得脏。
+        Row() {
+        }
+        .width(26)
+        .height(3)
+        .borderRadius(2)
+        .backgroundColor(Theme.ACCENT)
+        .margin({ bottom: 1 })
         Text(this.data.name.length > 0 ? this.data.name : this.pendingName)
-          .fontSize(25)
+          .fontSize(24)
           .fontWeight(FontWeight.Bold)
+          .letterSpacing(0.6)
           .fontColor('#FFFFFF')
           .maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
         if (this.data.tagline.length > 0) {
           Text(this.data.tagline)
-            .fontSize(12)
-            .fontColor('#D3D3DC')
+            .fontSize(11)
+            .letterSpacing(0.2)
+            .fontColor('#C9C9D8')
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .width('100%')
         }
-        Text(`${this.data.count} 部作品` + (this.data.gender === 'female' ? ' · 女优' : ''))
-          .fontSize(11)
-          .fontColor('#B9B9C4')
-          .width('100%')
-        if (this.data.avatars.length > 0) {
-          Text(`${this.data.avatars.length} 张写真 · 下面可看可加`)
+        // 三个数字做成小胶囊：以前是三行灰字，挤在一起分不清哪行是重点
+        Flex({ wrap: FlexWrap.Wrap }) {
+          Text(`${this.data.count} 部作品`)
             .fontSize(10)
-            .fontColor('#9E9EAC')
-            .width('100%')
+            .fontColor('#EDEDF5')
+            .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+            .backgroundColor('#26FFFFFF')
+            .borderRadius(10)
+            .margin({ right: 6, top: 2 })
+          if (this.data.gender === 'female') {
+            Text('女优')
+              .fontSize(10)
+              .fontColor('#EDEDF5')
+              .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+              .backgroundColor('#26FFFFFF')
+              .borderRadius(10)
+              .margin({ right: 6, top: 2 })
+          }
+          if (this.data.avatars.length > 0) {
+            Text(`${this.data.avatars.length} 张写真`)
+              .fontSize(10)
+              .fontColor('#EDEDF5')
+              .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+              .backgroundColor('#26FFFFFF')
+              .borderRadius(10)
+              .margin({ top: 2 })
+          }
         }
+        .width('100%')
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
-      .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+      .padding({ left: 15, right: 15, top: 13, bottom: 14 })
       .margin({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 16 })
-      .borderRadius(16)
-      .backgroundColor('#330B0B0F')
-      .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
-      .border({ width: 0.5, color: '#26FFFFFF' })
+      .borderRadius(18)
+      .backgroundColor('#B3101018')
+      .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+      .border({ width: 0.5, color: '#33FFFFFF' })
+      .shadow({ radius: 18, color: '#66000000', offsetY: 6 })
       .hitTestBehavior(HitTestMode.None)
     }
     .width('100%')
@@ -741,6 +831,7 @@ struct ActorDetailPage {
       Row({ space: 10 }) {
         this.InfoCell('三围 B/W/H', this.measures())
         this.InfoCell('出生地', this.data.birthplace)
+        this.RateRow()
         this.InfoCell('资料更新', this.data.updated_at.length >= 10 ? this.data.updated_at.substring(0, 10) : '')
       }
       .width('100%')

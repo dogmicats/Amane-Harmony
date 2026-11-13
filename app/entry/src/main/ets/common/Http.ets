@@ -1,6 +1,6 @@
 import { http } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { cachePut, cacheRead, cacheReadStale } from './PageCache';
+import { cacheClear, cachePut, cacheRead, cacheReadStale } from './PageCache';
 
 /** 一次 HTTP 调用的结果。服务端约定是 JSON，失败时抛 HttpError。 */
 export class HttpError extends Error {
@@ -12,7 +12,8 @@ export class HttpError extends Error {
   }
 }
 
-async function call(url: string, method: http.RequestMethod, token: string, body: string): Promise<string> {
+async function call(url: string, method: http.RequestMethod, token: string, body: string,
+  timeoutMs: number = 25000, noCache: boolean = false): Promise<string> {
   const request = http.createHttp();
   try {
     const header: Record<string, string> = {};
@@ -20,11 +21,16 @@ async function call(url: string, method: http.RequestMethod, token: string, body
     if (token.length > 0) {
       header['Authorization'] = `Bearer ${token}`;
     }
+    // 清单类请求显式拒绝缓存：GitHub raw / CDN / 反代都可能给一份旧的
+    if (noCache) {
+      header['Cache-Control'] = 'no-cache';
+      header['Pragma'] = 'no-cache';
+    }
     const options: http.HttpRequestOptions = {
       method: method,
       header: header,
-      connectTimeout: 8000,
-      readTimeout: 25000,
+      connectTimeout: noCache ? 5000 : 8000,
+      readTimeout: timeoutMs,
       usingCache: false,
       expectDataType: http.HttpDataType.STRING
     };
@@ -53,6 +59,19 @@ export async function httpGet(url: string, token: string): Promise<string> {
 }
 
 /**
+ * 「检查更新」专用：每次都取服务器当前那份清单，**不落地、不缓存**。
+ *
+ * 客户端 App 里根本没有清单，只有一个固定地址；实时性全靠这次现取。
+ * 三重保险：`usingCache:false`（call 里已有）+ `Cache-Control: no-cache`
+ * + 一个时间戳 query（穿透 GitHub raw / jsDelivr / 反代的 CDN 缓存）。
+ * 多源串行回退时把连不通的等待压到 5 秒，避免一个源挂了拖死整页。
+ */
+export async function httpGetFresh(url: string, token: string): Promise<string> {
+  const sep: string = url.indexOf('?') >= 0 ? '&' : '?';
+  return call(`${url}${sep}_=${Date.now()}`, http.RequestMethod.GET, token, '', 12000, true);
+}
+
+/**
  * 带页面缓存的 GET（用户第 9 条）。
  *
  * 命中未过期缓存就直接返回，**不发请求**——列表页/详情页第二次进来时
@@ -77,8 +96,27 @@ export function cachedBody(url: string): string | undefined {
   return cacheReadStale(url);
 }
 
-export async function httpPost(url: string, token: string, body: string): Promise<string> {
-  return call(url, http.RequestMethod.POST, token, body);
+/**
+ * 清空整份 GET 缓存。**只在「改数据」之后调用**（改元数据 / 换封面 / 换分类封面）。
+ *
+ * 为什么需要它：首页、列表页都用 `httpGetCached` 拿数，TTL 5 分钟；
+ * 服务端虽然已经按新数据返回，客户端却压根没去请求 —— 表现就是
+ * 「详情页封面换了，回首页还是旧图」，等 5 分钟才自己好。
+ *
+ * 播放进度这类高频 POST 不要调它，否则每次上报都会把首页缓存抖掉。
+ */
+export function dropPageCache(): void {
+  try {
+    cacheClear();
+  } catch (err) {
+    const e = err as BusinessError;
+    console.info(`[amane] drop cache: ${e.code} ${e.message}`);
+  }
+}
+
+export async function httpPost(url: string, token: string, body: string,
+  timeoutMs: number = 25000): Promise<string> {
+  return call(url, http.RequestMethod.POST, token, body, timeoutMs);
 }
 
 export async function httpPut(url: string, token: string, body: string): Promise<string> {

@@ -1,6 +1,7 @@
 import { PosterRef } from '../common/Types';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { Personalize } from '../common/Personalize';
 
 /**
  * 收藏页里「演员 / 导演 / 标签 / 系列」共用的一行数据。
@@ -48,6 +49,7 @@ const POSTER_GAP: number = 7;
  */
 @Component
 export struct FavoriteEntityView {
+  @StorageProp('amaneCols') posterCols: number = 3;
   @Prop @Watch('onItemsChange') items: FavEntity[] = [];
   @Prop grid: boolean = false;
   onOpen: (e: FavEntity) => void = (e: FavEntity) => {};
@@ -242,7 +244,10 @@ export struct FavoriteEntityView {
           }
         }, (e: FavEntity) => `g-${e.kind}-${e.id}`)
       }
-      .columnsTemplate('1fr 1fr 1fr')
+      .columnsTemplate(Personalize.colsTemplate(this.posterCols))
+      .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
+        Personalize.zoom(event.scale);
+      }))
       .columnsGap(10)
       .rowsGap(14)
       .width('100%')

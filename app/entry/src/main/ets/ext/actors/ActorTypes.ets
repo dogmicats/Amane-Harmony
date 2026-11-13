@@ -23,6 +23,8 @@ export interface ActorItem {
   avatar: string;
   /** 是否已收藏（存在旁挂 user.db，上游 actors 表没有收藏列）。 */
   isFavorite: boolean;
+  /** 我给这位演员打的星（0 = 没打）。 */
+  myRating?: number;
   /** 最近几部作品的海报（只有 `?favorite=true` 会下发；收藏页横版行用）。 */
   posters: PosterRef[];
 }
@@ -47,6 +49,8 @@ export interface ActorDetail {
   updated_at: string;
   /** 是否已收藏（旁挂 user.db）。 */
   isFavorite: boolean;
+  /** 我给这位演员打的星（0 = 没打）。 */
+  myRating?: number;
 }
 
 export interface ActorMediaItem {
@@ -183,6 +187,7 @@ export function safeActorDetail(raw: ActorDetail): ActorDetail {
   d.waist = Math.trunc(n(raw.waist));
   d.hip = Math.trunc(n(raw.hip));
   d.avatars = sl(raw.avatars);
+  d.myRating = raw.myRating === undefined ? 0 : Math.trunc(n(raw.myRating));
   d.updated_at = s(raw.updated_at);
   d.isFavorite = raw.isFavorite === true;
   return d;

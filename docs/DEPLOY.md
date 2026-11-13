@@ -33,7 +33,7 @@ AI 助手能帮你：读懂环境变量表、判断该走 Docker 还是纯 Pytho
 | `DATA_DIR` | `/data` | `user.db`、图片缓存、字幕缓存。 |
 | `PORT` | `8770` | 监听端口。 |
 | `MEDIA_ROOT` | — | compose 挂载卷的宿主路径占位（挂到 `/mnt/media`），**不参与字幕路径解析**。 |
-| `MEDIA_PATH_MAP` | 空 | `容器内路径=目标机路径`，逗号分隔，如 `/media2=/mnt/media2,/media=/mnt/media`。**必须最长前缀匹配**，构建器已按前缀长度排序。 |
+| `MEDIA_PATH_MAP` | 空 | `容器内路径=目标机路径`，逗号分隔，如 `/media2=/mnt/media`（右侧必须是容器里实际挂载到的路径；多个盘就各自加卷再逗号追加）。**必须最长前缀匹配**，构建器已按前缀长度排序。 |
 | `IMG_HOST_ALLOW_EXTRA` | 空 | 追加允许代理的图片主机。 |
 | `SUBTITLE_CACHE` | `{DATA_DIR}/subtitles` | 字幕缓存目录。 |
 | `PUBLIC_AMANE_URL` | 空 | 写进图片 URL 的对外地址，可选。 |
@@ -71,7 +71,7 @@ docker compose -f deploy/compose.example.yml logs -f
 
 模板用同一个 docker network + 服务名互访，**不用 `network_mode: host`**（该模式在 Docker Desktop for Windows / macOS 上不生效）。Amane 的 data 与媒体目录以 `:ro` 挂载。
 
-也可以用 GHCR 上的预构建镜像：`image: ghcr.io/dogmicats/amane-user:2.5.0`，把 compose 里的 `build:` 换成 `image:` 即可。镜像由 `publish-image.yml` 在打 tag 时构建。
+也可以用 GHCR 上的预构建镜像：`image: ghcr.io/dogmicats/amane-user:2.6.0`，把 compose 里的 `build:` 换成 `image:` 即可。镜像由 `publish-image.yml` 在打 tag 时构建。
 
 ## 方案 B：纯 Python（不用 Docker）
 
@@ -99,7 +99,7 @@ python server\server.py
 
 ```sh
 curl http://127.0.0.1:8770/api/user/ping
-# {"ok":true,"version":"2.5.0",...}
+# {"ok":true,"version":"2.6.0",...}
 ```
 
 ## 外网反代（可选）

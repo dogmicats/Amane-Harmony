@@ -3,6 +3,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet, httpPost } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
+import { Personalize } from '../../common/Personalize';
 import { BuildConfig } from '../../common/BuildConfig';
 import { ChipOption, SortOption } from '../../common/BrowseOptions';
 import { MergeBar } from '../merge/MergeBar';
@@ -37,6 +38,8 @@ const PAGE_SIZE: number = 40;
  */
 @Component
 export struct FacetsTab {
+  /** 海报列数：设置页与双指捏合共用同一个值（2.5.2）。 */
+  @StorageProp('amaneCols') posterCols: number = 3;
   @Prop @Watch('onRefresh') refreshKey: number = 0;
   @State items: FacetItem[] = [];
   @State total: number = 0;
@@ -49,6 +52,8 @@ export struct FacetsTab {
   @State sortBy: string = 'count';
   @State order: string = 'desc';
   @State onlyFav: boolean = false;
+  /** 我的评分筛选：''=不限 / none=未给星 / 1..5 */
+  @State rating: string = '';
   /** 随机排序的 seed：翻页带回去，顺序才不会每页重摇。 */
   @State seed: number = 0;
   /** 是否把隐藏的标签也列出来（默认不列）。 */
@@ -60,6 +65,8 @@ export struct FacetsTab {
   @State picked: FacetPick[] = [];
   @State showSort: boolean = false;
   @State showFilter: boolean = false;
+  /** logo 取不到的厂牌 id：退回首字圆圈，别留一块空白（服务端解不了 BMP 型 ico）。 */
+  @State logoFailed: number[] = [];
   private tipTimer: number = -1;
   private kinds: ChipOption[] = [
     { key: 'tag', label: '标签' },
@@ -72,6 +79,18 @@ export struct FacetsTab {
     { key: '', label: '不限' },
     { key: '1', label: '♥ 只看收藏' }
   ];
+  /** 我的评分：没打分的排在最前，用户要「找出想打分但忘了打的」。 */
+  private ratingOptions(): ChipOption[] {
+    return [
+      { key: '', label: '不限' },
+      { key: 'none', label: '未给星' },
+      { key: '5', label: '★5' },
+      { key: '4', label: '★4' },
+      { key: '3', label: '★3' },
+      { key: '2', label: '★2' },
+      { key: '1', label: '★1' }
+    ];
+  }
 
   aboutToAppear(): void {
     this.reload();
@@ -121,7 +140,8 @@ export struct FacetsTab {
     }
     return [
       { key: 'count', label: '作品数', def: 'desc' },
-      { key: 'name', label: '名称', def: 'asc' }
+      { key: 'name', label: '名称', def: 'asc' },
+      { key: 'my_rating', label: '我的评分', def: 'desc' }
     ];
   }
 
@@ -140,6 +160,9 @@ export struct FacetsTab {
       n++;
     }
     if (this.includeHidden) {
+      n++;
+    }
+    if (this.rating.length > 0) {
       n++;
     }
     return n;
@@ -161,6 +184,9 @@ export struct FacetsTab {
     }
     if (this.includeHidden) {
       parts.push('include_hidden=true');
+    }
+    if (this.rating.length > 0) {
+      parts.push(`rating=${this.rating}`);
     }
     if (this.sortBy === 'random' && this.seed > 0) {
       parts.push(`seed=${this.seed}`);
@@ -280,7 +306,9 @@ export struct FacetsTab {
   }
 
   private open(f: FacetItem): void {
-    const params: FacetParams = { kind: this.kind, id: f.id, name: f.name };
+    // 自建分类（覆盖层里新起的系列 / 标签）在库里没有 id：仍进分类影片墙，
+    // 由服务端按**名字**把库里 + 覆盖层里属于它的片一起取出来（2.5.5.4）。
+    const params: FacetParams = { kind: this.kind, id: f.virtual === true ? 0 : f.id, name: f.name };
     router.pushUrl({ url: 'ext/facets/FacetPage', params: params });
   }
 
@@ -393,7 +421,7 @@ export struct FacetsTab {
         posterItems: it.posterItems,
         topTags: it.topTags,
         isFavorite: fav, lastRelease: it.lastRelease, lastAdded: it.lastAdded,
-        isHidden: it.isHidden, prefixes: it.prefixes
+        isHidden: it.isHidden, prefixes: it.prefixes, logo: it.logo
       });
     }
     this.items = next;
@@ -408,7 +436,15 @@ export struct FacetsTab {
     Stack({ alignContent: Alignment.TopEnd }) {
       Stack({ alignContent: Alignment.BottomStart }) {
         Row({ space: 1 }) {
-          if (f.posters.length === 0) {
+          // 用户换过的封面（含 GIF）优先：列表里也要跟着变，不然只有点进去才看得到
+          if (f.cover !== undefined && f.cover !== null && f.cover.length > 0) {
+            Image(Store.I.img(f.cover))
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Cover)
+              .backgroundColor(Theme.CARD_HI)
+              .alt($r('app.media.placeholder'))
+          } else if (f.posters.length === 0) {
             Column() {
               Text(this.kind === 'series' ? '系' : '#')
                 .fontSize(18)
@@ -509,7 +545,15 @@ export struct FacetsTab {
     Stack({ alignContent: Alignment.TopEnd }) {
       Stack({ alignContent: Alignment.BottomStart }) {
         Row() {
-          if (f.posters.length === 0) {
+          // 同 Cell：换过的封面优先（工厂 / 导演这条长条版式也要一致）
+          if (f.cover !== undefined && f.cover !== null && f.cover.length > 0) {
+            Image(Store.I.img(f.cover))
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Cover)
+              .backgroundColor(Theme.CARD_HI)
+              .alt($r('app.media.placeholder'))
+          } else if (f.posters.length === 0) {
             Column() {
               Text(this.kind === 'director' ? '导' : '厂')
                 .fontSize(20)
@@ -543,6 +587,35 @@ export struct FacetsTab {
           })
 
         Column({ space: 2 }) {
+          if (this.kind === 'studio') {
+            // 厂牌头像 = 和演员头像一样的圆圈。以前是一块白色圆角矩形，
+            // 图 404 / 格式解不了时就是一整块白板（用户报的「方块里没内容」）。
+            // 现在底子永远是首字圆圈，取到真 logo 才盖上去，取不到也有字。
+            Stack() {
+              Text(this.studioInitial(f))
+                .fontSize(15)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Theme.ACCENT)
+              if (f.logo.length > 0 && this.logoFailed.indexOf(f.id) < 0) {
+                Image(`${Store.I.user}${f.logo}?token=${encodeURIComponent(Store.I.token)}`)
+                  .width(44)
+                  .height(44)
+                  .objectFit(ImageFit.Contain)
+                  .backgroundColor('#FFFFFF')
+                  .borderRadius(22)
+                  .onError(() => {
+                    this.markLogoFailed(f.id);
+                  })
+              }
+            }
+            .width(44)
+            .height(44)
+            .borderRadius(22)
+            .clip(true)
+            .backgroundColor(Theme.CARD_HI)
+            .border({ width: 0.5, color: '#33FFFFFF' })
+            .margin({ bottom: 5 })
+          }
           Text(f.name.length > 0 ? f.name : '未命名')
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
@@ -613,6 +686,20 @@ export struct FacetsTab {
       parts.push('已隐藏');
     }
     return parts.join(' · ');
+  }
+
+  /** 厂牌圆圈里的那个字：取名字首字，空名字给「厂」。 */
+  private studioInitial(f: FacetItem): string {
+    const name: string = f.name.length > 0 ? f.name : '厂';
+    return name.substring(0, 1);
+  }
+
+  /** 记下取图失败的 id：之后这条只画首字圆圈，不再反复请求。 */
+  private markLogoFailed(id: number): void {
+    if (this.logoFailed.indexOf(id) >= 0) {
+      return;
+    }
+    this.logoFailed = this.logoFailed.concat([id]);
   }
 
   @Builder
@@ -710,6 +797,7 @@ export struct FacetsTab {
       onAction: () => {
         this.onlyFav = false;
         this.includeHidden = false;
+        this.rating = '';
         this.reload();
       },
       onConfirm: () => {
@@ -730,6 +818,16 @@ export struct FacetsTab {
           }
         })
       }
+      ChipGroup({
+        title: '我的评分', options: this.ratingOptions(), current: this.rating,
+        onPick: (key: string) => {
+          if (this.rating === key) {
+            return;
+          }
+          this.rating = key;
+          this.reload();
+        }
+      })
       if (this.kind === 'tag') {
         ChipGroup({
           title: '隐藏', options: this.hiddenOptions(), current: this.includeHidden ? '1' : '',
@@ -838,8 +936,9 @@ export struct FacetsTab {
                   this.Cell(f)
                 }
               }
-            }, (f: FacetItem) => `facet-${this.kind}-${f.id}-${f.isFavorite ? 1 : 0}` +
-              `-${this.selecting ? 1 : 0}${this.isPicked(f.id) ? 1 : 0}`)
+            }, (f: FacetItem) => `facet-${this.kind}-${f.id}-${f.name}-${f.isFavorite ? 1 : 0}` +
+              `-${this.selecting ? 1 : 0}${this.isPicked(f.id) ? 1 : 0}` +
+              `${f.cover === undefined || f.cover === null || f.cover.length === 0 ? 0 : 1}`)
 
             if (this.items.length < this.total) {
               GridItem() {
@@ -864,7 +963,13 @@ export struct FacetsTab {
               }
             }
           }
-          .columnsTemplate(this.isLane() ? '1fr' : '1fr 1fr 1fr')
+          .columnsTemplate(this.isLane() ? '1fr' : Personalize.colsTemplate(this.posterCols))
+          .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
+            // 「一行一条长图」的版式本来就是一列，捏合没意义 —— 别改了列数又看不出变化
+            if (!this.isLane()) {
+              Personalize.zoom(event.scale);
+            }
+          }))
           .columnsGap(9)
           .rowsGap(9)
           // 平时底部留 84 给悬浮胶囊；多选时操作条自己让出了胶囊的位置，这里就收回

@@ -31,7 +31,20 @@ export const SORT_OPTIONS: SortOption[] = [
   { key: 'number', label: '番号', def: 'asc' },
   { key: 'title', label: '标题', def: 'asc' },
   { key: 'runtime', label: '时长', def: 'desc' },
+  // 2.5.7.7：按文件个数排 —— 多版本的排前面，方便从重复资源里挑着删
+  { key: 'versions', label: '版本数', def: 'desc' },
   { key: 'random', label: '随机', def: 'desc' }
+];
+
+/**
+ * 多版本（2.5.7.7）：browse 的 `multi` 参数。
+ * 口径 = 该片在库里文件管理看到的文件条数（服务端现算 media_files，不缓存，
+ * 所以删掉一个版本 / 新入库一个文件后，刷新列表就变）。
+ */
+export const VERSION_OPTIONS: ChipOption[] = [
+  { key: '', label: '全部' },
+  { key: '1', label: '多版本' },
+  { key: '0', label: '单文件' }
 ];
 
 export const AGE_BANDS: ChipOption[] = [

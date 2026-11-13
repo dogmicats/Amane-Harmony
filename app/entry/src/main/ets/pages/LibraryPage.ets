@@ -9,6 +9,8 @@ import { BrowseGrid } from '../view/BrowseGrid';
 struct LibraryPage {
   @State title: string = '媒体库';
   @State libraryId: number = 0;
+  /** 只看某个清单的片（2.5.5.25，从清单页 / 详情页跳进来）。 */
+  @State collectionId: number = 0;
   /** 详情页点演员「N 岁」进来时预置的年龄分桶 / 排序 / 性别。 */
   @State ageBand: string = '';
   @State sort: string = '';
@@ -19,6 +21,7 @@ struct LibraryPage {
     const params = router.getParams() as BrowseParams;
     if (params !== undefined && params !== null) {
       this.libraryId = params.libraryId === undefined ? 0 : params.libraryId;
+      this.collectionId = params.collectionId === undefined ? 0 : params.collectionId;
       const t: string = params.title === undefined ? '' : params.title;
       this.title = t.length > 0 ? t : '媒体库';
       this.ageBand = params.ageBand === undefined ? '' : params.ageBand;
@@ -56,6 +59,7 @@ struct LibraryPage {
       if (this.ready) {
         BrowseGrid({
           libraryId: this.libraryId,
+          collectionId: this.collectionId,
           refreshKey: 0,
           initialAgeBand: this.ageBand,
           initialSort: this.sort,

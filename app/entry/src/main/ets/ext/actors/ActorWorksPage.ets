@@ -3,6 +3,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
+import { Personalize } from '../../common/Personalize';
 import { DetailParams, MediaItem } from '../../common/Types';
 import { posterItem } from '../../common/Util';
 import { ChipOption, MYRATING_OPTIONS, SortOption, sortDefOf } from '../../common/BrowseOptions';
@@ -67,6 +68,8 @@ function band(key: string): number[] {
 @Entry
 @Component
 struct ActorWorksPage {
+  /** 海报列数：设置页与双指捏合共用同一个值（2.5.2）。 */
+  @StorageProp('amaneCols') posterCols: number = 3;
   @State works: CastFindItem[] = [];
   @State total: number = 0;
   @State loading: boolean = true;
@@ -684,7 +687,10 @@ struct ActorWorksPage {
               }
             }
           }
-          .columnsTemplate('1fr 1fr 1fr')
+          .columnsTemplate(Personalize.colsTemplate(this.posterCols))
+          .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
+            Personalize.zoom(event.scale);
+          }))
           .columnsGap(8)
           .rowsGap(14)
           .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })

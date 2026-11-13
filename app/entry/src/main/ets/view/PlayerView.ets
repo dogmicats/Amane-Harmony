@@ -7,10 +7,11 @@ import { savePickLocal } from '../common/FrameStore';
 import { Gallery } from '../common/Gallery';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { AppLog } from '../common/AppLog';
 import { DetailParams, PlayerParams } from '../common/Types';
 import { clock } from '../common/Util';
 import { common } from '@kit.AbilityKit';
-import { SubtitleClient, SubtitleItem, LocalCandidate } from '../common/Subtitles';
+import { SubtitleClient, SubtitleItem, LocalCandidate, SubtitleChoice } from '../common/Subtitles';
 import { PlayerPrefs, PlayerTuning } from '../common/PlayerPrefs';
 import { RATE_LABELS, rateFilm } from '../ext/ratings/RatingStars';
 import { PipHub } from '../common/PipHub';
@@ -175,6 +176,18 @@ export struct PlayerView {
     this.onModeChange(this.viewMode);
   }
 
+  /**
+   * 播放中保持屏幕常亮（用户 2.6.1.4：「播放状态下会自动息屏，没有保护」）。
+   *
+   * 系统按「休眠时间」息屏，片子放着看的时候屏幕一灭，画面和声音一起断。
+   * 走窗口级 `setWindowKeepScreenOn`，不申请 `RUNNING_LOCK` 权限，也不用另管生命周期。
+   * 只在**真正播放**时亮：暂停往往意味着人走开了，这时还亮着纯耗电（碰一下屏幕就回来）。
+   */
+  @Monitor('playing')
+  private onPlayingChange(): void {
+    this.applyKeepScreenOn();
+  }
+
   private player: Player | undefined = undefined;
   private metaId: number = 0;
   private metaNumber: string = '';
@@ -202,6 +215,14 @@ export struct PlayerView {
   private panBase: number = 0;
   private panStartPos: number = 0;
   private win: window.Window | undefined = undefined;
+  /** 上一次已知的窗口横竖：只在跨过横竖分界时重绑 surface，旋转中途的连续尺寸变化不重复重建。 */
+  private lastWinPortrait: boolean = false;
+  /** 方向意图设定时刻：只在设定后的短窗口内补发方向请求，避免长期与系统拉锯。 */
+  private intentAt: number = 0;
+  /** 上一次补发方向请求的时刻（节流用）。 */
+  private lastNudgeAt: number = 0;
+  /** 当前是否已向系统要了「屏幕常亮」：避免同一状态重复调用。 */
+  private keepOn: boolean = false;
   /**
    * 方向意图 —— **用户意图优先，不是重力优先**。
    *
@@ -317,6 +338,8 @@ export struct PlayerView {
   private sizeTimer: number = -1;
   /** XComponent 的「代」：换一代 = 重建组件 = 一块新 surface（形态切换时用）。 */
   @Local surfaceGen: number = 0;
+  /** 上次重建 surface 的时刻（节流用，避免自激重建）。 */
+  private lastRebindAt: number = 0;
   /** 重力自动切换：关掉后播放页永远横屏全屏。 */
   private autorotate: boolean = true;
   @Local detailPlot: string = '';
@@ -343,6 +366,13 @@ export struct PlayerView {
   private rateBusy: boolean = false;
   @Local showPanel: boolean = false;
   @Local panelKind: string = 'subs';
+  /**
+   * 面板打开时刻（毫秒）。打开面板的那一次点击，**抬手**会落到刚插进来的第一行上，
+   * 直接触发 pickSub/pickAudio → 面板刚开就关，观感就是「点字幕闪退」。
+   * PlayerPage（竖屏/独立播放页）2.5.5.7 就加了这道 350ms 守卫，横屏这个 PlayerView 一直漏着
+   * （2.6.1.5 补上，用户报的「横屏字幕又闪退」就是它）。
+   */
+  private panelOpenedAt: number = 0;
   @Local subLabels: string[] = [];
   @Local audioLabels: string[] = [];
   @Local hint: string = '';
@@ -352,6 +382,8 @@ export struct PlayerView {
   @Local currentSubId: string = '';
   @Local currentSubIndex: number = -1;
   @Local subChosen: boolean = false;
+  /** 已经尝试过「恢复上次选的字幕」。 */
+  private subRestored: boolean = false;
   @Local currentLocalName: string = '';
   @Local subUrlInput: string = '';
   @Local subBusy: boolean = false;
@@ -486,6 +518,9 @@ export struct PlayerView {
       const props: window.WindowProperties = win.getWindowProperties();
       this.vpW = px2vp(props.windowRect.width);
       this.vpH = px2vp(props.windowRect.height);
+      this.lastWinPortrait = this.vpH >= this.vpW;
+      // 窗口到手时可能已经在播（playing 先变、win 后到），补一次常亮申请
+      this.applyKeepScreenOn();
       // 只有在「整页播放器」或「已经是全屏形态」时才没收系统栏、才允许转屏。
       // 嵌在详情页顶部时（portrait）动窗口系统栏会把整个详情页搞成全屏，页面就残了。
       if (this.pageHost && !this.autorotate) {
@@ -508,9 +543,26 @@ export struct PlayerView {
         this.vpW = px2vp(size.width);
         this.vpH = px2vp(size.height);
         const isP: boolean = size.height > size.width;
+        const crossed: boolean = isP !== this.lastWinPortrait;
         this.devicePortrait = isP;
+        this.lastWinPortrait = isP;
+        if (this.pageHost && this.orientIntent === 'auto') {
+          // 整页播放器形态由自己定（横屏），窗口尺寸变化只用于重排，不参与判定，
+          // 否则会和 applyWindowMode 里的方向设置互相触发。
+          return;
+        }
         // 用户锁过方向就完全不听重力（按了全屏就横着、按了返回就竖着）
         if (this.orientIntent !== 'auto') {
+          // ★ 但「不听重力」不等于「不管窗口真的转了」★
+          // 锁着横屏时窗口从竖转到横，surface 还按竖屏的 viewport 渲染 ——
+          // 表现就是「竖屏点全屏后画面乱飘」（2.6.1 反馈第 1 条）。
+          // 形态归意图管，尺寸变了该重建就重建；只在跨横竖分界时做一次。
+          if (crossed) {
+            AppLog.mark('shape', `locked ${this.orientIntent}: window ${isP ? 'P' : 'L'} → rebind`);
+            this.rebindSurface(true);
+          }
+          // 意图是横的、窗口还竖着（或反之）→ 补一次方向请求（自带节流与时间窗）
+          this.nudgeOrientation(isP);
           return;
         }
         if (!this.autorotate) {
@@ -526,6 +578,7 @@ export struct PlayerView {
         }
         // 横竖屏切换后重绑 surface 并重绘一帧，否则画面会按旧 viewport 拉伸/乱飞
         if (oldMode !== this.viewMode) {
+          AppLog.mark('shape', `viewMode ${oldMode} -> ${this.viewMode} (win ${Math.round(size.width)}x${Math.round(size.height)})`);
           this.applyWindowMode();
           this.rebindSurface(true);
           // 第一次「从横屏转回竖屏」时提示打分（第 3 条）。
@@ -570,13 +623,90 @@ export struct PlayerView {
           ? window.Orientation.LANDSCAPE
           : window.Orientation.AUTO_ROTATION);
       } else if (this.pageHost) {
-        w.setPreferredOrientation(window.Orientation.PORTRAIT);
+        // 整页播放器不在这里碰方向：进页/退页由 PlayerPage.enterFullscreen /
+        // exitFullscreen 负责。这里一旦插手，就会跟 windowSizeChange 拉锯（横竖来回切、
+        // 每秒重建 surface），或者在手势返回后把详情页窗口又掰回横屏。
       } else {
         w.setPreferredOrientation(window.Orientation.AUTO_ROTATION);
       }
     } catch (err) {
       console.error(`[amane] window mode: ${JSON.stringify(err)}`);
     }
+  }
+
+  /** 按当前播放状态向窗口要 / 放「屏幕常亮」。窗口还没拿到时静默跳过，拿到后会补一次。 */
+  private applyKeepScreenOn(): void {
+    const w: window.Window | undefined = this.win;
+    if (w === undefined) {
+      return;
+    }
+    const want: boolean = this.playing;
+    if (want === this.keepOn) {
+      return;
+    }
+    this.keepOn = want;
+    w.setWindowKeepScreenOn(want).catch((err: BusinessError) => {
+      console.info(`[amane] keep screen on: ${err.code} ${err.message}`);
+    });
+  }
+
+  /**
+   * 意图锁着方向、但窗口没转到目标方向时，补一次方向请求。
+   *
+   * 为什么需要：手势返回 / 点退出全屏那一刻，系统正在播退场动画，
+   * `setPreferredOrientation(PORTRAIT)` 会被吞掉；而 `orientIntent` 一锁，
+   * `windowSizeChange` 之后一律 return，再没有人去要第二次 —— 于是停在
+   * 「横屏窗口 + 竖屏版式」（2.6.1 反馈第 2 条）。
+   *
+   * 两道刹车，避免和系统拉锯（2.5.5.10 的「画面乱飞」就是这么来的）：
+   * 只在**意图设定后 2 秒内**补，且两次之间至少隔 400ms。
+   */
+  private nudgeOrientation(winPortrait: boolean): void {
+    if (this.orientIntent === 'auto') {
+      return;
+    }
+    const wantPortrait: boolean = this.orientIntent === 'portrait';
+    if (winPortrait === wantPortrait) {
+      return;
+    }
+    const now: number = Date.now();
+    if (now - this.intentAt > 2000 || now - this.lastNudgeAt < 400) {
+      return;
+    }
+    this.lastNudgeAt = now;
+    AppLog.mark('shape', `nudge ${this.orientIntent} (window ${winPortrait ? 'P' : 'L'})`);
+    this.forceOrientation(wantPortrait
+      ? window.Orientation.PORTRAIT : window.Orientation.LANDSCAPE);
+  }
+
+  /** 窗口此刻是不是竖的：读真实窗口矩形，不看缓存值。 */
+  private winPortraitNow(): boolean {
+    if (this.win !== undefined) {
+      try {
+        const r: window.Rect = this.win.getWindowProperties().windowRect;
+        return r.height >= r.width;
+      } catch (err) {
+        // 读不到就退回缓存值
+      }
+    }
+    return this.vpH >= this.vpW;
+  }
+
+  /**
+   * 转完 500ms 后如果窗口还没到目标方向，补一次（**只补一次，不循环**）。
+   *
+   * `nudgeOrientation` 挂在 `windowSizeChange` 上，靠尺寸变化驱动；可窗口原地不动
+   * （手势返回被吞、系统根本没转）时那个事件永远不会来，所以这里再放一个定时兜底。
+   */
+  private retryOrientation(wantPortrait: boolean): void {
+    setTimeout(() => {
+      if (this.orientIntent === 'auto' || this.winPortraitNow() === wantPortrait) {
+        return;
+      }
+      AppLog.mark('shape', `retry orient → ${wantPortrait ? 'P' : 'L'}`);
+      this.forceOrientation(wantPortrait
+        ? window.Orientation.PORTRAIT : window.Orientation.LANDSCAPE);
+    }, 500);
   }
 
   /**
@@ -592,6 +722,7 @@ export struct PlayerView {
     this.forceOrientation(window.Orientation.PORTRAIT);
     this.applyWindowMode();
     this.rebindSurface(true);
+    this.retryOrientation(true);
     this.toast('已退出全屏；转正手机后跟随重力');
   }
 
@@ -604,6 +735,7 @@ export struct PlayerView {
    */
   private lockIntent(kind: string): void {
     this.orientIntent = kind;
+    this.intentAt = Date.now();
     // 锚点 = 现在的物理方向；还不知道就等第一帧重力数据来对齐
     this.anchorPortrait = this.physicalPortrait;
     this.anchorValid = this.physicalKnown;
@@ -755,6 +887,11 @@ export struct PlayerView {
     this.win.setPreferredOrientation(window.Orientation.AUTO_ROTATION);
     this.win.setWindowLayoutFullScreen(false);
     this.win.setWindowSystemBarEnable(['status', 'navigation']);
+    // 退出播放：把常亮还回去，否则这一页关了屏幕还一直亮着
+    this.keepOn = false;
+    this.win.setWindowKeepScreenOn(false).catch((err: BusinessError) => {
+      console.info(`[amane] keep screen off: ${err.code} ${err.message}`);
+    });
   }
 
   /** 宿主（详情页）点了播放：从这里开始真正开流。 */
@@ -779,7 +916,8 @@ export struct PlayerView {
     try {
       // token 已经在 URL 的 query 里，不要再走 httpHeaders：
       // mpv-arkts 会把头名编码坏（%65%authorization），反而触发 401。
-      const media: Media = new Media(Store.I.playUrl(this.metaId, this.fileKey), {
+      // 有离线缓存就播本地（file://），没有才走代理 —— 见 Store.playSource
+      const media: Media = new Media(Store.I.playSource(this.metaId, this.fileKey), {
         start: this.startPos
       });
       this.player.stream.error.listen((message: string) => {
@@ -789,6 +927,14 @@ export struct PlayerView {
       this.pos = this.startPos;
       this.danmuClock = this.startPos;
       this.lastDanmuClock = this.startPos - 0.01;
+      // 恢复上次选的字幕（2.6.1.7）；mpv 偶尔忽略过早的 sub-add，1.5 秒后补一次
+      this.restoreSubChoice();
+      setTimeout(() => {
+        if (!this.subChosen) {
+          this.subRestored = false;
+          this.restoreSubChoice();
+        }
+      }, 1500);
     } catch (error) {
       const e = error as BusinessError;
       console.error(`[amane] open: ${e.code} ${e.message}`);
@@ -891,6 +1037,9 @@ export struct PlayerView {
   private refreshBufferOverlay(): void {
     const now: number = Date.now();
     if (!this.buffering) {
+      if (this.bufferSince >= 0) {
+        AppLog.mark('buffer', `end after ${((now - this.bufferSince) / 1000).toFixed(2)}s at ${this.pos.toFixed(1)}s`);
+      }
       this.bufferSince = -1;
       this.showBufferOverlay = false;
       return;
@@ -898,16 +1047,24 @@ export struct PlayerView {
     // 起播 3 秒内的 buffering 一律不算卡：mpv 起播本来就要先攒够 cache-pause-wait，
     // 之前每次进片都闪一下「缓存中」，看着就像「每次都重新缓存」
     if (this.openAt > 0 && now - this.openAt < 3000) {
+      if (this.bufferSince < 0) {
+        AppLog.mark('buffer', `warmup at ${this.pos.toFixed(1)}s cache=${this.cacheSec.toFixed(1)}s`);
+      }
       this.bufferSince = -1;
       this.showBufferOverlay = false;
       return;
     }
     if (this.bufferSince < 0) {
       this.bufferSince = now;
+      AppLog.mark('buffer', `start at ${this.pos.toFixed(1)}s cache=${this.cacheSec.toFixed(1)}s`);
     }
     const elapsed: number = now - this.bufferSince;
     const afterSeek: boolean = now - this.lastSeekAt < 1500;
-    this.showBufferOverlay = elapsed >= (afterSeek ? 1200 : 450);
+    const want: boolean = elapsed >= (afterSeek ? 1200 : 450);
+    if (want && !this.showBufferOverlay) {
+      AppLog.mark('buffer', `STALL ${(elapsed / 1000).toFixed(1)}s at ${this.pos.toFixed(1)}s cache=${this.cacheSec.toFixed(1)}s`);
+    }
+    this.showBufferOverlay = want;
   }
 
   private saveProgress(force: boolean): void {
@@ -951,6 +1108,7 @@ export struct PlayerView {
       // 先标记再 seek：mpv 会在几毫秒内进入 paused-for-cache，
       // 采样恰好落在这一段时按「正常重缓冲」处理，不弹遮罩。
       this.lastSeekAt = Date.now();
+      AppLog.mark('seek', `-> ${target.toFixed(1)}s (dur ${this.duration.toFixed(0)}s, from ${this.pos.toFixed(1)}s)`);
       this.bufferSince = -1;
       this.showBufferOverlay = false;
       this.player.seek(target);
@@ -1744,6 +1902,7 @@ export struct PlayerView {
     this.forceOrientation(window.Orientation.LANDSCAPE);
     this.applyWindowMode();
     this.rebindSurface(true);
+    this.retryOrientation(false);
   }
 
   private forceOrientation(o: window.Orientation): void {
@@ -1763,6 +1922,15 @@ export struct PlayerView {
    * 重建后 onLoad 里会 attach 新 surfaceId 并 seek 一帧。
    */
   private rebindSurface(forceSeek: boolean): void {
+    // 重建会换一代 XComponent，onLoad 里又要 seek 一次；若外层由「尺寸变化」反复触发，
+    // 就会变成 重建→seek→尺寸变化→重建 的自激循环（表现：播放一直重连、画面乱飞）。
+    // 400ms 内的重复重建请求丢掉，只保留第一次。
+    const nowMs: number = Date.now();
+    if (!forceSeek && nowMs - this.lastRebindAt < 400) {
+      return;
+    }
+    this.lastRebindAt = nowMs;
+    AppLog.mark('surface', `rebind force=${forceSeek} gen=${this.surfaceGen}`);
     if (this.pipActive) {
       // 画中画期间 surface 借给小窗了，重建会把 controller 换掉，直接放弃这次重建
       return;
@@ -1823,6 +1991,7 @@ export struct PlayerView {
       this.audioLabels = audios;
       this.panelKind = 'subs';
       this.loadSubSources();
+      this.panelOpenedAt = Date.now();
       this.showPanel = true;
     } catch (error) {
       const e = error as BusinessError;
@@ -1845,7 +2014,8 @@ export struct PlayerView {
       this.extSubs = res.cached === undefined || res.cached === null ? [] : res.cached;
       this.subHint = res.hint === undefined || res.hint === null ? '' : res.hint;
       if (res.choice !== undefined && res.choice !== null && res.choice.subtitle_id.length > 0) {
-        this.applySub(res.choice.subtitle_id);
+        // 面板开着的时候自动套用：**不收面板**（收了就是「闪关」）
+        this.applySub(res.choice.subtitle_id, false);
       }
     } catch (error) {
       console.error(`[amane] subtitles: ${JSON.stringify(error)}`);
@@ -1854,10 +2024,16 @@ export struct PlayerView {
     }
   }
 
-  /** 所有来源统一走这里：一个 subtitle_id → 一条远程字幕轨道。 */
-  private applySub(id: string): void {
+  /** 所有来源统一走这里：一个 subtitle_id → 一条远程字幕轨道。
+   *
+   * `closePanel`：面板打开时异步回填「上次的选择」不能收面板，否则就是「面板闪关」。
+   * `remember`：自动恢复不需要把同一个值写回服务端。
+   */
+  private applySub(id: string, closePanel: boolean = true, remember: boolean = true): void {
     // 先收起面板：字幕加载与 mpv 解析都在后台，不该把用户卡在面板上
-    this.showPanel = false;
+    if (closePanel) {
+      this.showPanel = false;
+    }
     this.currentSubId = id;
     this.currentSubIndex = -1;
     this.subChosen = true;
@@ -1867,9 +2043,11 @@ export struct PlayerView {
     try {
       const url: string = SubtitleClient.streamUrl(id, true);
       this.player.setSubtitleTrack(SubtitleTrack.uri(url, '', 'chi', 'external'));
-      SubtitleClient.remember(this.metaId, id).catch(() => {
-        // 记住失败不影响播放
-      });
+      if (remember) {
+        SubtitleClient.remember(this.metaId, id).catch(() => {
+          // 记住失败不影响播放
+        });
+      }
       this.toast('已切换字幕');
     } catch (error) {
       console.error(`[amane] apply sub: ${JSON.stringify(error)}`);
@@ -1877,7 +2055,28 @@ export struct PlayerView {
     }
   }
 
+  /** 打开播放后就恢复上次选的字幕（2.6.1.7），不用再让用户去面板点一下。 */
+  private async restoreSubChoice(): Promise<void> {
+    if (this.subRestored || this.subChosen || this.metaId <= 0) {
+      return;
+    }
+    this.subRestored = true;
+    try {
+      const ch: SubtitleChoice = await SubtitleClient.choice(this.metaId);
+      if (ch !== undefined && ch !== null && ch.subtitle_id !== undefined
+        && ch.subtitle_id !== null && ch.subtitle_id.length > 0 && !this.subChosen) {
+        this.applySub(ch.subtitle_id, false, false);
+      }
+    } catch (error) {
+      console.error(`[amane] restore sub: ${JSON.stringify(error)}`);
+    }
+  }
+
   private async useLocalSub(name: string): Promise<void> {
+    // 同为面板行点击：刚打开的那一下不认（否则面板「点开即关」）
+    if (Date.now() - this.panelOpenedAt < 350) {
+      return;
+    }
     this.currentLocalName = name;
     this.showPanel = false;
     try {
@@ -1927,6 +2126,10 @@ export struct PlayerView {
   }
 
   private pickSub(index: number): void {
+    // 面板刚打开的 350ms 内忽略：那次点击的抬手会落到第一行上（不然面板「点开即关」）
+    if (Date.now() - this.panelOpenedAt < 350) {
+      return;
+    }
     this.showPanel = false;
     this.currentSubIndex = index;
     this.currentSubId = '';
@@ -1950,6 +2153,10 @@ export struct PlayerView {
   }
 
   private pickAudio(index: number): void {
+    // 同上：面板刚开的那一下不认
+    if (Date.now() - this.panelOpenedAt < 350) {
+      return;
+    }
     if (this.player === undefined) {
       return;
     }
@@ -2111,8 +2318,10 @@ export struct PlayerView {
               try {
                 const sid: string = this.xc.getXComponentSurfaceId();
                 p.native.attachSurface(sid);
+                AppLog.mark('surface', `onLoad gen=${gen} attach sid=${sid.substring(0, 6)} pos=${this.pos.toFixed(1)}`);
                 // 换 surface 后重新定位一帧，逼 mpv 按新 viewport 出画面
                 if (this.pos > 0.5) {
+                  AppLog.mark('surface', `resume seek -> ${this.pos.toFixed(1)}`);
                   p.seek(this.pos);
                 }
               } catch (err) {
@@ -2848,6 +3057,10 @@ export struct PlayerView {
         .alignItems(HorizontalAlign.Center)
         .backgroundColor('#66000000')
         .onClick(() => {
+          // 遮罩同理：面板刚开的那一次点击不能把它关掉
+          if (Date.now() - this.panelOpenedAt < 350) {
+            return;
+          }
           this.showPanel = false;
         })
       }

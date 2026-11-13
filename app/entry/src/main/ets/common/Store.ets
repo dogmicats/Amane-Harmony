@@ -2,6 +2,7 @@ import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpDelete, httpGet, httpPut, probe } from './Http';
+import { Downloader } from './Downloader';
 import { ClientConfig, ItemDetail, LibraryInfo } from './Types';
 import { BuildConfig } from './BuildConfig';
 
@@ -11,7 +12,6 @@ const KEY_LAN_USER: string = 'user_base';
 const KEY_WAN: string = 'wan_base';
 /**
  * 外网「用户数据」单独一个地址：外网是一个域名、Caddy 内部按路径分流，
- * 想在外网连另一台（比如测试实例 8771）时，域名 + 端口是唯一能表达的方式。
  * 留空 = 沿用外网主地址（旧行为）。
  */
 const KEY_WAN_USER: string = 'wan_user_base';
@@ -90,6 +90,13 @@ export class Store {
    * 返回列表时媒体库/搜索里那张卡必须消失。与 facetDirty 分开，避免重拉标签列表。
    */
   itemRemoved: boolean = false;
+  /**
+   * 「元数据 / 封面被改过」的脏标记（2.5.5.7）。
+   *
+   * 详情页换了封面或改了字段之后置位，Index 回到前台时据此重拉**媒体库那条链**
+   * —— 之前只刷了首页和收藏，媒体库 Tab 还挂着旧封面，看着就是「只有详情页变了」。
+   */
+  coverDirty: boolean = false;
   /**
    * 详情页预取缓存：点剧照时先把 /api/user/item/{id} 拿到，
    * 详情页 `takeDetail` 命中就能立刻渲染，不再闪一次加载圈。
@@ -320,8 +327,50 @@ export class Store {
     return url;
   }
 
-  /** 图片地址：资源走 amane（带图片 token），外链走本服务的代理。 */
-  img(raw: string): string {
+  /**
+   * 播放源：离线缓存优先（2.5.6）。
+   *
+   * 有本地文件就返回 `file://` 路径给 mpv，完全不经网络；没有才回落到代理地址。
+   * 放在这里而不是塞进 `playUrl()`：后者是纯拼串，`Downloader` 又反过来读偏好，
+   * 两边互相 import 容易绕成环。播放页只调这一个入口。
+   */
+  playSource(metadataId: number, fileKey: string = ''): string {
+    if (fileKey.length > 0) {
+      const local: string = Downloader.localPathOf(metadataId, fileKey);
+      if (local.length > 0) {
+        // 记一笔「什么时候看的」，离线页的「按最久没看清理」要用（2.5.7）
+        Downloader.markOpened(metadataId, fileKey);
+        return `file://${local}`;
+      }
+    }
+    return this.playUrl(metadataId, fileKey);
+  }
+
+  /**
+   * 离线字幕的本地地址（2.5.6）：`{subId: 绝对路径}` 写在偏好 `offline_subs` 里，
+   * 下载视频时顺手存好。命中了返回 `file://` 路径，播放页直接用，断网也有字幕。
+   */
+  localSubtitle(id: string): string {
+    if (id.length === 0) {
+      return '';
+    }
+    const raw: string = this.prefString('offline_subs', '');
+    if (raw.length === 0) {
+      return '';
+    }
+    try {
+      const map = JSON.parse(raw) as Record<string, string>;
+      const p = map[id];
+      if (p === undefined || p === null || p.length === 0) {
+        return '';
+      }
+      return `file://${p}`;
+    } catch (err) {
+      return '';
+    }
+  }
+
+  /** 图片地址：资源走 amane（带图片 token），外链走本服务的代理。 */  img(raw: string): string {
     if (raw.length === 0) {
       return '';
     }

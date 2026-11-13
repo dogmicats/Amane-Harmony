@@ -81,6 +81,18 @@ struct AboutPage {
     }
   }
 
+  /** 打开外链；没有可用浏览器时退回复制，别让点击看起来没反应。 */
+  private async openUrl(url: string): Promise<void> {
+    try {
+      const ctx = getContext(this) as common.UIAbilityContext;
+      await ctx.openLink(url, { appLinkingOnly: false });
+    } catch (error) {
+      const e = error as BusinessError;
+      console.error(`[amane] openLink: ${e.code} ${e.message}`);
+      await this.copy(url, '没有可用浏览器，链接已复制');
+    }
+  }
+
   private versionLine(): string {
     const srv: string = this.serverVersion.length > 0 ? `v${this.serverVersion}` : '未知';
     return `Amane for HarmonyOS ${this.appVersion} (${this.appCode}) · ${BuildConfig.CHANNEL}\n`
@@ -170,7 +182,7 @@ struct AboutPage {
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
-        Text('复制')
+        Text('打开')
           .fontSize(11)
           .fontColor(Theme.ACCENT)
           .padding({ left: 10, right: 10, top: 4, bottom: 4 })
@@ -180,7 +192,7 @@ struct AboutPage {
       .width('100%')
       .padding({ top: 10, bottom: 10 })
       .onClick(() => {
-        this.copy(row.url, '链接已复制');
+        this.openUrl(row.url);
       })
       if (!last) {
         Divider().color(Theme.CARD_HI)
@@ -281,6 +293,16 @@ struct AboutPage {
           // 链接
           this.Section('链接')
           Column() {
+            this.LinkItem({
+              title: 'Telegram 讨论群',
+              desc: '装不上、用着别扭、想加功能，都在这儿说',
+              url: 'https://t.me/+uYKKwB9LtjMxYTY9'
+            }, false)
+            this.LinkItem({
+              title: 'Telegram 更新频道',
+              desc: '只发版本更新，不闲聊',
+              url: 'https://t.me/+iEyg1f5Q_6UxYjY1'
+            }, false)
             this.LinkItem({
               title: '项目主页',
               desc: 'github.com/dogmicats/Amane-Harmony',

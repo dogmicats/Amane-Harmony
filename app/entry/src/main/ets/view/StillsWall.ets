@@ -1,12 +1,17 @@
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { Personalize } from '../common/Personalize';
 
 /**
  * 剧照瀑布流。
  *
  * 详情页原来是一行 190x107 的横滑条：剧照里混着 16:9 截图和竖版海报，塞进同一个
- * 横框只能 Cover 裁切，竖版就成了「砍头照」。这里改成两列瀑布流 —— 每张图按自己的
+ * 横框只能 Cover 裁切，竖版就成了「砍头照」。这里改成瀑布流 —— 每张图按自己的
  * 宽高比定高，横的铺满一列、竖的成一条，高低错落，反而比整齐排列更像照片墙。
+ *
+ * **列数是可调的**（2.5.1.18 起，1–4 列，默认 2）：`Personalize` 里的 `ui_still_cols`，
+ * 双指张开放大（列变少）、捏合变密（列变多）。三处瀑布流（抽卡墙 / 演员盲盒 /
+ * 影片剧照）走的都是这一个组件，所以**改这里就等于三处一起有了**，没有第二份实现。
  *
  * 比例优先用服务端下发的 ratios（img_dims 缓存，命中就准）；没量过时值为 0，
  * 先按 3:2 占位，等 Image.onComplete 拿到真实尺寸再重排一次。重排做了 180ms 合并，
@@ -16,7 +21,7 @@ import { Theme } from '../common/Theme';
  * 用户顺着页面下滑就全看到了 —— 不需要「+N 张」这种要再点一次的中间态。
  */
 
-/** 两列间距，和页面里其它卡片间距保持一致。 */
+/** 列间距，和页面里其它卡片间距保持一致。 */
 const COL_GAP: number = 8;
 /** 服务端没量过、图片也还没加载完时的占位比例（绝大多数剧照是 3:2 横图）。 */
 const FALLBACK_RATIO: number = 1.5;
@@ -44,8 +49,11 @@ export struct StillsWall {
   /** 与 urls 等长：这一张是不是「我自己截的帧」。是的话左下角标一下。 */
   @Prop mined: boolean[] = [];
 
-  @State left: number[] = [];
-  @State right: number[] = [];
+  /** 列数：订阅全局值，设置页或捏合改完这里立刻重排。 */
+  @StorageProp('amaneStillCols') @Watch('onColsChange') stillCols: number = 2;
+
+  /** 每一列装哪些下标（按下标顺序贪心填最短的那列）。 */
+  @State buckets: number[][] = [];
   /** 客户端实测比例，下标与 urls 对齐，0 = 还没量到。 */
   @State measured: number[] = [];
   private pending: Map<number, number> = new Map<number, number>();
@@ -69,6 +77,11 @@ export struct StillsWall {
     this.relayout();
   }
 
+  /** 设置页改了列数 / 在别的瀑布流上捏过：同一页里的墙立刻跟着变。 */
+  onColsChange(): void {
+    this.relayout();
+  }
+
   /** 渲染用比例：实测 > 服务端 > 兜底，最后夹在兜底区间里。 */
   private ratioAt(i: number): number {
     let r: number = 0;
@@ -84,27 +97,31 @@ export struct StillsWall {
   }
 
   /**
-   * 贪心分列：按顺序把下一张丢给当前更矮的那列。
+   * 贪心分列：按顺序把下一张丢给当前最矮的那列。
    * 高度统一用「列宽」做单位（1 / 比例），不需要知道真实像素宽度。
+   * 单列时就是一个普通长列表，四列时是缩略图联系表 —— 同一套代码。
    */
   private relayout(): void {
     const n: number = this.urls.length;
-    const l: number[] = [];
-    const r: number[] = [];
-    let hl: number = 0;
-    let hr: number = 0;
+    const cols: number = Personalize.clampStills(this.stillCols);
+    const buckets: number[][] = [];
+    const heights: number[] = [];
+    for (let c = 0; c < cols; c++) {
+      buckets.push([]);
+      heights.push(0);
+    }
     for (let i = 0; i < n; i++) {
       const h: number = 1 / this.ratioAt(i);
-      if (hl <= hr) {
-        l.push(i);
-        hl += h;
-      } else {
-        r.push(i);
-        hr += h;
+      let pick: number = 0;
+      for (let c = 1; c < cols; c++) {
+        if (heights[c] < heights[pick] - 0.0001) {
+          pick = c;
+        }
       }
+      buckets[pick].push(i);
+      heights[pick] += h;
     }
-    this.left = l;
-    this.right = r;
+    this.buckets = buckets;
   }
 
   /** 图片加载完给的原始尺寸。和服务端对不上才重排，且合并成一次。 */
@@ -210,23 +227,20 @@ export struct StillsWall {
 
   build() {
     Row({ space: COL_GAP }) {
-      Column({ space: COL_GAP }) {
-        ForEach(this.left, (i: number) => {
-          this.tile(i);
-        }, (i: number) => `still-l-${i}`)
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-
-      Column({ space: COL_GAP }) {
-        ForEach(this.right, (i: number) => {
-          this.tile(i);
-        }, (i: number) => `still-r-${i}`)
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
+      ForEach(this.buckets, (col: number[], ci: number) => {
+        Column({ space: COL_GAP }) {
+          ForEach(col, (i: number) => {
+            this.tile(i);
+          }, (i: number) => `still-c${ci}-${i}`)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+      }, (col: number[], ci: number) => `still-col-${ci}`)
     }
     .width('100%')
     .alignItems(VerticalAlign.Top)
+    .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
+      Personalize.zoomStills(event.scale);
+    }))
   }
 }

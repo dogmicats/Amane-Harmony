@@ -46,6 +46,15 @@ struct CollectionsPage {
     this.loading = false;
   }
 
+  private openCollection(c: CollectionInfo): void {
+    const params: Record<string, Object> = {
+      'libraryId': 0,
+      'collectionId': c.id,
+      'title': c.name.length > 0 ? c.name : '清单'
+    };
+    router.pushUrl({ url: 'pages/LibraryPage', params: params });
+  }
+
   private async create(): Promise<void> {
     const v: string = this.newName.trim();
     if (v.length === 0 || this.busy) {
@@ -146,6 +155,19 @@ struct CollectionsPage {
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
+          // 点名字进这个清单的影片墙（2.5.5.25）
+          .onClick(() => {
+            this.openCollection(c);
+          })
+
+          Text('›')
+            .fontSize(18)
+            .fontColor(Theme.TEXT_FAINT)
+            .width(18)
+            .textAlign(TextAlign.Center)
+            .onClick(() => {
+              this.openCollection(c);
+            })
 
           Text('改名')
             .fontSize(12)

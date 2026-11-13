@@ -37,6 +37,7 @@ _REL_OK: bool | None = None
 SORT_VALUES = {
     "name", "count", "updated_at", "has_image",
     "birthday", "height", "bust", "waist", "hip", "cup",
+    "my_rating",
 }
 MEDIA_SORT = {
     "number", "title", "studio", "release",
@@ -82,11 +83,9 @@ def _images(urls) -> list[str]:
 
 
 def _poster(item: dict) -> str:
-    """影片海报：amane 本地缓存优先，其次外链代理。"""
+    """影片海报：统一交给核心 `public_image`（本地资源也会转成旁挂代理，外网可看）。"""
     for key in ("poster_urls", "thumb_urls"):
         for u in _str_list(item.get(key)):
-            if u.startswith("/api/resources/"):
-                return u
             p = A.public_image(u)
             if p:
                 return p
@@ -317,6 +316,57 @@ def _search_actors(handler, params: dict, query: dict) -> bool:
     return True
 
 
+def _ratings_of(ids: list) -> dict:
+    """一次取出这些演员的星级（{id: stars}），避免逐条查。"""
+    if not ids:
+        return {}
+    ph = ",".join("?" * len(ids))
+    try:
+        with A.user_db() as conn:
+            rows = conn.execute(
+                f"SELECT facet_id, stars FROM facet_rating "
+                f"WHERE kind = 'actor' AND facet_id IN ({ph})", list(ids)).fetchall()
+        return {_num(r[0]): _num(r[1]) for r in rows}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _local_rating_page(params: dict, rating: str) -> tuple[list[int], int]:
+    """按「我的评分」筛 / 排演员（本地 SQL，评分在 user.db 的 facet_rating）。
+
+    为什么单独走一条本地路径：演员列表默认是**上游**分页（`/api/actors`），
+    上游不认识我们的评分。评分条件一旦出现就必须自己在本地算，才能保证分页正确。
+    """
+    where: list[str] = []
+    args: list = []
+    if rating == "none":
+        where.append("r.stars IS NULL")
+    elif rating.isdigit():
+        where.append("r.stars = ?")
+        args.append(int(rating))
+    cond = ("WHERE " + " AND ".join(where) + " ") if where else ""
+    order = "DESC" if params["order"] == "desc" else "ASC"
+    order_sql = f"(r.stars IS NULL) ASC, r.stars {order}, a.name COLLATE NOCASE ASC"
+    db = os.path.join(os.environ.get("DATA_DIR", "/data"), "user.db")
+    try:
+        with A.amane_db() as conn:
+            try:
+                conn.execute("ATTACH DATABASE ? AS u", (db,))
+            except Exception:  # noqa: BLE001 - 已挂载就继续
+                pass
+            join = ("FROM actors a LEFT JOIN u.facet_rating r "
+                    "ON r.kind = 'actor' AND r.facet_id = a.id ")
+            total = _num(conn.execute(
+                f"SELECT COUNT(*) {join}{cond}", args).fetchone()[0])
+            rows = conn.execute(
+                f"SELECT a.id AS id {join}{cond} ORDER BY {order_sql} LIMIT ? OFFSET ?",
+                args + [params["limit"], params["offset"]]).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"ERROR actors 评分筛选失败: {exc}")
+        return [], 0
+    return [_num(r["id"]) for r in rows], total
+
+
 def actors_list(handler, query, *_):
     """GET /api/user/actors —— 演员网格，分页 + 搜索 + 排序 + 多维筛选。
 
@@ -364,6 +414,38 @@ def actors_list(handler, query, *_):
     if _one(query, "favorite") in ("true", "1"):
         return _favorite_actors(handler, params)
 
+    # 我的评分：上游不认这个条件，必须走本地 SQL 才能保证分页正确
+    rating = _one(query, "rating").strip()
+    if rating not in ("none", "1", "2", "3", "4", "5"):
+        rating = ""
+    if rating or params["sort_by"] == "my_rating":
+        ids, total = _local_rating_page(params, rating)
+        if not ids:
+            handler._json({"items": [], "total": total, "offset": params["offset"],
+                           "limit": params["limit"]})
+            return
+        up = _upstream("/api/actors", {"ids": ids, "limit": len(ids)}, handler)
+        if up is None:
+            return
+        by_id: dict = {}
+        for a in (up.get("items") or []):
+            if isinstance(a, dict):
+                by_id[_num(a.get("id"))] = a
+        fav = _fav_set()
+        stars = _ratings_of(ids)
+        items: list = []
+        for aid in ids:
+            raw = by_id.get(aid)
+            if raw is None:
+                continue
+            card = _card(raw)
+            card["isFavorite"] = aid in fav
+            card["myRating"] = stars.get(aid, 0)
+            items.append(card)
+        handler._json({"items": items, "total": total, "offset": params["offset"],
+                       "limit": params["limit"]})
+        return
+
     # 有关键词：本地按相关性排序（越精准越靠前），分页仍然准
     if search and _search_actors(handler, params, query):
         return
@@ -400,6 +482,7 @@ def actors_detail(handler, query, actor_id, *_):
         "avatars": _images(data.get("image_urls")) + gallery_of(int(actor_id)),
         "updated_at": _text(data.get("updated_at")),
         "isFavorite": int(actor_id) in _fav_set(),
+        "myRating": _ratings_of([int(actor_id)]).get(int(actor_id), 0),
     })
     handler._json(out)
 
@@ -458,6 +541,12 @@ def actors_media(handler, query, actor_id, *_):
             "poster": _poster(m),
             "marks": marks_map.get(_num(m.get("id")), []),
         })
+    # 覆盖层（2.5.5.7）：换过的封面 / 片名在演员作品里也要生效
+    try:
+        if hasattr(A, "apply_overrides"):
+            A.apply_overrides(items)
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"WARN actors 套覆盖层失败: {exc}")
     handler._json({
         "items": items,
         "total": _num(data.get("total")),

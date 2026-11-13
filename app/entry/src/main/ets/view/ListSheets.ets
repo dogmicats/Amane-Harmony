@@ -102,8 +102,18 @@ export struct ListToolbar {
   @Prop filterCount: number = 0;
   /** 这一页没有可筛项时（比如「我的标签」）关掉筛选入口。 */
   @Prop showFilter: boolean = true;
+  /**
+   * 摘要与排序之间的**页面独有控件**（目前只有抽卡开关 `GachaSwitch` 用它）。
+   * 有了这个插槽，媒体库 / 分类墙不必再各写一遍手写 Row —— 2.5.6.13 之前
+   * 这两页的工具条与这里逐字相同，只差一个抽卡开关，于是分裂成两份。
+   */
+  @BuilderParam extra: () => void = this.EmptyExtra;
   onSort: () => void = () => {};
   onFilter: () => void = () => {};
+
+  @Builder
+  EmptyExtra() {
+  }
 
   build() {
     Row({ space: 8 }) {
@@ -113,6 +123,8 @@ export struct ListToolbar {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .layoutWeight(1)
+
+      this.extra()
 
       ToolPill({
         label: `⇅ ${this.sortLabel}`,
@@ -212,6 +224,9 @@ export struct BottomSheet {
         .padding({ left: 20, right: 20 })
       }
       .layoutWeight(1)
+      // Scroll 内容不满一屏时默认垂直居中，抽屉里只有一两组时标题下面会空一大块
+      // （2.5.7.4 搜索页筛选面板就是这么暴露出来的）。顶对齐，与「内容多到要滚」时同一视觉起点。
+      .align(Alignment.Top)
       .scrollBar(BarState.Off)
 
       Row() {

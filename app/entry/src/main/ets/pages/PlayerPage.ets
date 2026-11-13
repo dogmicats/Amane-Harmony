@@ -4,10 +4,12 @@ import { AudioTrack, Media, Player, PlayerConfig, PlayerSurface, SubtitleTrack }
 import { httpPost } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { AppLog } from '../common/AppLog';
 import { PlayerParams } from '../common/Types';
 import { clock } from '../common/Util';
 import { common } from '@kit.AbilityKit';
-import { SubtitleClient, SubtitleItem, LocalCandidate } from '../common/Subtitles';
+import { SubtitleClient, SubtitleItem, LocalCandidate, OnlineSubtitle, OwnedSubtitle,
+  SubtitleChoice } from '../common/Subtitles';
 import { PlayerPrefs, PlayerTuning } from '../common/PlayerPrefs';
 import { PlayerChrome } from '../view/PlayerChrome';
 
@@ -39,6 +41,8 @@ struct PlayerPage {
   private panBase: number = 0;
   private panStartPos: number = 0;
   private win: window.Window | undefined = undefined;
+  /** 当前是否已向系统要了「屏幕常亮」：避免同一状态重复调用。 */
+  private keepOn: boolean = false;
 
   @Local surfaceReady: boolean = false;
   @Local pos: number = 0;
@@ -62,6 +66,8 @@ struct PlayerPage {
   private lastSeekAt: number = 0;
   @Local errorText: string = '';
   @Local showPanel: boolean = false;
+  /** 面板刚打开的时刻：吞掉「打开它的那一下」二次落到遮罩上（面板秒退的真因）。 */
+  private panelOpenedAt: number = 0;
   @Local panelKind: string = 'subs';
   @Local subLabels: string[] = [];
   @Local audioLabels: string[] = [];
@@ -72,10 +78,49 @@ struct PlayerPage {
   @Local currentSubId: string = '';
   @Local currentSubIndex: number = -1;
   @Local subChosen: boolean = false;
+  /** 已经尝试过「恢复上次选的字幕」（只试一次，避免每次状态变化都打接口）。 */
+  private subRestored: boolean = false;
   @Local currentLocalName: string = '';
   @Local subUrlInput: string = '';
   @Local subBusy: boolean = false;
   @Local subHint: string = '';
+  /** 在线字幕搜索结果 / 已下载到库的 / 样式面板开关。 */
+  @Local onlineItems: OnlineSubtitle[] = [];
+  @Local onlineHint: string = '';
+  @Local onlineBusy: boolean = false;
+  @Local ownedSubs: OwnedSubtitle[] = [];
+  @Local showStyle: boolean = false;
+  /** 字幕样式（0 = 跟随 mpv 默认）。持久化到偏好，下次进来自动套用。 */
+  @Local subSize: number = 0;
+  @Local subBorder: number = 0;
+  @Local subPos: number = 100;
+  @Local subDelay: number = 0;
+
+  /**
+   * 播放中保持屏幕常亮（用户 2.6.1.4：「播放状态下会自动息屏，没有保护」）。
+   *
+   * 独立播放页也是同一套：系统按休眠时间息屏，看片时屏幕一灭画面和声音一起断。
+   * 用窗口级 `setWindowKeepScreenOn`（不申请 RUNNING_LOCK 权限）；暂停就放开，
+   * 暂停往往意味着人走开了，这时亮着纯耗电。
+   */
+  @Monitor('playing')
+  private onPlayingChange(): void {
+    this.applyKeepScreenOn();
+  }
+
+  private applyKeepScreenOn(): void {
+    if (this.win === undefined) {
+      return;
+    }
+    const want: boolean = this.playing;
+    if (want === this.keepOn) {
+      return;
+    }
+    this.keepOn = want;
+    this.win.setWindowKeepScreenOn(want).catch((err: BusinessError) => {
+      console.info(`[amane] keep screen on: ${err.code} ${err.message}`);
+    });
+  }
 
   aboutToAppear(): void {
     const params = router.getParams() as PlayerParams;
@@ -107,6 +152,8 @@ struct PlayerPage {
         // 有没有被别的版本写脏，一看日志就知道（用户报「设置没生效」时全靠这行）。
         onReady: () => {
           this.verifyTuning(tuning);
+          this.loadSubStyle();
+          this.applySubStyle();
         }
       }));
       this.surfaceReady = true;
@@ -156,6 +203,8 @@ struct PlayerPage {
       win.setWindowLayoutFullScreen(true);
       win.setWindowSystemBarEnable([]);
       win.getWindowProperties();
+      // 窗口到手时可能已经在播（playing 先变、win 后到），补一次常亮申请
+      this.applyKeepScreenOn();
     }).catch((error: BusinessError) => {
       console.error(`[amane] fullscreen: ${error.code} ${error.message}`);
     });
@@ -168,6 +217,11 @@ struct PlayerPage {
     this.win.setPreferredOrientation(window.Orientation.PORTRAIT);
     this.win.setWindowLayoutFullScreen(false);
     this.win.setWindowSystemBarEnable(['status', 'navigation']);
+    // 退出播放页：把常亮还回去，否则页面关了屏幕还一直亮着
+    this.keepOn = false;
+    this.win.setWindowKeepScreenOn(false).catch((err: BusinessError) => {
+      console.info(`[amane] keep screen off: ${err.code} ${err.message}`);
+    });
   }
 
   private async openMedia(): Promise<void> {
@@ -179,7 +233,7 @@ struct PlayerPage {
     try {
       // token 已经在 URL 的 query 里，不要再走 httpHeaders：
       // mpv-arkts 会把头名编码坏（%65%authorization），反而触发 401。
-      const media: Media = new Media(Store.I.playUrl(this.metaId, this.fileKey), {
+      const media: Media = new Media(Store.I.playSource(this.metaId, this.fileKey), {
         start: this.startPos
       });
       this.player.stream.error.listen((message: string) => {
@@ -187,6 +241,15 @@ struct PlayerPage {
       });
       this.player.open(media);
       this.pos = this.startPos;
+      // 打开媒体后恢复上次选的字幕：先试一次，mpv 偶尔会忽略过早的 sub-add，
+      // 1.5 秒后再补一次（restoreSubChoice 内部有 subRestored/subChosen 双重去重）
+      this.restoreSubChoice();
+      setTimeout(() => {
+        if (!this.subChosen) {
+          this.subRestored = false;
+          this.restoreSubChoice();
+        }
+      }, 1500);
     } catch (error) {
       const e = error as BusinessError;
       console.error(`[amane] open: ${e.code} ${e.message}`);
@@ -241,19 +304,33 @@ struct PlayerPage {
    * - 任何 buffering 必须持续 0.45 秒以上才认为是真的卡住。
    * （syncState 每 300ms 采样一次，更短的抖动根本采不到。）
    */
+  /** 给日志用：mpv 当前缓存了多少秒（拿不到就返回 '-'）。 */
+  private cacheText(): string {
+    const d: string = this.buffering ? 'buffering' : 'ok';
+    return `${d}/${(this.pos / 60).toFixed(1)}min`;
+  }
+
   private refreshBufferOverlay(): void {
     const now: number = Date.now();
     if (!this.buffering) {
+      if (this.bufferSince >= 0) {
+        AppLog.mark('buffer', `end after ${((now - this.bufferSince) / 1000).toFixed(2)}s at ${this.pos.toFixed(1)}s`);
+      }
       this.bufferSince = -1;
       this.showBufferOverlay = false;
       return;
     }
     if (this.bufferSince < 0) {
       this.bufferSince = now;
+      AppLog.mark('buffer', `start at ${this.pos.toFixed(1)}s (demux ${this.cacheText()})`);
     }
     const elapsed: number = now - this.bufferSince;
     const afterSeek: boolean = now - this.lastSeekAt < 1500;
-    this.showBufferOverlay = elapsed >= (afterSeek ? 1200 : 450);
+    const want: boolean = elapsed >= (afterSeek ? 1200 : 450);
+    if (want && !this.showBufferOverlay) {
+      AppLog.mark('buffer', `STALL ${(elapsed / 1000).toFixed(1)}s at ${this.pos.toFixed(1)}s (demux ${this.cacheText()})`);
+    }
+    this.showBufferOverlay = want;
   }
 
   private saveProgress(force: boolean): void {
@@ -297,6 +374,7 @@ struct PlayerPage {
       // 先标记再 seek：mpv 会在几毫秒内进入 paused-for-cache，
       // 采样恰好落在这一段时按「正常重缓冲」处理，不弹遮罩。
       this.lastSeekAt = Date.now();
+      AppLog.mark('seek', `-> ${target.toFixed(1)}s (dur ${this.duration.toFixed(0)}s, from ${this.pos.toFixed(1)}s)`);
       this.bufferSince = -1;
       this.showBufferOverlay = false;
       this.player.seek(target);
@@ -358,6 +436,8 @@ struct PlayerPage {
       this.audioLabels = audios;
       this.panelKind = 'subs';
       this.loadSubSources();
+      this.loadOwned();
+      this.panelOpenedAt = Date.now();
       this.showPanel = true;
     } catch (error) {
       const e = error as BusinessError;
@@ -380,7 +460,8 @@ struct PlayerPage {
       this.extSubs = res.cached === undefined || res.cached === null ? [] : res.cached;
       this.subHint = res.hint === undefined || res.hint === null ? '' : res.hint;
       if (res.choice !== undefined && res.choice !== null && res.choice.subtitle_id.length > 0) {
-        this.applySub(res.choice.subtitle_id);
+        // 面板开着的时候自动套用：**不要收面板**（收了就是「闪关」）
+        this.applySub(res.choice.subtitle_id, false);
       }
     } catch (error) {
       console.error(`[amane] subtitles: ${JSON.stringify(error)}`);
@@ -389,10 +470,156 @@ struct PlayerPage {
     }
   }
 
-  /** 所有来源统一走这里：一个 subtitle_id → 一条远程字幕轨道。 */
-  private applySub(id: string): void {
-    // 先收起面板：字幕加载与 mpv 解析都在后台，不该把用户卡在面板上
-    this.showPanel = false;
+  // ---- 在线字幕：搜索 → 落盘 → 已下载 → 删除 ---------------------------
+
+  private async searchOnline(): Promise<void> {
+    if (this.metaId <= 0) {
+      this.onlineHint = '没有条目 id，搜不了';
+      return;
+    }
+    this.onlineBusy = true;
+    this.onlineHint = '';
+    try {
+      const res = await SubtitleClient.search(this.metaId, '');
+      this.onlineItems = res.items === undefined || res.items === null ? [] : res.items;
+      if (res.total === 0) {
+        this.onlineHint = '几个源都没找到这条的字幕';
+      } else if (res.errors !== undefined && res.errors !== null && res.errors.length > 0) {
+        const names: string[] = [];
+        for (let i = 0; i < res.errors.length; i++) {
+          names.push(res.errors[i].provider);
+        }
+        this.onlineHint = `部分源连不上：${names.join(' / ')}`;
+      }
+    } catch (error) {
+      const e = error as BusinessError;
+      this.onlineHint = `搜索失败：${e.message}`;
+    } finally {
+      this.onlineBusy = false;
+    }
+  }
+
+  /** 点一条在线结果：落盘（优先写视频同目录）→ 立刻切过去 → 刷新列表。 */
+  private async useOnline(item: OnlineSubtitle): Promise<void> {
+    this.onlineBusy = true;
+    try {
+      const res = await SubtitleClient.save(this.metaId, item);
+      this.onlineHint = res.kind === 'library'
+        ? `已存到资源库：${res.files.join(' / ')}`
+        : `写不进媒体目录，已缓存：${res.reason}`;
+      await this.loadOwned();
+      await this.loadSubSources();
+      this.applySub(res.subtitle_id);
+    } catch (error) {
+      const e = error as BusinessError;
+      this.onlineHint = `保存失败：${e.message}`;
+    } finally {
+      this.onlineBusy = false;
+    }
+  }
+
+  private async loadOwned(): Promise<void> {
+    if (this.metaId <= 0) {
+      return;
+    }
+    try {
+      this.ownedSubs = await SubtitleClient.owned(this.metaId);
+    } catch (error) {
+      console.error(`[amane] owned subs: ${JSON.stringify(error)}`);
+    }
+  }
+
+  /** 删掉一条自己下过的字幕（服务端只认「旁挂写的」，不会碰用户的文件）。 */
+  private async removeOwned(name: string): Promise<void> {
+    try {
+      await SubtitleClient.removeOwned(this.metaId, name);
+      this.onlineHint = `已删除 ${name}`;
+      await this.loadOwned();
+      await this.loadSubSources();
+    } catch (error) {
+      const e = error as BusinessError;
+      this.onlineHint = `删除失败：${e.message}`;
+    }
+  }
+
+  // ---- 字幕样式 / 时间轴 ------------------------------------------------
+  // 只下发 mpv 的字幕属性，不动播放器锁定参数（缓存/代理/解码那一套）。
+
+  private loadSubStyle(): void {
+    this.subSize = Math.trunc(Number(Store.I.prefString('sub_style_size', '0'))) || 0;
+    this.subBorder = Math.trunc(Number(Store.I.prefString('sub_style_border', '0'))) || 0;
+    const pos: number = Math.trunc(Number(Store.I.prefString('sub_style_pos', '100')));
+    this.subPos = pos > 0 && pos <= 100 ? pos : 100;
+    const delay: number = Number(Store.I.prefString('sub_style_delay', '0'));
+    this.subDelay = Number.isFinite(delay) ? delay : 0;
+  }
+
+  private applySubStyle(): void {
+    if (this.player === undefined || this.player === null) {
+      return;
+    }
+    try {
+      const lib = this.player.native;
+      if (this.subSize > 0) {
+        lib.setProperty('sub-font-size', this.subSize);
+      }
+      lib.setProperty('sub-border-size', this.subBorder);
+      lib.setProperty('sub-pos', this.subPos);
+      lib.setProperty('sub-delay', this.subDelay);
+    } catch (error) {
+      const e = error as BusinessError;
+      console.error(`[amane] sub style: ${e.code} ${e.message}`);
+    }
+  }
+
+  private saveSubStyle(): void {
+    Store.I.prefSetString('sub_style_size', `${this.subSize}`);
+    Store.I.prefSetString('sub_style_border', `${this.subBorder}`);
+    Store.I.prefSetString('sub_style_pos', `${this.subPos}`);
+    Store.I.prefSetString('sub_style_delay', `${this.subDelay}`);
+    this.applySubStyle();
+  }
+
+  /** 样式行：标签 + 当前值 + 减/加。改完立刻下发并落盘。 */
+  @Builder
+  StyleRow(label: string, value: string, minus: () => void, plus: () => void) {
+    Row() {
+      Text(label)
+        .fontSize(11)
+        .fontColor(Theme.TEXT_DIM)
+        .width(56)
+      Text(value)
+        .fontSize(11)
+        .fontColor(Theme.TEXT)
+        .layoutWeight(1)
+        .textAlign(TextAlign.Center)
+      Text('−')
+        .fontSize(15)
+        .fontColor(Theme.TEXT)
+        .padding({ left: 10, right: 10, top: 2, bottom: 2 })
+        .onClick(minus)
+      Text('+')
+        .fontSize(15)
+        .fontColor(Theme.TEXT)
+        .padding({ left: 10, right: 10, top: 2, bottom: 2 })
+        .onClick(plus)
+    }
+    .width('100%')
+    .padding({ left: 16, right: 10, top: 3, bottom: 3 })
+  }
+
+  /** 所有来源统一走这里：一个 subtitle_id → 一条远程字幕轨道。
+   *
+   * `closePanel`：只有在面板里手动选才需要收起面板。**自动恢复时不能收** ——
+   * 以前 `loadSubSources()` 在面板打开时异步回填「上次的选择」，一路走到这里把
+   * `showPanel` 置 false，用户看到的就是「面板刚打开自己就关了」（2.6.1.7）。
+   * `remember`：自动恢复不需要再把同一个值写回服务端。
+   */
+  private applySub(id: string, closePanel: boolean = true, remember: boolean = true): void {
+    if (closePanel) {
+      // 字幕加载与 mpv 解析都在后台，不该把用户卡在面板上
+      this.showPanel = false;
+    }
     this.currentSubId = id;
     this.currentSubIndex = -1;
     this.subChosen = true;
@@ -402,13 +629,36 @@ struct PlayerPage {
     try {
       const url: string = SubtitleClient.streamUrl(id, true);
       this.player.setSubtitleTrack(SubtitleTrack.uri(url, '', 'chi', 'external'));
-      SubtitleClient.remember(this.metaId, id).catch(() => {
-        // 记住失败不影响播放
-      });
-      this.toast('已切换字幕');
+      if (remember) {
+        SubtitleClient.remember(this.metaId, id).catch(() => {
+          // 记住失败不影响播放
+        });
+      }
     } catch (error) {
       console.error(`[amane] apply sub: ${JSON.stringify(error)}`);
       this.toast('加载字幕失败');
+    }
+  }
+
+  /**
+   * 播放页一打开就恢复上次选的字幕（2.6.1.7）。
+   *
+   * 以前只在「打开字幕面板」时才读 choice，所以详情页选好了、进播放页还得再点一下。
+   * 打开媒体后先试一次；mpv 有时会忽略过早的 sub-add，1.5 秒后再补一次（`subChosen` 挡住重复）。
+   */
+  private async restoreSubChoice(): Promise<void> {
+    if (this.subRestored || this.subChosen || this.metaId <= 0) {
+      return;
+    }
+    this.subRestored = true;
+    try {
+      const ch: SubtitleChoice = await SubtitleClient.choice(this.metaId);
+      if (ch !== undefined && ch !== null && ch.subtitle_id !== undefined
+        && ch.subtitle_id !== null && ch.subtitle_id.length > 0 && !this.subChosen) {
+        this.applySub(ch.subtitle_id, false, false);
+      }
+    } catch (error) {
+      console.error(`[amane] restore sub: ${JSON.stringify(error)}`);
     }
   }
 
@@ -462,6 +712,9 @@ struct PlayerPage {
   }
 
   private pickSub(index: number): void {
+    if (Date.now() - this.panelOpenedAt < 350) {
+      return;
+    }
     this.showPanel = false;
     this.currentSubIndex = index;
     this.currentSubId = '';
@@ -485,6 +738,9 @@ struct PlayerPage {
   }
 
   private pickAudio(index: number): void {
+    if (Date.now() - this.panelOpenedAt < 350) {
+      return;
+    }
     if (this.player === undefined) {
       return;
     }
@@ -720,7 +976,8 @@ struct PlayerPage {
       if (this.showPanel) {
         Column() {
           Blank()
-          Column({ space: 2 }) {
+          Scroll() {
+            Column({ space: 2 }) {
             Row() {
               Text(this.panelKind === 'subs' ? '字幕' : '音轨')
                 .fontSize(14)
@@ -778,6 +1035,133 @@ struct PlayerPage {
                     this.applySub(item.id);
                   })
               }, (item: SubtitleItem) => `ext-${item.id}`)
+              // ---- 在线搜索：按番号查几个源，点一条就下载并切过去 ----
+              Row({ space: 8 }) {
+                Button(this.onlineBusy ? '搜索中…' : '在线搜索')
+                  .fontSize(11)
+                  .height(30)
+                  .enabled(!this.onlineBusy)
+                  .onClick(() => {
+                    this.searchOnline();
+                  })
+                Text(this.showStyle ? '收起样式' : '字幕样式')
+                  .fontSize(10)
+                  .fontColor(Theme.ACCENT)
+                  .padding({ left: 4, right: 4, top: 6, bottom: 6 })
+                  .onClick(() => {
+                    this.showStyle = !this.showStyle;
+                  })
+                Blank()
+              }
+              .width('100%')
+              .padding({ left: 12, right: 12, top: 4 })
+
+              if (this.onlineHint.length > 0) {
+                Text(this.onlineHint)
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .width('100%')
+                  .padding({ left: 16, right: 16, top: 2, bottom: 2 })
+                  .maxLines(3)
+              }
+              if (this.onlineItems.length > 0) {
+                Scroll() {
+                  Column({ space: 2 }) {
+                    ForEach(this.onlineItems, (item: OnlineSubtitle) => {
+                      Text(`${item.name} · ${item.provider}${item.lang.length > 0 ? ' · ' + item.lang : ''}`)
+                        .fontSize(11)
+                        .fontColor(Theme.TEXT)
+                        .width('100%')
+                        .padding({ left: 16, right: 16, top: 6, bottom: 6 })
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                        .onClick(() => {
+                          this.useOnline(item);
+                        })
+                    }, (item: OnlineSubtitle) => `on-${item.provider}-${item.name}`)
+                  }
+                  .width('100%')
+                }
+                .width('100%')
+                // Scroll 在高度有限的父容器里必须给高度，否则会把整块空间吃掉
+                .height(120)
+                .scrollBar(BarState.Off)
+              }
+
+              // ---- 已下载到库的：只列旁挂写的，点「删」就删这个文件 ----
+              if (this.ownedSubs.length > 0) {
+                Text('已下载（可删）')
+                  .fontSize(11)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .width('100%')
+                  .padding({ left: 16, right: 16, top: 8, bottom: 2 })
+                ForEach(this.ownedSubs, (item: OwnedSubtitle) => {
+                  Row() {
+                    Text(item.filename)
+                      .fontSize(11)
+                      .fontColor(item.exists ? Theme.TEXT : Theme.TEXT_FAINT)
+                      .layoutWeight(1)
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    Text(item.exists ? '删' : '已不在')
+                      .fontSize(10)
+                      .fontColor(item.exists ? '#FF8A80' : Theme.TEXT_FAINT)
+                      .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+                      .onClick(() => {
+                        if (item.exists) {
+                          this.removeOwned(item.filename);
+                        }
+                      })
+                  }
+                  .width('100%')
+                  .padding({ left: 16, right: 8, top: 2, bottom: 2 })
+                }, (item: OwnedSubtitle) => `own-${item.filename}`)
+              }
+
+              // ---- 样式 / 时间轴 ----
+              if (this.showStyle) {
+                Column({ space: 0 }) {
+                  this.StyleRow('字号', this.subSize === 0 ? '默认' : `${this.subSize}`,
+                    () => {
+                      this.subSize = this.subSize === 0 ? 30 : Math.max(18, this.subSize - 2);
+                      this.saveSubStyle();
+                    },
+                    () => {
+                      this.subSize = Math.min(52, (this.subSize === 0 ? 30 : this.subSize) + 2);
+                      this.saveSubStyle();
+                    })
+                  this.StyleRow('描边', `${this.subBorder}`,
+                    () => {
+                      this.subBorder = Math.max(0, this.subBorder - 0.5);
+                      this.saveSubStyle();
+                    },
+                    () => {
+                      this.subBorder = Math.min(4, this.subBorder + 0.5);
+                      this.saveSubStyle();
+                    })
+                  this.StyleRow('高度', `${Math.round(this.subPos)}%`,
+                    () => {
+                      this.subPos = Math.max(5, this.subPos - 5);
+                      this.saveSubStyle();
+                    },
+                    () => {
+                      this.subPos = Math.min(100, this.subPos + 5);
+                      this.saveSubStyle();
+                    })
+                  this.StyleRow('延迟', `${this.subDelay > 0 ? '+' : ''}${this.subDelay.toFixed(1)}s`,
+                    () => {
+                      this.subDelay = Math.max(-20, Math.round((this.subDelay - 0.5) * 10) / 10);
+                      this.saveSubStyle();
+                    },
+                    () => {
+                      this.subDelay = Math.min(20, Math.round((this.subDelay + 0.5) * 10) / 10);
+                      this.saveSubStyle();
+                    })
+                }
+                .width('100%')
+                .padding({ top: 4 })
+              }
+
               Row() {
                 Button('手机导入')
                   .fontSize(11)
@@ -807,8 +1191,14 @@ struct PlayerPage {
               }, (label: string, index: number) => `audio-${index}`)
             }
             Blank().height(12)
+            }
+            .width('100%')
           }
           .width('48%')
+          // 面板内容比屏幕高时必须能滚：加了几行（在线搜索 / 已下载 / 样式）之后
+          // 固定高度会把底部按钮顶出屏幕，用户就以为「没有这个功能」。
+          .constraintSize({ maxHeight: '72%' })
+          .scrollBar(BarState.Off)
           // 面板同样是悬浮玻璃：毛玻璃 + 细边 + 投影，四周留 14vp 让视频透出来
           .backgroundColor('#66000000')
           .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
@@ -825,6 +1215,11 @@ struct PlayerPage {
         .alignItems(HorizontalAlign.Center)
         .backgroundColor('#66000000')
         .onClick(() => {
+          // 打开面板的那一次点击会继续落到这一层（面板是同一帧刚插进来的），
+          // 不拦就会「点开即秒退」。350ms 内忽略，之后正常点空白关闭。
+          if (Date.now() - this.panelOpenedAt < 350) {
+            return;
+          }
           this.showPanel = false;
         })
       }

@@ -3,17 +3,18 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { Personalize } from '../common/Personalize';
 import { BrowseResult, DetailParams, MediaItem } from '../common/Types';
 import { safeItems } from '../common/Safe';
 import { BuildConfig } from '../common/BuildConfig';
 import { PosterCard } from './PosterCard';
 import { KeywordBox } from './KeywordBox';
-import { BottomSheet, ChipGroup, SortSheet, ToolPill } from './ListSheets';
+import { BottomSheet, ChipGroup, ListToolbar, SortSheet } from './ListSheets';
 import { GachaSwitch } from '../ext/stills/GachaSwitch';
 import { GachaWall } from '../ext/stills/GachaWall';
 import { CollectionInfo, fetchCollections } from '../ext/collections/CollectionTypes';
 import {
-  AGE_BANDS, MYRATING_OPTIONS, PREF_AGE_GENDER, SORT_OPTIONS, ChipOption, SortOption,
+  AGE_BANDS, MYRATING_OPTIONS, PREF_AGE_GENDER, SORT_OPTIONS, VERSION_OPTIONS, ChipOption, SortOption,
   sortLabelWith, sortDefOf, ageBandParams, ageGenderParam, ageGenderLabel
 } from '../common/BrowseOptions';
 
@@ -65,7 +66,11 @@ const YEAR_OPTIONS: ChipOption[] = [
  */
 @Component
 export struct BrowseGrid {
+  /** 海报列数：设置页与双指捏合共用同一个值（2.5.2，见 common/Personalize.ets）。 */
+  @StorageProp('amaneCols') posterCols: number = 3;
   @Prop @Watch('onExternalChange') libraryId: number = 0;
+  /** 只看某个清单里的片（详情页 / 清单页跳过来）。0 = 不限。 */
+  @Prop @Watch('onExternalChange') collectionId: number = 0;
   @Prop @Watch('onExternalChange') refreshKey: number = 0;
   /** 从详情页点「N 岁」进来时预置的年龄分桶；空串=不预置。 */
   @Prop initialAgeBand: string = '';
@@ -77,6 +82,8 @@ export struct BrowseGrid {
   @Prop tabInset: number = 0;
 
   @State items: MediaItem[] = [];
+  /** 下拉刷新中（2.5.7.19）：Refresh 的双向绑定状态。 */
+  @State pulling: boolean = false;
   @State total: number = 0;
   @State loading: boolean = true;
   @State loadingMore: boolean = false;
@@ -86,6 +93,8 @@ export struct BrowseGrid {
   @State fMosaic: string = '';
   @State fCtype: string = '';
   @State fSub: string = '';
+  /** 多版本（2.5.7.7）：'' 全部 / '1' 多版本 / '0' 单文件。 */
+  @State fMulti: string = '';
   @State fScore: string = '';
   @State fYear: string = '';
   @State fAge: string = '';
@@ -158,6 +167,9 @@ export struct BrowseGrid {
     if (this.fSub.length > 0) {
       n++;
     }
+    if (this.fMulti.length > 0) {
+      n++;
+    }
     if (this.fScore.length > 0) {
       n++;
     }
@@ -186,6 +198,10 @@ export struct BrowseGrid {
     if (this.libraryId > 0) {
       parts.push(`library_id=${this.libraryId}`);
     }
+    // 清单视图（2.5.5.25）：`collection=<id>` 由 collections 扩展在 browse 里加条件
+    if (this.collectionId > 0) {
+      parts.push(`collection=${this.collectionId}`);
+    }
     if (this.fMosaic.length > 0) {
       parts.push(`mosaic=${this.fMosaic}`);
     }
@@ -194,6 +210,10 @@ export struct BrowseGrid {
     }
     if (this.fSub.length > 0) {
       parts.push(`sub=${this.fSub}`);
+    }
+    // 多版本（2.5.7.7）：服务端按 media_files 条数现算，删/加文件后刷新即变
+    if (this.fMulti.length > 0) {
+      parts.push(`multi=${this.fMulti}`);
     }
     if (this.fScore.length > 0) {
       parts.push(`min_score=${this.fScore}`);
@@ -235,6 +255,23 @@ export struct BrowseGrid {
     this.load(0, false);
   }
 
+  /**
+   * 下拉刷新（2.5.7.19）：媒体库带「随机」排序时，下拉理应换一批；
+   * 其它排序同样重拉第一页（顺便把服务端新入库的片带进来）。
+   */
+  private async pullDown(): Promise<void> {
+    this.pulling = true;
+    this.items = [];
+    this.total = 0;
+    this.error = '';
+    this.loading = true;
+    try {
+      await this.load(0, false);
+    } finally {
+      this.pulling = false;
+    }
+  }
+
   private async load(offset: number, append: boolean): Promise<void> {
     try {
       const text: string = await httpGet(this.buildUrl(offset), Store.I.token);
@@ -273,6 +310,7 @@ export struct BrowseGrid {
     this.fMosaic = '';
     this.fCtype = '';
     this.fSub = '';
+    this.fMulti = '';
     this.fScore = '';
     this.fYear = '';
     this.fAge = '';
@@ -316,12 +354,20 @@ export struct BrowseGrid {
 
   @Builder
   Toolbar() {
-    Row({ space: 8 }) {
-      Text(this.keyword.length > 0 ? `「${this.keyword}」${this.total} 部` : `${this.total} 部`)
-        .fontSize(11)
-        .fontColor(Theme.TEXT_FAINT)
-        .layoutWeight(1)
-
+    // 2.5.6.13：与分类墙 / 收藏 / 搜索统一走 ListToolbar；抽卡开关走 extra 插槽。
+    ListToolbar({
+      label: this.keyword.length > 0 ? `「${this.keyword}」${this.total} 部` : `${this.total} 部`,
+      sortLabel: sortLabelWith(this.sort, this.fAgeGender) +
+        (this.sort === 'random' ? '' : (this.order === 'asc' ? ' ↑' : ' ↓')),
+      filterCount: this.filterCount(),
+      showFilter: true,
+      onSort: () => {
+        this.showSort = true;
+      },
+      onFilter: () => {
+        this.showFilter = true;
+      }
+    }) {
       // 抽卡模式：换一种看法，不改筛选/排序
       if (BuildConfig.ENABLE_GACHA) {
         GachaSwitch({
@@ -331,25 +377,7 @@ export struct BrowseGrid {
           }
         })
       }
-
-      ToolPill({
-        label: `⇅ ${sortLabelWith(this.sort, this.fAgeGender)}` +
-          (this.sort === 'random' ? '' : (this.order === 'asc' ? ' ↑' : ' ↓')),
-        onTap: () => {
-          this.showSort = true;
-        }
-      })
-
-      ToolPill({
-        label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
-        active: this.filterCount() > 0,
-        onTap: () => {
-          this.showFilter = true;
-        }
-      })
     }
-    .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4, bottom: 8 })
   }
 
   /** 抽卡模式下的精简工具条：开关必须一直看得见，否则退不出抽卡模式。 */
@@ -430,6 +458,14 @@ export struct BrowseGrid {
         title: '字幕', options: SUB_OPTIONS, current: this.fSub,
         onPick: (key: string) => {
           this.fSub = key;
+          this.reload();
+        }
+      })
+      // 多版本（2.5.7.7）：找重复资源用。放在「字幕」下面 —— 两者都是「这一部有几个文件」层面的事。
+      ChipGroup({
+        title: '版本', options: VERSION_OPTIONS, current: this.fMulti,
+        onPick: (key: string) => {
+          this.fMulti = key;
           this.reload();
         }
       })
@@ -568,7 +604,9 @@ export struct BrowseGrid {
           .layoutWeight(1)
           .justifyContent(FlexAlign.Center)
         } else {
-          Grid() {
+          // 下拉刷新：随机排序下拉换一批，其它排序重拉第一页
+          Refresh({ refreshing: $$this.pulling }) {
+            Grid() {
             ForEach(this.items, (item: MediaItem) => {
               GridItem() {
                 this.Cell(item)
@@ -598,15 +636,24 @@ export struct BrowseGrid {
               }
             }
           }
-          .columnsTemplate('1fr 1fr 1fr')
+          .columnsTemplate(Personalize.colsTemplate(this.posterCols))
+          .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
+            Personalize.zoom(event.scale);
+          }))
           .columnsGap(9)
           .rowsGap(14)
           .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: TAB_SAFE })
-          .layoutWeight(1)
+          .width('100%')
+          .height('100%')
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
           .onReachEnd(() => {
             this.loadMore();
+          })
+          }
+          .layoutWeight(1)
+          .onRefreshing(() => {
+            this.pullDown();
           })
         }
       }

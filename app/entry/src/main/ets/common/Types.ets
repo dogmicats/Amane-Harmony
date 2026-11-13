@@ -24,6 +24,8 @@ export interface MediaItem {
   my_rating?: number;
   /** 横图真实宽高比（宽/高）：每日推荐桶幅按它定宽，不再强行 16:9。 */
   fanart_ratio?: number;
+  /** 该片在库里有多少个文件（= 几个版本）。2.5.7.7 起服务端随列表一起给。 */
+  versions?: number;
 }
 
 export interface MediaFile {
@@ -106,6 +108,10 @@ export interface ItemDetail {
   frame_cover?: string;
   /** 公开扩展 highlights：我自己截的帧（当剧照用），排在刮削剧照前面。 */
   my_stills?: string[];
+  /** 服务端覆盖层：这张海报是本地换过的（不是库里的原图），据此才给「恢复原封面」。 */
+  poster_is_custom?: boolean;
+  /** 服务端覆盖层：这部片有任何本地改动（字段或封面）。 */
+  overridden?: boolean;
 }
 
 export interface HomeRow {
@@ -121,6 +127,43 @@ export interface LibraryInfo {
   id: number;
   name: string;
   count: number;
+  /** 用户换过的媒体库封面（站内相对路径）；空 = 客户端用海报拼贴（2.5.5.4）。 */
+  cover?: string;
+}
+
+/** 全库计数里的一个键（只下发这批推荐涉及的键，不塞全库字典）。 */
+export interface StatKV {
+  k: string;
+  n: number;
+}
+
+/**
+ * 全库统计摘要（2.5.7.21）：由 /api/user/home 下发，给推荐理由提供「全库级」事实。
+ * 老服务端没有这个字段时 whole 为 undefined，理由引擎自动跳过全库族。
+ */
+export interface LibraryStats {
+  total: number;
+  /** 有评分的片数（算百分位的分母）。 */
+  scored: number;
+  avg_score: number;
+  max_score: number;
+  min_year: number;
+  max_year: number;
+  watched: number;
+  favorites: number;
+  tag_kinds: number;
+  actor_kinds: number;
+  prefix_kinds: number;
+  /** 0.5 分一档，下标 = round(score*2)，共 21 档。 */
+  score_bins: number[];
+  /** 30 分钟一档，下标 = floor(runtime/30)，共 12 档。 */
+  runtime_bins: number[];
+  tags: StatKV[];
+  actors: StatKV[];
+  series: StatKV[];
+  studios: StatKV[];
+  prefixes: StatKV[];
+  years: StatKV[];
 }
 
 export interface HomeData {
@@ -132,6 +175,8 @@ export interface HomeData {
   rows: HomeRow[];
   libraries: LibraryInfo[];
   generated_at: string;
+  /** 全库统计摘要；老服务端不下发，客户端按 undefined 处理。 */
+  library_stats?: LibraryStats;
 }
 
 export interface BrowseResult {
@@ -237,6 +282,8 @@ export interface BrowseParams {
   sort?: string;
   /** 预置年龄性别（female / male）；缺省读全局偏好，默认 female。 */
   ageGender?: string;
+  /** 只看某个清单的片（2.5.5.25）：清单页 / 详情页跳进来时给。 */
+  collectionId?: number;
 }
 
 /**

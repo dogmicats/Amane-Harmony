@@ -13,7 +13,7 @@
 1. **绝不写 Amane 本体**：`amane.db` 只读；不改 Amane 的配置、镜像、容器、Web UI；不调用会写入上游的 API。
 2. **绝不把 token / 密码 / API key 回显到对话、日志、commit、Issue 或任何外部服务**。用户手动提供凭据时，立即写入权限为 600 的本地文件，不要在终端打印。
 3. **不内置任何真实地址、域名、token、第三方 API key**；模板里一律用占位符。
-4. **不做在线字幕搜索**：`server/ext/subtitles/` 的 `providers` 端点必须恒返回空表，不要"顺手实现"一个 provider。
+4. **在线字幕只接「公开、无需 key、用户触发」的源**：`server/ext/subtitles/` 的 `PROVIDERS` 允许注册公开源，但不得内置或共享任何第三方 API key / 账号，也不得自动识别或绕过站点的人机验证（要验证就把入口交回用户在 App 内输入）。新增源必须自带超时与失败隔离，不稳定的源默认关闭、挂在 `SUBTITLE_*` 开关后面。细则见 `docs/SUBTITLES.md`。
 5. **字幕扫描绝不递归**：只读视频所在目录 `os.scandir`，不做 `os.walk` / `rglob`（媒体目录可能是 FUSE，递归会卡死）。
 6. **发布线与自测线分开**：本仓库只管公开线（`2.2.0` 起、包名 `io.github.dogmycats.amane`）。不要引用、合并或同步自用版 `2.0.x` 的版本号、产物名或 CHANGELOG。
 7. **不改版本号的派生位置**：改版本只改 `version.json`，再同步 `CHANGELOG.md`、`app/AppScope/app.json5`、`server/server.py` 的 `VERSION`。
@@ -49,7 +49,8 @@ python tools/agentctl.py doctor --json
 python tools/scan_secrets.py --path .          # 必须为 0 命中
 python -m py_compile server/server.py server/ext/*/server_ext.py tools/agentctl.py
 curl -s http://127.0.0.1:8770/api/user/ping   # {"ok":true,...}
-curl -s "http://127.0.0.1:8770/api/user/subtitles/providers"  # providers 必须为 []
+curl -s "http://127.0.0.1:8770/api/user/subtitles/providers"  # 返回源列表（含 xunlei），不是 404
+curl -s "http://127.0.0.1:8770/api/user/subtitles/search?q=SSIS-001"  # 允许 items 为空，但不能 500
 ```
 
 ## 更新日志怎么写（`CHANGELOG.md` / Release Notes）

@@ -1,15 +1,20 @@
-import { router } from '@kit.ArkUI';
+import { promptAction, router } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { httpGet, httpPost } from '../../common/Http';
+import { util } from '@kit.ArkTS';
+import { fileIo } from '@kit.CoreFileKit';
+import { photoAccessHelper } from '@kit.MediaLibraryKit';
+import { dropPageCache, httpDelete, httpGet, httpPost } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
+import { StarPick } from '../../common/RateStyle';
+import { Personalize } from '../../common/Personalize';
 import { DetailParams, MediaItem } from '../../common/Types';
 import { BrowseResult } from '../../common/Types';
 import { safeItems } from '../../common/Safe';
 import { posterItem } from '../../common/Util';
 import { PosterCard } from '../../view/PosterCard';
 import { KeywordBox } from '../../view/KeywordBox';
-import { BottomSheet, ChipGroup, SortSheet, ToolPill } from '../../view/ListSheets';
+import { BottomSheet, ChipGroup, ListToolbar, SortSheet } from '../../view/ListSheets';
 import { ChipOption, MYRATING_OPTIONS, SortOption, sortDefOf } from '../../common/BrowseOptions';
 import { collectionChipOptions } from '../collections/CollectionTypes';
 import { BuildConfig } from '../../common/BuildConfig';
@@ -37,9 +42,17 @@ interface TagStat {
  * 系列页额外把前四张海报拼成四宫格放进标题栏，系列一眼能认出来
  * （详情页的系列卡用的是同一套四宫格视觉）。
  */
+interface FacetLogo {
+  id: number;
+  name: string;
+  url: string;
+}
+
 @Entry
 @Component
 struct FacetPage {
+  /** 海报列数：设置页与双指捏合共用同一个值（2.5.2）。 */
+  @StorageProp('amaneCols') posterCols: number = 3;
   @State items: FacetMediaItem[] = [];
   @State total: number = 0;
   @State loading: boolean = true;
@@ -53,6 +66,13 @@ struct FacetPage {
   @State mosaic: string = '';
   /** 分类自己的收藏位：只写 amane 的 is_favorite，与「影片收藏 → 自动入库」无关。 */
   @State facet: FacetItem = emptyFacet();
+  /** 制片厂的官方 logo（服务端缓存后的本地路径），没有就空着。 */
+  @State logoUrl: string = '';
+  /** 自己给这个分类换的封面（站内相对路径）；空 = 用拼贴 / 首字（2.5.5.4）。 */
+  @State coverUrl: string = '';
+  /** 同一张封面的 16:9 横版：头部这里是个 84×46 的横条，竖图会被裁掉大半。 */
+  @State coverWide: string = '';
+  @State coverBusy: boolean = false;
   @State tip: string = '';
   /** 我的评分 / 收藏夹：本地库的数据，上游代理分不了，命中时改走 /api/user/browse。 */
   @State fMyRating: string = '';
@@ -93,8 +113,11 @@ struct FacetPage {
     const p = router.getParams() as FacetParams;
     if (p !== undefined && p !== null) {
       this.kind = p.kind === undefined || p.kind === null ? 'tag' : p.kind;
+      this.loadLogo();
       this.facetId = Number(p.id);
       this.title = p.name === undefined || p.name === null ? '' : p.name;
+      // 分类封面按名字取（自建分类没有 id），拿不到就当没换过
+      this.loadCover();
     }
     // 默认进不进抽卡模式由设置页决定（列表页仍是默认视图）
     this.gachaOn = BuildConfig.ENABLE_GACHA && Store.I.gachaAuto;
@@ -111,7 +134,8 @@ struct FacetPage {
   }
 
   private async load(offset: number, append: boolean): Promise<void> {
-    if (this.facetId <= 0) {
+    // 自建分类没有 id，只能靠名字（服务端按名字把库里 + 覆盖层里的片一起取）
+    if (this.facetId <= 0 && this.facetName().length === 0) {
       this.error = '分类不存在';
       this.loading = false;
       return;
@@ -125,6 +149,9 @@ struct FacetPage {
       `sort_by=${this.sortBy}`,
       `order=${this.order}`
     ];
+    if (this.facetId <= 0) {
+      parts.push(`name=${encodeURIComponent(this.facetName())}`);
+    }
     if (this.subOnly) {
       parts.push('has_subtitle=true');
     }
@@ -199,6 +226,11 @@ struct FacetPage {
     if (this.kind === 'user_tag') {
       return false;
     }
+    // 自建分类（id=0）：facets 的 media 端点查不到，而 browse 支持按名字筛 ——
+    // 走本地这条才有完整的筛选能力（关键词 / 评分 / 收藏 / 排序），和原分类一致。
+    if (this.facetId <= 0) {
+      return true;
+    }
     // 关键词只有核心 browse 认识（`q`）；上游 facets/media 没有这个参数
     return this.keyword.length > 0 || this.fMyRating.length > 0 || this.fCollection.length > 0 ||
       this.pickedTags.length > 0 || this.sortBy === 'myrating';
@@ -248,7 +280,11 @@ struct FacetPage {
       `limit=${PAGE_SIZE}`
     ];
     const tagIds: number[] = [];
-    if (this.kind === 'tag') {
+    if (this.facetId <= 0) {
+      // 自建分类没有 id：按名字查，服务端会把「库里原有 + 覆盖层里改过来的」并起来
+      parts.push(`facet_kind=${this.kind}`);
+      parts.push(`facet_name=${encodeURIComponent(this.facetName())}`);
+    } else if (this.kind === 'tag') {
       tagIds.push(this.facetId);
     } else {
       parts.push(this.kind + '_id=' + this.facetId);
@@ -357,13 +393,247 @@ struct FacetPage {
     }
   }
 
+  /** 给这个分类打星（0 = 清除）。与影片评分是两套数据。 */
+  private async loadLogo(): Promise<void> {
+    if (this.kind !== 'studio') {
+      return;
+    }
+    const id: number = this.facet.id > 0 ? this.facet.id : this.facetId;
+    if (id <= 0) {
+      return;
+    }
+    try {
+      const text: string = await httpGet(
+        `${Store.I.user}/api/user/facets/studio/${id}/logo`, Store.I.token);
+      const r = JSON.parse(text) as FacetLogo;
+      const rel: string = r.url === undefined ? '' : r.url;
+      this.logoUrl = rel.length > 0 ? `${Store.I.user}${rel}?token=${encodeURIComponent(Store.I.token)}` : '';
+    } catch (err) {
+      this.logoUrl = '';
+    }
+  }
+
+  /** 分类名：换封面按**名字**存，自建分类没有 id（2.5.5.4）。 */
+  private facetName(): string {
+    return this.facet.name.length > 0 ? this.facet.name : this.title;
+  }
+
+  private coverPath(): string {
+    return `${Store.I.user}/api/user/cover-any/${this.kind}/${encodeURIComponent(this.facetName())}`;
+  }
+
+  private async loadCover(): Promise<void> {
+    if (this.kind === 'user_tag' || this.facetName().length === 0) {
+      return;
+    }
+    try {
+      const text: string = await httpGet(this.coverPath(), Store.I.token);
+      const obj = JSON.parse(text) as Record<string, Object>;
+      const data = obj.data as Record<string, Object>;
+      const url = data === undefined || data === null || data.url === undefined || data.url === null
+        ? '' : `${data.url}`;
+      const wide = data === undefined || data === null || data.wide === undefined || data.wide === null
+        ? '' : `${data.wide}`;
+      this.coverUrl = url;
+      this.coverWide = wide;
+    } catch (err) {
+      // 老服务端没这个接口：当「没换过」，不打扰
+      this.coverUrl = '';
+      this.coverWide = '';
+    }
+  }
+
+  /** 头部横条优先用横版；没有（老数据）才退回竖版。 */
+  private coverShown(): string {
+    return this.coverWide.length > 0 ? this.coverWide : this.coverUrl;
+  }
+
+  private coverMenu(): MenuElement[] {
+    const items: MenuElement[] = [];
+    items.push({
+      value: '从相册选一张',
+      action: () => {
+        this.pickCover();
+      }
+    });
+    // 用这个分类里几部片的海报拼轮播动图（服务端合成）
+    items.push({
+      value: '用类里的海报做动图',
+      action: () => {
+        this.makeGifCover();
+      }
+    });
+    if (this.coverUrl.length > 0) {
+      items.push({
+        value: '恢复默认封面',
+        action: () => {
+          this.restoreCover();
+        }
+      });
+    }
+    return items;
+  }
+
+  /** 分类动图：取类内最近 6 部的海报缝成循环 GIF，约 10 秒。 */
+  private async makeGifCover(): Promise<void> {
+    if (this.coverBusy) {
+      return;
+    }
+    this.coverBusy = true;
+    promptAction.showToast({ message: '正在用类里的海报拼动图，约 10 秒…', duration: 3000 });
+    try {
+      const url: string = `${Store.I.user}/api/user/facet-gif/${this.kind}/` +
+        encodeURIComponent(this.facetName());
+      const body: Record<string, Object> = { 'count': 6, 'duration': 900 };
+      const raw: string = await httpPost(url, Store.I.token, JSON.stringify(body), 90000);
+      const obj = JSON.parse(raw) as Record<string, Object>;
+      if (obj.ok === true) {
+        dropPageCache();
+        Store.I.coverDirty = true;
+        promptAction.showToast({ message: '动图封面好了', duration: 1500 });
+        this.loadCover();
+      } else {
+        const why: string = obj.reason === undefined || obj.reason === null ? '' : `${obj.reason}`;
+        promptAction.showToast({ message: why.length > 0 ? why : '没做成，稍后再试', duration: 2200 });
+      }
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] facet gif: ${e.code} ${e.message}`);
+      promptAction.showToast({ message: '没做成（服务端可能不支持或海报太少）', duration: 2200 });
+    } finally {
+      this.coverBusy = false;
+    }
+  }
+
+  /** 换分类封面：相册选图（GIF 也能选）→ base64 → `/cover-any/{kind}/{名字}`。 */
+  private async pickCover(): Promise<void> {
+    if (this.coverBusy) {
+      return;
+    }
+    this.coverBusy = true;
+    try {
+      const picker = new photoAccessHelper.PhotoViewPicker();
+      const opt: photoAccessHelper.PhotoSelectOptions = {
+        MIMEType: photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE,
+        maxSelectNumber: 1
+      };
+      const res: photoAccessHelper.PhotoSelectResult = await picker.select(opt);
+      if (res.photoUris.length === 0) {
+        return;
+      }
+      const uri: string = res.photoUris[0];
+      const f = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY);
+      const size: number = fileIo.statSync(f.fd).size;
+      if (size > 8 * 1024 * 1024) {
+        fileIo.closeSync(f);
+        promptAction.showToast({ message: '图太大了（超过 8MB），换一张', duration: 2000 });
+        return;
+      }
+      const buf: ArrayBuffer = new ArrayBuffer(size);
+      fileIo.readSync(f.fd, buf);
+      fileIo.closeSync(f);
+      const helper = new util.Base64Helper();
+      const b64: string = helper.encodeToStringSync(new Uint8Array(buf));
+      const body: Record<string, Object> = { 'data': b64, 'ext': this.extOf(uri) };
+      const raw: string = await httpPost(this.coverPath(), Store.I.token, JSON.stringify(body));
+      const obj = JSON.parse(raw) as Record<string, Object>;
+      if (obj.ok === true) {
+        dropPageCache();
+        Store.I.coverDirty = true;
+        promptAction.showToast({ message: '封面换好了', duration: 1500 });
+        this.loadCover();
+      } else {
+        promptAction.showToast({ message: '没换成功，稍后再试', duration: 1600 });
+      }
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] facet cover: ${e.code} ${e.message}`);
+      promptAction.showToast({ message: '没换成功（选图或上传失败）', duration: 1800 });
+    } finally {
+      this.coverBusy = false;
+    }
+  }
+
+  private async restoreCover(): Promise<void> {
+    if (this.coverBusy) {
+      return;
+    }
+    this.coverBusy = true;
+    try {
+      await httpDelete(this.coverPath(), Store.I.token);
+      dropPageCache();
+      Store.I.coverDirty = true;
+      this.coverUrl = '';
+      promptAction.showToast({ message: '已恢复默认封面', duration: 1500 });
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] facet cover del: ${e.code} ${e.message}`);
+      promptAction.showToast({ message: '没恢复成，稍后再试', duration: 1600 });
+    } finally {
+      this.coverBusy = false;
+    }
+  }
+
+  private extOf(uri: string): string {
+    const lower: string = uri.toLowerCase();
+    if (lower.indexOf('.png') >= 0) {
+      return 'png';
+    }
+    if (lower.indexOf('.webp') >= 0) {
+      return 'webp';
+    }
+    if (lower.indexOf('.gif') >= 0) {
+      return 'gif';
+    }
+    return 'jpg';
+  }
+
+  private async rate(stars: number): Promise<void> {
+    const id: number = this.facet.id > 0 ? this.facet.id : this.facetId;
+    if (id <= 0 || this.kind === 'user_tag') {
+      return;
+    }
+    const before: number = this.facet.myRating === undefined ? 0 : this.facet.myRating;
+    const want: number = before === stars ? 0 : stars;
+    this.setRating(want);
+    try {
+      await httpPost(`${Store.I.user}/api/user/facets/${this.kind}/${id}/rating`,
+        Store.I.token, JSON.stringify({ stars: want }));
+      Store.I.facetDirty = true;
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error(`[amane] facet rating: ${e.code} ${e.message}`);
+      this.setRating(before);
+      this.tip = e.code === 404 ? '服务端还不支持分类评分（需 1.3.54+）' : '评分失败，请重试';
+    }
+  }
+
+  private setRating(stars: number): void {
+    this.facet = {
+      id: this.facet.id, name: this.facet.name, count: this.facet.count,
+      posters: this.facet.posters, posterItems: this.facet.posterItems,
+      topTags: this.facet.topTags, isFavorite: this.facet.isFavorite,
+      myRating: stars,
+      lastRelease: this.facet.lastRelease, lastAdded: this.facet.lastAdded,
+      isHidden: this.facet.isHidden, prefixes: this.facet.prefixes, logo: this.facet.logo
+    };
+  }
+
+  private myStars(): number {
+    const v: number | undefined = this.facet.myRating;
+    return v === undefined ? 0 : v;
+  }
+
   private setFav(fav: boolean): void {
     this.facet = {
       id: this.facet.id, name: this.facet.name, count: this.facet.count,
       posters: this.facet.posters, posterItems: this.facet.posterItems,
       topTags: this.facet.topTags, isFavorite: fav,
+      // myRating 必须原样带上：这对象是整份重建的，漏一个字段 = 那个字段当场归零
+      // （用户报的「打了星返回就没了」，一半原因在这里）
+      myRating: this.facet.myRating,
       lastRelease: this.facet.lastRelease, lastAdded: this.facet.lastAdded,
-      isHidden: this.facet.isHidden, prefixes: this.facet.prefixes
+      isHidden: this.facet.isHidden, prefixes: this.facet.prefixes, logo: this.facet.logo
     };
   }
 
@@ -388,7 +658,6 @@ struct FacetPage {
       const e = err as BusinessError;
       console.error(`[amane] facet hide: ${e.code} ${e.message}`);
       this.setHidden(!want);
-      // 404 有两种可能：服务端太旧，或者 App 连错端口（测试版 8771 / 正式版 8770）——
       // 把实际连的地址打出来，一眼能看出是哪个
       this.tip = e.code === 404 ? `服务端未启用隐藏（${Store.I.user}，需 1.3.5+）` : '操作失败，请重试';
       this.clearTipLater();
@@ -407,8 +676,9 @@ struct FacetPage {
       posters: this.facet.posters, posterItems: this.facet.posterItems,
       topTags: this.facet.topTags,
       isFavorite: this.facet.isFavorite,
+      myRating: this.facet.myRating,
       lastRelease: this.facet.lastRelease, lastAdded: this.facet.lastAdded,
-      isHidden: hidden, prefixes: this.facet.prefixes
+      isHidden: hidden, prefixes: this.facet.prefixes, logo: this.facet.logo
     };
   }
 
@@ -471,22 +741,41 @@ struct FacetPage {
    */
   @Builder
   Cover() {
-    Row({ space: 2 }) {
-      ForEach([0, 1, 2], (i: number) => {
-        Image(this.posterAt(i).length > 0 ? Store.I.img(this.posterAt(i)) : '')
-          .width(this.items.length >= 2 ? 31 : 40)
+    Stack({ alignContent: Alignment.BottomEnd }) {
+      if (this.coverShown().length > 0) {
+        // 换过的封面：横条位优先用 16:9 横版（竖图在这儿只剩中间一条），点它出菜单
+        Image(Store.I.img(this.coverShown()))
+          .width(84)
           .height(46)
           .objectFit(ImageFit.Cover)
           .backgroundColor(Theme.CARD_HI)
           .alt($r('app.media.placeholder'))
-          .visibility(this.posterAt(i).length > 0 ? Visibility.Visible : Visibility.None)
-      }, (i: number) => `cv-${i}`)
+      } else {
+        Row({ space: 2 }) {
+          ForEach([0, 1, 2], (i: number) => {
+            Image(this.posterAt(i).length > 0 ? Store.I.img(this.posterAt(i)) : '')
+              .width(this.items.length >= 2 ? 31 : 40)
+              .height(46)
+              .objectFit(ImageFit.Cover)
+              .backgroundColor(Theme.CARD_HI)
+              .alt($r('app.media.placeholder'))
+              .visibility(this.posterAt(i).length > 0 ? Visibility.Visible : Visibility.None)
+          }, (i: number) => `cv-${i}`)
+        }
+        .height(46)
+      }
     }
     .height(46)
     .borderRadius(8)
     .clip(true)
     .backgroundColor(Theme.CARD_HI)
+    .border({
+      width: this.coverShown().length > 0 ? 1 : 0,
+      color: Theme.accentAlpha(0.32)
+    })
     .margin({ right: 10 })
+    // 轻点封面就出菜单（选图 / 恢复默认），不另占一行按钮
+    .bindMenu(this.kind === 'user_tag' ? [] : this.coverMenu())
   }
 
   @Builder
@@ -501,7 +790,9 @@ struct FacetPage {
         .onClick(() => {
           router.back();
         })
-      if (this.kind === 'series' && this.items.length > 0) {
+      // 系列本来就有拼贴封面；标签 / 厂牌也显示（有片就有海报），
+      // 换过自定义封面的再优先显示它（2.5.5.7）
+      if (this.kind !== 'user_tag' && (this.coverUrl.length > 0 || this.items.length > 0)) {
         this.Cover()
       }
       Column({ space: 3 }) {
@@ -516,6 +807,16 @@ struct FacetPage {
           .fontSize(10)
           .fontColor(Theme.TEXT_FAINT)
           .width('100%')
+        if (this.kind !== 'user_tag') {
+          StarPick({
+            score: this.myStars(),
+            starSize: 15,
+            gap: 2,
+            onPick: (n: number) => {
+              this.rate(n);
+            }
+          })
+        }
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
@@ -567,13 +868,19 @@ struct FacetPage {
    */
   @Builder
   Toolbar() {
-    Row({ space: 8 }) {
-      Text(this.keyword.length > 0 ? `「${this.keyword}」${this.total} 部` : `${this.total} 部`)
-        .fontSize(11)
-        .fontColor(Theme.TEXT_FAINT)
-        .maxLines(1)
-        .layoutWeight(1)
-
+    // 2.5.6.13：与媒体库 / 收藏 / 搜索统一走 ListToolbar；抽卡开关走 extra 插槽。
+    ListToolbar({
+      label: this.keyword.length > 0 ? `「${this.keyword}」${this.total} 部` : `${this.total} 部`,
+      sortLabel: this.sortLabel() + (this.sortBy === 'random' ? '' : (this.order === 'asc' ? ' ↑' : ' ↓')),
+      filterCount: this.filterCount(),
+      showFilter: true,
+      onSort: () => {
+        this.showSort = true;
+      },
+      onFilter: () => {
+        this.showFilter = true;
+      }
+    }) {
       if (BuildConfig.ENABLE_GACHA) {
         GachaSwitch({
           on: this.gachaOn,
@@ -582,25 +889,7 @@ struct FacetPage {
           }
         })
       }
-
-      ToolPill({
-        label: `⇅ ${this.sortLabel()}${this.sortBy === 'random' ? '' : (this.order === 'asc' ? ' ↑' : ' ↓')}`,
-        onTap: () => {
-          this.showSort = true;
-        }
-      })
-
-      ToolPill({
-        label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
-        active: this.filterCount() > 0,
-        onTap: () => {
-          this.showFilter = true;
-        }
-      })
     }
-    .width('100%')
-    .alignItems(VerticalAlign.Center)
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4, bottom: 8 })
   }
 
   /** 属性 / 叠加标签：多选 = AND，所以不用 ChipGroup（那件是单选），单独一组。 */
@@ -863,7 +1152,10 @@ struct FacetPage {
               }
             }
           }
-          .columnsTemplate('1fr 1fr 1fr')
+          .columnsTemplate(Personalize.colsTemplate(this.posterCols))
+          .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
+            Personalize.zoom(event.scale);
+          }))
           .columnsGap(8)
           .rowsGap(14)
           .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })

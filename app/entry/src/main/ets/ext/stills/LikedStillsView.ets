@@ -21,6 +21,8 @@ import { LikedStill, LikedStillPage, likedTotal, safeLikedStills } from './Gacha
 export struct LikedStillsView {
   /** 外层刷新信号（切回收藏页 / 从详情页回来时递增），变了就重新拉。 */
   @Prop @Watch('onRefresh') refreshKey: number = 0;
+  /** 下拉刷新的转圈状态：本块加载完由自己收回（父级只负责置 true）。 */
+  @Link pulling: boolean;
 
   @State items: LikedStill[] = [];
   @State urls: string[] = [];
@@ -55,6 +57,8 @@ export struct LikedStillsView {
       this.note = e.code === 404 ? '服务端还没有这个功能（需 1.3.25+）' : '读取失败，请检查连接';
     }
     this.loading = false;
+    // 下拉刷新的圈由本块收（父级只负责在 onRefreshing 里置 true）
+    this.pulling = false;
   }
 
   /** 把 items 摊成瀑布流要的三个平行数组。 */

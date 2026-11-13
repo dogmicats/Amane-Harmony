@@ -64,7 +64,9 @@
 | `docs/screenshots/gacha.png` | **有趣的功能**（② 抽卡，演员页盲盒是同一入口） |
 | `docs/screenshots/facets.png` | **有趣的功能**（③ 分类体系） |
 | `docs/screenshots/frame-picks.png` | **有趣的功能**（⑦ 截帧，带时间戳与存图操作） |
-| `docs/screenshots/cast-age-wide.png` | **有趣的功能**（⑧ 出演年龄，宽幅主推：18–24 岁列表 + 女优年龄排序） |
+| `docs/screenshots/detail-age-crop.png` | **有趣的功能**（⑦ 出演年龄局部：演员行 +「出演 N 岁」徽章，止于版本列表之前） |
+| `docs/screenshots/stats-crop.png` | **有趣的功能**（⑩ 观看统计局部：概览卡 + 四个指标 +「数据少」，不含筛选与诊断脚注） |
+| `docs/screenshots/cast-age-wide.png` | 历史存档（2.6.0 起不再占宽幅主推位） |
 | `docs/screenshots/cast-age-badge.png` | 备用：详情页「出演 22 岁」徽章特写，需要佐证「岁数从演员行来」时作 ⑧ 的第二张图 |
 | `docs/screenshots/prefix.png` | **有趣的功能**（⑨ 系列属性 / 番号前缀，GHNU 番号 94 部） |
 | `docs/screenshots/home.png` | Hero、完善的基础功能 |

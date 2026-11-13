@@ -41,7 +41,8 @@ export struct HeroBanner {
                     .fontSize(11)
                     .fontColor(Theme.TEXT)
                     .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                    .backgroundColor('#4D7C5CFF')
+                    // 番号底色跟着主题走（原来写死 30% 紫，换主题会留一块紫斑）
+                    .backgroundColor(Theme.accentAlpha(0.3))
                     .borderRadius(4)
                   if (item.marks !== undefined && item.marks !== null && item.marks.length > 0) {
                     MarkBadges({ marks: item.marks, max: 3, badgeSize: 9, fill: 'dark' })

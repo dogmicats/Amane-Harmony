@@ -3,6 +3,10 @@
     {
       "name": "app_name",
       "value": "Amane"
+    },
+    {
+      "name": "app_name_ui",
+      "value": "AMANE-UI"
     }
   ]
 }

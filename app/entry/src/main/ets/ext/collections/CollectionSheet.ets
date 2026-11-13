@@ -1,4 +1,5 @@
 import { BusinessError } from '@kit.BasicServicesKit';
+import { router } from '@kit.ArkUI';
 import { Theme } from '../../common/Theme';
 import {
   CollectionInfo, fetchCollections, fetchItemCollections, createCollection,
@@ -18,6 +19,17 @@ export struct CollectionSheet {
   @Prop metaId: number = 0;
   @Prop favorite: boolean = false;
   onClose: () => void = () => {};
+
+  /** 跳到「只看这个清单」的影片墙（2.5.5.25）。详情页 → 清单 → 影片 的闭环。 */
+  private openList(c: CollectionInfo): void {
+    this.onClose();
+    const params: Record<string, Object> = {
+      'libraryId': 0,
+      'collectionId': c.id,
+      'title': c.name.length > 0 ? c.name : '清单'
+    };
+    router.pushUrl({ url: 'pages/LibraryPage', params: params });
+  }
   onChanged: (fav: boolean, ids: number[]) => void = (fav: boolean, ids: number[]) => {};
 
   @State lists: CollectionInfo[] = [];
@@ -176,6 +188,15 @@ export struct CollectionSheet {
                   Text(`${c.n} 部`)
                     .fontSize(10)
                     .fontColor(Theme.TEXT_FAINT)
+                  // 只看这一个清单里的片：整行的点击是「勾选」，所以跳转单独给一块
+                  Text('›')
+                    .fontSize(16)
+                    .fontColor(Theme.TEXT_FAINT)
+                    .width(20)
+                    .textAlign(TextAlign.Center)
+                    .onClick(() => {
+                      this.openList(c);
+                    })
                 }
                 .width('100%')
                 .padding({ left: 10, right: 10, top: 9, bottom: 9 })

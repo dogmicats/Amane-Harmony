@@ -24,7 +24,7 @@ CI 的 `schema-smoke.yml` 用最小 fixture 校验下列列存在；`upstream-wa
 | `actors` | `id`, `name`, `gender` | 演员扩展直查（头像 / 作品 / 共演） |
 | `actor_gallery` | `actor_id`, `url` | 演员写真库 |
 
-`oshash` 是上游按需计算的 OpenSubtitles moviehash，本版本只把它透出到 `/api/user/item/{id}` 的 `files[]`，**不使用**（为将来的在线字幕源预留）。老条目里它可能是 NULL。
+`oshash` 是上游按需计算的 OpenSubtitles moviehash，本版本只把它透出到 `/api/user/item/{id}` 的 `files[]`，**不使用**（在线字幕搜索按番号查，不依赖它）。老条目里它可能是 NULL。
 
 ## 依赖的 Amane HTTP 接口
 

@@ -65,6 +65,17 @@ DEFAULTS: dict = {
     "frame_timeout": 25.0,
     "probe_timeout": 8.0,
     "workers": 6,
+    # ---- 网盘挂载（115 等）专用策略（2.5.7.15）----
+    # 这些路径上 ffprobe 冷读 8 秒都不够（实测必超时），而每个抽帧点还要单独 seek；
+    # 6 并发一起怼会把挂载和带宽打满，还一个都抽不出来。所以：
+    #   * 不探片长（直接用库里 runtime，避免每个请求白等 8 秒）；
+    #   * 串行抽（1 个 ffmpeg 在跑）；
+    #   * 单帧给足 75 秒（冷读一次就要几十秒）；
+    #   * 失败的帧冷却 10 分钟再试，避免客户端轮询时每轮都重起 ffmpeg。
+    "network_mounts": ["/media2"],
+    "remote_workers": 1,
+    "remote_frame_timeout": 75.0,
+    "fail_cooldown": 600,
     # 空 = DATA_DIR/frames；也能写成别的持久化目录
     "cache_dir": "",
     # 单文件最多缓存多少张，超了清最旧的
@@ -94,6 +105,46 @@ DEFAULTS: dict = {
 # 正在抽的帧，避免客户端重试时同一个点跑两遍 ffmpeg
 _LOCK = threading.Lock()
 _INFLIGHT: set = set()
+# 抽失败的帧：dst -> 失败时间戳。冷却期内不再起 ffmpeg（客户端是轮询的，
+# 一个抽不出的点会被反复重试，每次都占满一个线程 + 一次网盘冷读）。
+_FAILED: dict = {}
+# 网盘路径的 isfile 结果缓存：115 上单次 stat 就要 0.7s，客户端每轮都请求一次
+_EXISTS: dict = {}
+
+
+def _is_remote(path: str, cfg: dict) -> bool:
+    """路径是否落在网盘/网络挂载下（这些盘冷读极慢，要走另一套策略）。"""
+    p = (path or "").replace("\\", "/")
+    for mount in (cfg.get("network_mounts") or []):
+        m = str(mount).rstrip("/")
+        if m and (p == m or p.startswith(m + "/")):
+            return True
+    return False
+
+
+def _remote_cfg(cfg: dict) -> dict:
+    """给网盘路径用的配置副本：串行抽、单帧超时放宽。"""
+    out = dict(cfg)
+    out["workers"] = max(1, int(cfg.get("remote_workers", 1)))
+    out["frame_timeout"] = float(cfg.get("remote_frame_timeout", 75.0))
+    return out
+
+
+def _file_exists(path: str, cfg: dict) -> bool:
+    """带缓存的 isfile：网盘上 stat 一次 0.7s，列表轮询里不能每次都付这个钱。
+
+    只缓存「存在」的结果（文件被删了走 ffmpeg 失败也会被兜住），缓存 5 分钟。
+    """
+    if not path:
+        return False
+    now = time.time()
+    hit = _EXISTS.get(path)
+    if hit is not None and now - hit < 300:
+        return True
+    if os.path.isfile(path):
+        _EXISTS[path] = now
+        return True
+    return False
 
 
 # --------------------------------------------------------------------------- #
@@ -241,23 +292,46 @@ def _duration_of(cfg: dict, file_id: int, path: str, meta_id: int) -> float:
     之后开详情页就是读一个几十字节的 json，不再碰网盘。
     """
     stamp = os.path.join(_cache_root(cfg), str(file_id), "duration.json")
+    cached, cached_src = 0.0, ""
     try:
         with open(stamp, encoding="utf-8") as fh:
-            cached = float((json.load(fh) or {}).get("duration") or 0)
-        if cached > 0:
-            return cached
+            blob = json.load(fh) or {}
+        cached = float(blob.get("duration") or 0)
+        cached_src = str(blob.get("source") or "")
     except (OSError, ValueError, TypeError, AttributeError):
         pass
+    # 网盘挂载：ffprobe 冷读必然超时（实测 8 秒不够，探一次白等 8 秒），
+    # 而且每个请求都会探一次 —— 直接用库存片长，并把结果落盘，
+    # 之后开详情页就是读一个几十字节的 json。真片长留给后台预热去补。
+    if _is_remote(path, cfg):
+        if cached > 0:
+            return cached
+        fallback = _runtime_seconds(meta_id)
+        _write_stamp(stamp, fallback, "runtime")
+        return fallback
+    if cached > 0:
+        return cached
     probed = _probe(_tool(cfg, "ffprobe"), path, cfg)
     if probed > 0:
-        try:
-            os.makedirs(os.path.dirname(stamp), exist_ok=True)
-            with open(stamp, "w", encoding="utf-8") as fh:
-                json.dump({"duration": probed}, fh)
-        except OSError as exc:
-            A.log(f"WARN 亮点片长缓存写不进 {stamp}: {exc}")
+        _write_stamp(stamp, probed, "probe")
         return probed
-    return _runtime_seconds(meta_id)
+    # 探测失败：把库存片长也当缓存落下来（标 runtime），避免每次请求都再等 8 秒。
+    fallback = _runtime_seconds(meta_id)
+    if fallback > 0:
+        _write_stamp(stamp, fallback, "runtime")
+    return fallback
+
+
+def _write_stamp(stamp: str, duration: float, source: str) -> None:
+    """把片长写进该文件的 duration.json（source 标明来源，便于以后重探）。"""
+    if duration <= 0:
+        return
+    try:
+        os.makedirs(os.path.dirname(stamp), exist_ok=True)
+        with open(stamp, "w", encoding="utf-8") as fh:
+            json.dump({"duration": duration, "source": source}, fh)
+    except OSError as exc:
+        A.log(f"WARN 亮点片长缓存写不进 {stamp}: {exc}")
 
 
 # --------------------------------------------------------------------------- #
@@ -290,10 +364,17 @@ def _pick_path(cfg: dict, file_id: int, ms: int) -> str:
 
 def _extract(ffmpeg: str, src: str, dst: str, ms: int, cfg: dict, width: int = 0) -> bool:
     """抽一帧落盘。失败返回 False（不抛，一个点失败不影响整条）。"""
+    now = time.time()
+    cooldown = float(cfg.get("fail_cooldown", 600) or 0)
     with _LOCK:
         if os.path.isfile(dst):
             return True
         if dst in _INFLIGHT:
+            return False
+        # 冷却期内的失败点直接跳过：客户端轮询会反复请求同一个点，
+        # 每次都重起一次网盘冷读（几十秒），等于把服务端钉在这几个点上。
+        failed_at = _FAILED.get(dst)
+        if failed_at is not None and cooldown > 0 and now - failed_at < cooldown:
             return False
         _INFLIGHT.add(dst)
     tmp = dst + ".part.jpg"     # 后缀必须是 .jpg：ffmpeg 靠后缀选封装，.part 会报 Invalid argument
@@ -315,11 +396,17 @@ def _extract(ffmpeg: str, src: str, dst: str, ms: int, cfg: dict, width: int = 0
         if res.returncode != 0 or not os.path.isfile(tmp) or os.path.getsize(tmp) == 0:
             err = res.stderr.decode("utf-8", "replace").strip().splitlines()
             A.log(f"WARN 亮点抽帧失败 {src}@{ms}ms: {err[-1] if err else res.returncode}")
+            with _LOCK:
+                _FAILED[dst] = time.time()
             return False
         os.replace(tmp, dst)
+        with _LOCK:
+            _FAILED.pop(dst, None)
         return True
     except (subprocess.SubprocessError, OSError) as exc:
         A.log(f"WARN 亮点抽帧异常 {src}@{ms}ms: {exc}")
+        with _LOCK:
+            _FAILED[dst] = time.time()
         return False
     finally:
         try:
@@ -369,12 +456,17 @@ def highlights(handler, query, mid: str, *_):
     if target is None:
         return handler._json({"ok": False, "reason": "指定版本不在这个条目下", "items": []})
     src = target["path"]
-    if not src or not os.path.isfile(src):
+    # 网盘上 isfile 一次 0.7s（客户端每轮都请求），走带缓存的版本
+    if not src or not _file_exists(src, cfg):
         return handler._json({"ok": False, "reason": "文件不在线（网盘没挂上？）", "items": []})
 
     ffmpeg = _tool(cfg, "ffmpeg")
     if not ffmpeg:
         return handler._json({"ok": False, "reason": "服务端没有 ffmpeg", "items": []})
+
+    # 网盘：串行抽 + 单帧长超时（6 并发一起怼只会一起超时）
+    remote = _is_remote(src, cfg)
+    run_cfg = _remote_cfg(cfg) if remote else cfg
 
     count = _int(_one(query, "n", ""), int(cfg["count"]), 1, 16)
     duration = target["duration"] or _duration_of(cfg, target["id"], src, meta_id)
@@ -397,12 +489,13 @@ def highlights(handler, query, mid: str, *_):
             todo.append((ms, dst))
 
     if todo:
-        pool = ThreadPoolExecutor(max_workers=int(cfg["workers"]))
+        pool = ThreadPoolExecutor(max_workers=int(run_cfg["workers"]))
         try:
-            futs = [pool.submit(_extract, ffmpeg, src, dst, ms, cfg) for ms, dst in todo]
+            futs = [pool.submit(_extract, ffmpeg, src, dst, ms, run_cfg) for ms, dst in todo]
             # 第一屏一张都还没有时才等一会儿（本地盘 3 秒内基本齐）；
             # 已经有图就直接回 —— 客户端是轮询式的，不能每轮都卡这么久。
-            if not ready:
+            # 网盘上单帧本来就要几十秒，等也等不到，直接回「正在抽」让客户端轮询。
+            if not ready and not remote:
                 fwait(futs, timeout=float(cfg["budget"]))
         finally:
             # 不 wait：没抽完的交给后台继续，客户端下一轮直接拿缓存
@@ -860,6 +953,9 @@ def _preview_warm_once(cfg: dict, ffmpeg: str) -> bool:
             rows = conn.execute(
                 "SELECT metadata_id AS mid, id AS fid, path, duration "
                 "FROM media_files WHERE path IS NOT NULL AND path != '' "
+                # metadata_id 可能为 NULL（孤儿文件）：下面要 int() 它，不排除会抛
+                # 「int() argument must be ... not 'NoneType'」，整条预热循环每轮刷一条 WARN。
+                "AND metadata_id IS NOT NULL "
                 "ORDER BY id DESC LIMIT 800").fetchall()
     except Exception as exc:  # noqa: BLE001
         A.log(f"WARN 预览预热查不到库: {exc}")
@@ -909,9 +1005,12 @@ def _preview_warm_loop(interval: int) -> None:
             ffmpeg = _tool(cfg, "ffmpeg")
             if not ffmpeg:
                 return
-            # 预算以用户设置为准（0 = 不设上限）
-            cfg["preview_budget_mb"] = int(prefs.get("budget_mb",
-                                                     cfg.get("preview_budget_mb", 2048)))
+            # 预算以用户设置为准（0 = 不设上限）。偏好里可能是 null（清空过 / 老版本写的），
+            # 直接 int(None) 会让整个预热循环抛异常、每轮刷一条 WARN。
+            raw_budget = prefs.get("budget_mb")
+            if raw_budget is None:
+                raw_budget = cfg.get("preview_budget_mb", 2048)
+            cfg["preview_budget_mb"] = _int(raw_budget, 2048, 0, 10 ** 6)
             _preview_trim(cfg)
             did = _preview_warm_once(cfg, ffmpeg)
             time.sleep(max(10, interval) if did else 300)

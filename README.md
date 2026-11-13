@@ -12,12 +12,19 @@
 </p>
 
 <p align="center">
-  <strong>把 Amane 媒体库带到 HarmonyOS。</strong><br>
-  原生媒体库浏览、演员 / 共演检索、收藏续播与 mpv 播放；<br>
-  轻量 Python 旁挂服务补齐扩展 API、字幕与播放代理。
+  <strong>发现下一部好片，<br>留住每一次精彩。</strong><br>
+  沿着演员与共演找片，跟着剧照发现惊喜；从详情开始观看，把亮点、评价与收藏留给下一次重逢。
 </p>
 
+<p align="center"><sub>共演检索 · 随机抽卡 · 丰富详情 · 记录回看</sub></p>
+
+<p align="center"><sub><strong>2.6.0 新增</strong>　俗称搜索 · 观看统计 · 自由整理<br>找片更顺手，看过有迹可循。</sub></p>
+
+> 把自己的 Amane 媒体库带到 HarmonyOS。沿着演员与共演找片，让随机剧照带来惊喜；打开详情了解阵容、选择版本，再把精彩画面、评分和观看记录留下来。2.6.0 加入观看统计、俗称与别名检索，以及更多个人整理方式。
+
 > 截图取自作者自建媒体库；封面、横幅与剧照已打码，演员头像保留原样。
+
+<p align="center"><sub>面向已有 Amane 媒体库的 HarmonyOS NEXT 手机用户，需部署旁挂服务并自行签名安装。<a href="docs/START.md">从零开始</a> · <a href="../../releases">下载</a></sub></p>
 
 ## 有趣的功能
 
@@ -49,7 +56,7 @@
 
 ⑥ **弹幕与评价**　对整部片想锐评？看到一半想说点啥？增加了弹幕与评价功能。连接 Amane 的评价数据库，你的评价也能提交；看到一半还可以随时发送弹幕，锐评场景。飞行式滚动、样式可调，支持后台查看并管理所有你自己的弹幕和评价，点击一键跳转详情页。
 
-<p><img src="docs/screenshots/cast-age-wide.png" width="100%"></p>
+<p><img src="docs/screenshots/detail-age-crop.png" width="460"></p>
 
 ⑦ **出演年龄**　演员行标着出演本片时的岁数，点一下岁数就翻同龄的片，结果还能按女优 / 男优年龄排序。那年，她多大？
 
@@ -59,17 +66,17 @@
 
 ⑨ **打分**　1–5 星，配菜、有意思、对味、反复、社保——JAV 也有自己的从夯到拉：一眼看出这部片在你心里什么位置，顺手还能留句锐评。
 
-<p><img src="docs/screenshots/stats-overview.png" width="460"></p>
+<p><img src="docs/screenshots/stats-crop.png" width="520"></p>
 
-⑩ **观看统计**　看了那么多，到底看了啥？累计多少小时、连续几天没断、从哪一年开始入坑，一屏说清；还能点开任何一周、任何一段，看当时的数字。<br><strong>概览 · 12 周趋势 · 最热片段 · 偏好榜</strong>
+⑩ **观看统计**　看过不少，回头却只记得几张海报？把这台设备记录的观看次数、时长、趋势和偏好放到一起，看看最近把时间花在了哪里。记录还少时会提醒「还在积累」，不用把空白当成结论。<br><strong>观看概览 · 趋势回看 · 偏好榜</strong>
 
 <p><img src="docs/screenshots/tier-board.png" width="460"></p>
 
-⑪ **从夯到拉**　五星打完就烂在库里太可惜。把星级直接排成一张座次图：夯、顶级、人上人、NPC、拉完了，谁在你心里什么位置一眼见底；能按类型 / 时间 / 性别筛，导出成图片存相册。<br><strong>五档座次 · 多维筛选 · 一键导图</strong>
+⑪ **从夯到拉**　打过的星，值得排出来看看。把个人评分生成五档座次图，筛一筛想放在一起比较的作品，再把这一刻的选择保存下来。以后口味变了，重新生成就是另一张记录。<br><strong>五档座次 · 条件筛选 · 导出图片</strong>
 
-<p><img src="docs/screenshots/search-alias.png" width="460"></p>
+<p><img src="docs/screenshots/search-alias-crop.png" width="460"></p>
 
-⑫ **搜索认俗称**　你嘴里叫「牛头人」，库里写的是「寝取」——以前搜不到，只能当没这片。现在拼音、繁体、日文写法、俗称全认，还会把俗称挂到你库里的正名上；搜空过的词会自动排队等你处理，不用事先维护词表。<br><strong>拼音 · 繁体 · 俗称 · 别名自助</strong>
+⑫ **搜索认俗称**　名字记得住，写法却不一定记得准。拼音首字母、繁简写法和俗称一起帮你找；还没对应上的叫法，可以加入自己的别名，下次想起它时，用熟悉的名字继续找。<br><strong>拼音首字母 · 写法归一 · 别名维护</strong>
 
 ## 完善的基础功能
 
@@ -84,13 +91,13 @@
     <td align="center" valign="top"><img src="docs/screenshots/detail-stills.png" width="120"><br><strong>剧照</strong><br><sub>瀑布流 · 标记喜爱 · 尽收眼底</sub></td>
     <td align="center" valign="top"><img src="docs/screenshots/filter-sheet.png" width="120"><br><strong>筛选</strong><br><sub>想怎么筛就怎么筛</sub></td>
     <td align="center" valign="top"><img src="docs/screenshots/search.png" width="120"><br><strong>搜索</strong><br><sub>联想 · 别名 · 拼音繁体</sub></td>
-    <td align="center" valign="top"><img src="docs/screenshots/player-settings.png" width="120"><br><strong>播放器</strong><br><sub>内置 mpv · 在线字幕 · 手势</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/player-settings.png" width="120"><br><strong>播放器</strong><br><sub>内置 mpv · 倍速 · 手势</sub></td>
   </tr>
 </table>
 
 <sub>演员墙按身材和年龄挑：从娇小到丰满、从人妻到 JK，总有一款对味；想挑奶狗或大叔也不是不行。</sub>
 
-<sub>多清单 · 稍后再看 · 离线缓存 · 8 套主题 · 列数可调 · 首页可编排 · 编辑信息与封面 · 设置分块 · 全矢量图标 · 导出日志</sub>
+<sub>多清单 · 稍后再看 · 自建标签与系列 · 手机编辑信息 · 8 套主题 · 列数可调 · 首页编排 · 检查更新 · 设置分块 · 全矢量图标 · 导出日志</sub>
 
 ## 播放链路
 
@@ -101,7 +108,7 @@
 - **mpv 硬解**：左右拖进度、竖直调亮度音量、0.75–2x 倍速、音轨字幕切换、退出记进度。
 - **悬浮玻璃控制层**：视频从栏下透出，播放页两侧用封面晕出光晕。
 - **参数锁定**：旧配置自动重置；诊断行看缓存秒数，一眼分清网络还是解码。
-- **外挂字幕**：同目录 / 手机导入 / URL / 记住选择，四种编码自动转 WebVTT。
+- **外挂字幕**：同目录 / 手机导入 / URL / 在线搜索，记住每部片的选择；多种常见编码自动转 WebVTT。
 
 ## 快速开始
 

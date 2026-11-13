@@ -27,6 +27,10 @@ export interface FacetItem {
   topTags: TagShare[];
   /** 分类自己的收藏位。与「影片收藏」无关：不写收藏表、不触发入库。 */
   isFavorite: boolean;
+  /** 我给这个分类打的星（0 = 还没打）。与影片评分是两套。 */
+  myRating?: number;
+  /** 制片厂的 logo 路径（服务端已缓存才有，其他分类恒为空）。 */
+  logo: string;
   /** 分类内最晚的发行日，YYYY-MM-DD；没有影片时为空。 */
   lastRelease: string;
   /** 分类内最新一条媒体文件的入库日，YYYY-MM-DD。 */
@@ -38,6 +42,13 @@ export interface FacetItem {
    * 日文厂牌名认不出来时，这串字母是更快的识别锚点；其他分类恒为空数组。
    */
   prefixes: string[];
+  /** 我自己换过的封面（系列 / 标签 / 制片商）；没换过是空串，退回拼贴或首字。 */
+  cover?: string;
+  /**
+   * 服务端覆盖层里「用户新建、库里没有」的分类（id 恒为 0）。
+   * 点它不是进分类影片墙，而是带着名字去搜索 —— 搜索本来就匹配系列名。
+   */
+  virtual?: boolean;
 }
 
 export interface FacetList {
@@ -125,7 +136,7 @@ function n(v: number): number {
 export function emptyFacet(): FacetItem {
   const f: FacetItem = {
     id: 0, name: '', count: 0, posters: [], posterItems: [], topTags: [], isFavorite: false,
-    lastRelease: '', lastAdded: '', isHidden: false, prefixes: []
+    lastRelease: '', lastAdded: '', isHidden: false, prefixes: [], logo: ''
   };
   return f;
 }
@@ -168,10 +179,14 @@ export function safeFacet(raw: FacetItem): FacetItem {
   f.posterItems = safePosterRefs(raw.posterItems);
   f.topTags = safeTagShares(raw.topTags);
   f.isFavorite = raw.isFavorite === true;
+  f.myRating = Math.trunc(n(raw.myRating === undefined ? 0 : raw.myRating));
+  f.logo = s(raw.logo === undefined ? '' : raw.logo);
   f.lastRelease = s(raw.lastRelease);
   f.lastAdded = s(raw.lastAdded);
   f.isHidden = raw.isHidden === true;
   f.prefixes = Array.isArray(raw.prefixes) ? raw.prefixes : [];
+  f.cover = s(raw.cover === undefined ? '' : raw.cover);
+  f.virtual = raw.virtual === true;
   return f;
 }
 

@@ -3,6 +3,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { router, uiMaterial } from '@kit.ArkUI';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { Personalize } from '../common/Personalize';
 import { uploadCrashLog } from '../common/CrashReporter';
 import { HomeTab } from './HomeTab';
 import { LibraryTab } from './LibraryTab';
@@ -24,6 +25,14 @@ struct Index {
   @State libRefresh: number = 0;
   @State actorsRefresh: number = 0;
   @State facetsRefresh: number = 0;
+  /**
+   * 主题版本号（2.5.2）：设置页换色时 +1。
+   *
+   * `Theme.ACCENT` 是静态字段，子组件不会因为它变了就重绘（颜色都是 build 时读走的）。
+   * 所以这里靠「if/else 换分支」把整棵 Tab 树销毁重建一次 —— 换主题是一次性的低频操作，
+   * 重建几十毫秒，比让 30 多个组件各自订阅状态要省心得多，也不会漏掉任何一处颜色。
+   */
+  @StorageProp('amaneThemeEpoch') themeEpoch: number = 0;
   private tabs: TabsController = new TabsController();
   // 「我的」永远固定在最后：扩展开关会把前面的 Tab 数量改掉，
   // 用写死的 index 判断会把「我的」和 extension Tab 混在一起。
@@ -41,6 +50,9 @@ struct Index {
       const err = error as BusinessError;
       console.error(`[amane] init: ${err.code} ${err.message}`);
     }
+    // 主题色 / 列数要赶在第一次 build 之前生效；放在 try 外面，
+    // 万一上面读偏好抛错，这里仍会按默认值把 AppStorage 铺好（不至于白屏）。
+    Personalize.init();
     this.boot();
   }
 
@@ -100,6 +112,12 @@ struct Index {
         Store.I.itemRemoved = false;
         this.libRefresh++;
       }
+      // 改过元数据 / 换过封面：媒体库与标签列表都得重拉，否则还是旧图旧名
+      if (Store.I.coverDirty) {
+        Store.I.coverDirty = false;
+        this.libRefresh++;
+        this.facetsRefresh++;
+      }
       // 分类页里改了收藏 / 隐藏才重拉标签列表：无条件重拉会把滚动位置也一起清掉
       if (Store.I.facetDirty) {
         Store.I.facetDirty = false;
@@ -128,15 +146,97 @@ struct Index {
       .height(44)
       .justifyContent(FlexAlign.Center)
       .borderRadius(14)
-      .backgroundColor(this.currentTab === index ? '#26FFFFFF' : '#00FFFFFF')
+      // 选中胶囊也吃主题色（以前是纯白 15%）：整条底栏跟着换，视觉上才像一个整体
+      .backgroundColor(this.currentTab === index ? Theme.accentAlpha(0.18) : '#00FFFFFF')
       .border({
         width: this.currentTab === index ? 0.5 : 0,
-        color: '#2EFFFFFF'
+        color: Theme.accentAlpha(0.32)
       })
     }
     .width('100%')
     .height(52)
     .justifyContent(FlexAlign.Center)
+  }
+
+  /**
+   * 整棵 Tab 树。单独抽成 Builder 是为了换主题时能一口气重建：
+   * `build()` 里用 `themeEpoch` 的奇偶切换 if/else 分支，分支一换子树就销毁重建，
+   * 静态读走的 `Theme.ACCENT` 才会全部按新颜色重新画。
+   */
+  @Builder
+  TabsRoot() {
+    Tabs({ barPosition: BarPosition.End, controller: this.tabs, index: this.currentTab }) {
+      TabContent() {
+        HomeTab({ refreshKey: this.homeRefresh })
+      }
+      .tabBar(this.TabBarItem(0, '首页', $r('app.media.ic_tab_home')))
+      .backgroundColor(Theme.BG)
+
+      TabContent() {
+        LibraryTab({ refreshKey: this.libRefresh })
+      }
+      .tabBar(this.TabBarItem(1, '媒体库', $r('app.media.ic_tab_lib')))
+      .backgroundColor(Theme.BG)
+
+      TabContent() {
+        FavoritesTab({ refreshKey: this.favRefresh })
+      }
+      .tabBar(this.TabBarItem(2, '收藏', $r('app.media.ic_tab_fav')))
+      .backgroundColor(Theme.BG)
+
+      // 公开扩展 actors：演员网格。关掉 ENABLE_ACTORS 时后面的 Tab index 会自动前移
+      if (BuildConfig.ENABLE_ACTORS) {
+        TabContent() {
+          ActorsTab({ refreshKey: this.actorsRefresh })
+        }
+        .tabBar(this.TabBarItem(this.actorIndex, '演员', $r('app.media.ic_tab_actor')))
+        .backgroundColor(Theme.BG)
+      }
+
+      // 公开扩展 facets：标签 / 系列 / 制片商 分类浏览
+      if (BuildConfig.ENABLE_FACETS) {
+        TabContent() {
+          FacetsTab({ refreshKey: this.facetsRefresh })
+        }
+        .tabBar(this.TabBarItem(this.facetIndex, '标签', $r('app.media.ic_tab_tag')))
+        .backgroundColor(Theme.BG)
+      }
+
+      TabContent() {
+        ProfileTab({ refreshKey: this.homeRefresh })
+      }
+      .tabBar(this.TabBarItem(this.profileIndex, '我的', $r('app.media.ic_tab_me')))
+      .backgroundColor(Theme.BG)
+    }
+    // 悬浮玻璃功能栏：内容从栏下穿过，材质交给系统沉浸光感（TabBar 是官方
+    // 明确支持 systemMaterial 的位置），带圆角胶囊、随系统深浅色/算力自适应。
+    .barHeight(58)
+    .barOverlap(true)
+    .barBackgroundColor(Color.Transparent)
+    .barFloatingStyle({
+      barSideMargin: 16,
+      barBottomMargin: 12,
+      systemMaterial: new uiMaterial.ImmersiveMaterial({
+        style: uiMaterial.ImmersiveStyle.THIN,
+        materialColor: '#2E000000'
+      })
+    })
+    .scrollable(false)
+    .animationDuration(0)
+    .onChange((index: number) => {
+      this.currentTab = index;
+      if (index === 0) {
+        this.homeRefresh++;
+      } else if (index === 1) {
+        this.libRefresh++;
+      } else if (index === 2) {
+        this.favRefresh++;
+      } else if (index === this.actorIndex) {
+        this.actorsRefresh++;
+      } else if (index === this.facetIndex) {
+        this.facetsRefresh++;
+      }
+    })
   }
 
   build() {
@@ -194,79 +294,11 @@ struct Index {
         .width('100%')
         .height('100%')
         .justifyContent(FlexAlign.Center)
+      } else if (this.themeEpoch % 2 === 0) {
+        // 换主题后走到 else 分支：子树整体重建，颜色才会全部换成新的
+        this.TabsRoot()
       } else {
-        Tabs({ barPosition: BarPosition.End, controller: this.tabs, index: this.currentTab }) {
-          TabContent() {
-            HomeTab({ refreshKey: this.homeRefresh })
-          }
-          .tabBar(this.TabBarItem(0, '首页', $r('app.media.ic_tab_home')))
-          .backgroundColor(Theme.BG)
-
-          TabContent() {
-            LibraryTab({ refreshKey: this.libRefresh })
-          }
-          .tabBar(this.TabBarItem(1, '媒体库', $r('app.media.ic_tab_lib')))
-          .backgroundColor(Theme.BG)
-
-          TabContent() {
-            FavoritesTab({ refreshKey: this.favRefresh })
-          }
-          .tabBar(this.TabBarItem(2, '收藏', $r('app.media.ic_tab_fav')))
-          .backgroundColor(Theme.BG)
-
-          // 公开扩展 actors：演员网格。关掉 ENABLE_ACTORS 时后面的 Tab index 会自动前移
-          if (BuildConfig.ENABLE_ACTORS) {
-            TabContent() {
-              ActorsTab({ refreshKey: this.actorsRefresh })
-            }
-            .tabBar(this.TabBarItem(this.actorIndex, '演员', $r('app.media.ic_tab_actor')))
-            .backgroundColor(Theme.BG)
-          }
-
-          // 公开扩展 facets：标签 / 系列 / 制片商 分类浏览
-          if (BuildConfig.ENABLE_FACETS) {
-            TabContent() {
-              FacetsTab({ refreshKey: this.facetsRefresh })
-            }
-            .tabBar(this.TabBarItem(this.facetIndex, '标签', $r('app.media.ic_tab_tag')))
-            .backgroundColor(Theme.BG)
-          }
-
-          TabContent() {
-            ProfileTab({ refreshKey: this.homeRefresh })
-          }
-          .tabBar(this.TabBarItem(this.profileIndex, '我的', $r('app.media.ic_tab_me')))
-          .backgroundColor(Theme.BG)
-        }
-        // 悬浮玻璃功能栏：内容从栏下穿过，材质交给系统沉浸光感（TabBar 是官方
-        // 明确支持 systemMaterial 的位置），带圆角胶囊、随系统深浅色/算力自适应。
-        .barHeight(58)
-        .barOverlap(true)
-        .barBackgroundColor(Color.Transparent)
-        .barFloatingStyle({
-          barSideMargin: 16,
-          barBottomMargin: 12,
-          systemMaterial: new uiMaterial.ImmersiveMaterial({
-            style: uiMaterial.ImmersiveStyle.THIN,
-            materialColor: '#2E000000'
-          })
-        })
-        .scrollable(false)
-        .animationDuration(0)
-        .onChange((index: number) => {
-          this.currentTab = index;
-          if (index === 0) {
-            this.homeRefresh++;
-          } else if (index === 1) {
-            this.libRefresh++;
-          } else if (index === 2) {
-            this.favRefresh++;
-          } else if (index === this.actorIndex) {
-            this.actorsRefresh++;
-          } else if (index === this.facetIndex) {
-            this.facetsRefresh++;
-          }
-        })
+        this.TabsRoot()
       }
     }
     .width('100%')

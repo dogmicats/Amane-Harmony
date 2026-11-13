@@ -3,6 +3,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { Personalize } from '../common/Personalize';
 import { BrowseResult, DetailParams, MediaItem } from '../common/Types';
 import { safeItems } from '../common/Safe';
 import { ChipOption, MYRATING_OPTIONS, SortOption, sortDefOf } from '../common/BrowseOptions';
@@ -28,6 +29,7 @@ import { PrefixParams } from '../ext/facets/FacetTypes';
 @Entry
 @Component
 struct PrefixPage {
+  @StorageProp('amaneCols') posterCols: number = 3;
   @State items: MediaItem[] = [];
   @State total: number = 0;
   @State loading: boolean = true;
@@ -268,7 +270,10 @@ struct PrefixPage {
               }
             }, (item: MediaItem) => `pf-${item.id}`)
           }
-          .columnsTemplate('1fr 1fr 1fr')
+          .columnsTemplate(Personalize.colsTemplate(this.posterCols))
+          .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
+            Personalize.zoom(event.scale);
+          }))
           .columnsGap(10)
           .rowsGap(14)
           .width('100%')

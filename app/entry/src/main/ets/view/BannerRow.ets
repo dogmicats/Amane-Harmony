@@ -19,6 +19,9 @@ export struct BannerRow {
   title: string = '';
   subtitle: string = '';
   items: MediaItem[] = [];
+  /** 行头「推荐理由」入口；空串 = 不显示（设置里关掉推荐理由时）。 */
+  whyLabel: string = '';
+  onWhy: () => void = () => {};
   onMore: () => void = () => {};
   onTap: (item: MediaItem) => void = () => {};
 
@@ -51,6 +54,21 @@ export struct BannerRow {
         .alignItems(HorizontalAlign.Start)
 
         Blank()
+
+        // 推荐理由：只占行头一个小 chip，卡片内一行文字都不加，
+        // 理由全部放进点开的底部抽屉里读（见 HomeTab.ReasonSheet）。
+        if (this.whyLabel.length > 0) {
+          Text(this.whyLabel)
+            .fontSize(10)
+            .fontColor(Theme.ACCENT)
+            .padding({ left: 9, right: 9, top: 5, bottom: 5 })
+            .backgroundColor(Theme.CARD_HI)
+            .borderRadius(9)
+            .margin({ right: 8 })
+            .onClick(() => {
+              this.onWhy();
+            })
+        }
 
         Text('全部 ›')
           .fontSize(12)

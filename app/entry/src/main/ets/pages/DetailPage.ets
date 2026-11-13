@@ -1,6 +1,10 @@
-import { router, uiMaterial } from '@kit.ArkUI';
+import { router, uiMaterial, promptAction } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { cachedBody, httpDelete, httpGet, httpPost, httpPut } from '../common/Http';
+import { common } from '@kit.AbilityKit';
+import { util } from '@kit.ArkTS';
+import { fileIo } from '@kit.CoreFileKit';
+import { photoAccessHelper } from '@kit.MediaLibraryKit';
+import { cachedBody, dropPageCache, httpDelete, httpGet, httpPost, httpPut } from '../common/Http';
 import { cachePut } from '../common/PageCache';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
@@ -18,9 +22,13 @@ import { ItemFacets, emptyItemFacets, safeItemFacets } from '../ext/facets/Facet
 import { HighlightStrip } from '../ext/highlights/HighlightStrip';
 import { MarkBadges } from '../view/MarkBadges';
 import { CollectionSheet } from '../ext/collections/CollectionSheet';
+import { CastSheet } from '../ext/cast/CastSheet';
+import { Downloader, OfflineTask, NEED_WIFI } from '../common/Downloader';
+import { Reason, ReasonLine } from '../common/Reason';
 import { RatingStars, rateColor, rateLabel } from '../ext/ratings/RatingStars';
 import { StillsWall } from '../view/StillsWall';
 import { PosterCard } from '../view/PosterCard';
+import { SubtitleBlock } from '../view/SubtitleBlock';
 import { CommentSheet, commentPreview } from '../view/CommentSheet';
 import { PlayerView } from '../view/PlayerView';
 
@@ -57,6 +65,8 @@ export struct DetailPage {
     (fileKey: string, fileName: string) => {};
 
   @State detail: ItemDetail = emptyDetail();
+  /** 今日推荐理由：只有这部片当天上了每日推荐位才非空（任意入口进来都生效）。 */
+  @State todayReason: ReasonLine | undefined = undefined;
   /** 就地播放（2.4.6.11）：播放器直接长在本页顶部，不再跳播放页。 */
   @State playerOn: boolean = false;
   @State pKey: string = '';
@@ -71,17 +81,28 @@ export struct DetailPage {
   /** 「从横屏转回竖屏」时高亮评分区（第 3 条：不弹窗）。 */
   @State rateHint: boolean = false;
   @State facets: ItemFacets = emptyItemFacets();
+  /** 本片已选字幕（SubtitleBlock 双向绑定；服务端另有一份 choice，播放器据此自动套用）。 */
+  @State subChosenId: string = '';
   @State streams: StreamItem[] = [];
   @State showVersions: boolean = false;
   @State versionsLoading: boolean = false;
   @State loading: boolean = true;
   @State fav: boolean = false;
+  /** 2.5.5：服务端支持本地覆盖层（`/meta_override` 不 404）才显示「编辑 / 换封面」。 */
+  @State metaOk: boolean = false;
+  @State coverBusy: boolean = false;
   // 公开扩展 ratings / collections
   @State myRating: number = 0;
   @State collectionIds: number[] = [];
   /** 公开扩展 watch_later：是否已加入稍后再看。 */
   @State watchLater: boolean = false;
   @State showCollections: boolean = false;
+  /** 投屏面板（2.5.6）：把这一部 + 这个版本变成只读地址交给电视。 */
+  @State showCast: boolean = false;
+  @State castKey: string = '';
+  @State castSource: string = '';
+  /** 投屏入口是否显示（默认关，见 aboutToAppear）。 */
+  @State castOn: boolean = false;
   @State showRatePrompt: boolean = false;
   /** 点开的那一条评价全文（空串 = 弹层关闭）。 */
   @State openCommentBody: string = '';
@@ -111,6 +132,9 @@ export struct DetailPage {
   private heroGone: boolean = false;
   @State expanded: boolean = false;
   @State toast: string = '';
+  /** 离线缓存记录快照：下载/排队/完成时刷新按钮文字（2.5.7）。 */
+  @State dlTasks: OfflineTask[] = [];
+  private stopDl: () => void = () => {};
   private metaId: number = 0;
   /**
    * 起播意图：-1 = 按进度续播（默认），>=0 = 从这一秒开始。
@@ -122,6 +146,19 @@ export struct DetailPage {
   private startAt: number = -1;
 
   aboutToAppear(): void {
+    // 离线缓存要先拿到沙箱路径才能建目录；只在离线页初始化会出现「从没进过离线页就下不了」（2.5.7 修）
+    try {
+      Downloader.init(getContext(this) as common.UIAbilityContext);
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] detail offline init: ${e.code} ${e.message}`);
+    }
+    this.dlTasks = Downloader.list();
+    this.stopDl = Downloader.watch(() => {
+      this.dlTasks = Downloader.list();
+    });
+    // 投屏默认隐藏（这套要真机 + 同网才能验）；偏好 enable_cast=1 才显示入口
+    this.castOn = Store.I.prefString('enable_cast', '0') === '1';
     if (this.embedded) {
       // 嵌在播放页里：id 由宿主给，没有路由参数，也不做盲盒转场
       this.metaId = this.hostMid;
@@ -146,6 +183,10 @@ export struct DetailPage {
       this.pName = params.fileName === undefined || params.fileName === null ? '' : params.fileName;
     }
     this.load();
+  }
+
+  aboutToDisappear(): void {
+    this.stopDl();
   }
 
   /**
@@ -486,6 +527,9 @@ export struct DetailPage {
    *                  否则会先把 30 分钟前的旧进度铺一遍再跳成新的）
    */
   private async load(skipCache: boolean = false): Promise<void> {
+    // 今日推荐理由：按 id 从当天快照里取，所以从收藏 / 搜索 / 演员页进来也能看到。
+    // 跨天、开关关掉、没上推荐位都会得到 undefined，整张卡不渲染。
+    this.todayReason = Reason.forId(this.metaId);
     // 预热进度条预览：服务端首次要现抽 64 格（网盘约 15s），
     // 在这里先起跑，用户从详情页点进播放时多半已经好了。不 await、失败无所谓。
     httpGet(`${Store.I.user}/api/user/preview/${this.metaId}`, Store.I.token)
@@ -542,6 +586,191 @@ export struct DetailPage {
     }
     // 相似影片也是附加块：不 await，详情先显示完再补出来
     this.loadSimilar();
+    // 2.5.5：探一次本地覆盖层在不在（老服务端 404 → 隐藏编辑/换封面）
+    this.probeMeta();
+  }
+
+  /**
+   * 覆盖层是否可用。不 await、失败当不可用 —— 这个能力是锦上添花，
+   * 不能因为探测慢或失败把详情主体卡住。
+   */
+  private async probeMeta(): Promise<void> {
+    if (this.metaId <= 0) {
+      return;
+    }
+    try {
+      await httpGet(`${Store.I.user}/api/user/meta_override/${this.metaId}`, Store.I.token);
+      this.metaOk = true;
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] meta_override probe: ${e.code}`);
+      this.metaOk = false;
+    }
+  }
+
+  private openMetaEdit(): void {
+    const p: DetailParams = { id: this.metaId };
+    router.pushUrl({ url: 'pages/MetaEditPage', params: p });
+  }
+
+  /**
+   * 封面菜单。只换不还原是上一版漏的：换错了就只能「恢复默认」把字段一起清掉。
+   * 这里把「恢复原封面」单独一条，只管封面，不碰标题/演员/标签。
+   */
+  private coverMenu(): MenuElement[] {
+    const items: MenuElement[] = [];
+    items.push({
+      value: '从相册选一张',
+      action: () => {
+        this.pickCover();
+      }
+    });
+    // 用剧照拼一段循环动图当封面（服务端合成，约 10 秒）
+    items.push({
+      value: '用剧照做动图封面',
+      action: () => {
+        this.makeGifCover();
+      }
+    });
+    if (this.detail.poster_is_custom === true) {
+      items.push({
+        value: '恢复原封面',
+        action: () => {
+          this.restoreCover();
+        }
+      });
+    }
+    return items;
+  }
+
+  /**
+   * 用这部片的剧照拼一段循环动图当封面。
+   *
+   * 合成在服务端做（Pillow），客户端只等结果 —— 6 张图大约 10 秒，
+   * 所以这里把超时放宽到 90 秒，并先给一句「正在拼」的提示，
+   * 否则用户会以为按钮没反应。
+   */
+  private async makeGifCover(): Promise<void> {
+    if (this.coverBusy) {
+      return;
+    }
+    this.coverBusy = true;
+    promptAction.showToast({ message: '正在用剧照拼动图，约 10 秒…', duration: 4000 });
+    try {
+      const body: Record<string, Object> = { 'count': 6, 'duration': 700 };
+      const raw: string = await httpPost(
+        `${Store.I.user}/api/user/cover/${this.metaId}/gif`, Store.I.token,
+        JSON.stringify(body), 90000);
+      const res = JSON.parse(raw) as Record<string, Object>;
+      if (res.ok === true) {
+        dropPageCache();
+        Store.I.coverDirty = true;
+        promptAction.showToast({ message: '动图封面好了', duration: 1500 });
+        this.load(true);
+      } else {
+        const why: string = res.reason === undefined || res.reason === null ? '' : `${res.reason}`;
+        promptAction.showToast({ message: why.length > 0 ? why : '没做成，稍后再试', duration: 2200 });
+      }
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error(`[amane] cover gif: ${e.code} ${e.message}`);
+      promptAction.showToast({ message: '没做成（服务端可能不支持，或剧照太少）', duration: 2200 });
+    } finally {
+      this.coverBusy = false;
+    }
+  }
+
+  /** 只清封面覆盖（`DELETE /cover/{mid}`），字段改动保留。 */
+  private async restoreCover(): Promise<void> {
+    if (this.coverBusy) {
+      return;
+    }
+    this.coverBusy = true;
+    try {
+      await httpDelete(`${Store.I.user}/api/user/cover/${this.metaId}`, Store.I.token);
+      // 首页 / 列表页的 GET 缓存也要一并丢掉，否则返回后还是旧封面
+      dropPageCache();
+      Store.I.coverDirty = true;
+      promptAction.showToast({ message: '已恢复原封面', duration: 1500 });
+      this.load(true);
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error(`[amane] cover del: ${e.code} ${e.message}`);
+      promptAction.showToast({ message: '没恢复成，稍后再试', duration: 1600 });
+    } finally {
+      this.coverBusy = false;
+    }
+  }
+
+  /**
+   * 换封面：系统相册 Picker（不需要权限，GIF 也能选）→ base64 → `POST /cover/{mid}`。
+   * 服务端用现成的 `save_photo()` 落盘并按 hash 起名，所以这里**不传文件名**。
+   */
+  private async pickCover(): Promise<void> {
+    if (this.coverBusy) {
+      return;
+    }
+    this.coverBusy = true;
+    try {
+      const picker = new photoAccessHelper.PhotoViewPicker();
+      const opt: photoAccessHelper.PhotoSelectOptions = {
+        MIMEType: photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE,
+        maxSelectNumber: 1
+      };
+      const res: photoAccessHelper.PhotoSelectResult = await picker.select(opt);
+      if (res.photoUris.length === 0) {
+        return;
+      }
+      const uri: string = res.photoUris[0];
+      const f = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY);
+      const size: number = fileIo.statSync(f.fd).size;
+      if (size > 8 * 1024 * 1024) {
+        fileIo.closeSync(f);
+        promptAction.showToast({ message: '图太大了（超过 8MB），换一张', duration: 2000 });
+        return;
+      }
+      const buf: ArrayBuffer = new ArrayBuffer(size);
+      fileIo.readSync(f.fd, buf);
+      fileIo.closeSync(f);
+
+      const helper = new util.Base64Helper();
+      const b64: string = helper.encodeToStringSync(new Uint8Array(buf));
+      const ext: string = this.extOf(uri);
+      const body: Record<string, Object> = { 'data': b64, 'ext': ext };
+      const raw: string = await httpPost(
+        `${Store.I.user}/api/user/cover/${this.metaId}`, Store.I.token, JSON.stringify(body));
+      const obj = JSON.parse(raw) as Record<string, Object>;
+      if (obj.ok === true) {
+        promptAction.showToast({ message: '封面换好了', duration: 1500 });
+        // 详情页自己重拉；首页/列表页靠这份 GET 缓存，必须一起清掉（2.5.5.4）
+        dropPageCache();
+        Store.I.coverDirty = true;
+        this.load(true);
+      } else {
+        promptAction.showToast({ message: '没换成功，稍后再试', duration: 1600 });
+      }
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error(`[amane] cover: ${e.code} ${e.message}`);
+      promptAction.showToast({ message: '没换成功（选图或上传失败）', duration: 1800 });
+    } finally {
+      this.coverBusy = false;
+    }
+  }
+
+  /** picker 给的 uri 后缀就是真实格式（服务端只认 jpg/png/webp/gif）。 */
+  private extOf(uri: string): string {
+    const lower: string = uri.toLowerCase();
+    if (lower.indexOf('.png') >= 0) {
+      return 'png';
+    }
+    if (lower.indexOf('.webp') >= 0) {
+      return 'webp';
+    }
+    if (lower.indexOf('.gif') >= 0) {
+      return 'gif';
+    }
+    return 'jpg';
   }
 
   /** 把一次详情响应铺到界面上（首屏缓存与网络结果走同一条路，避免两处不一致）。 */
@@ -635,6 +864,201 @@ export struct DetailPage {
     this.playFile(fileKey, fileName);
   }
 
+  private openCast(): void {
+    this.castSource = Store.I.playbackSource;
+    this.castKey = this.streams.length > 0 ? this.streams[0].key : '';
+    this.showCast = true;
+  }
+
+  /** 从本地快照里找这一版的缓存记录（读 @State 数组，下载状态一变按钮就跟着变）。 */
+  private taskOf(key: string): OfflineTask | undefined {
+    for (let i = 0; i < this.dlTasks.length; i++) {
+      const t = this.dlTasks[i];
+      if (t.mid === this.metaId && t.key === key) {
+        return t;
+      }
+    }
+    return undefined;
+  }
+
+  /** 版本行右侧那个按钮的字：已下完 ✓ / 在跑或排队 · / 没下 ↓。 */
+  private offlineMark(s: StreamItem): string {
+    const t = this.taskOf(s.key);
+    if (t === undefined) {
+      return '↓';
+    }
+    if (t.status === 'done') {
+      return '✓';
+    }
+    if (t.status === 'run' || t.status === 'pause' || t.status === 'waiting') {
+      return '·';
+    }
+    return '↓';
+  }
+
+  /** 主按钮行那个下载键的字：↓ 未下 / · 在跑或排队 / ✓ 已缓存（看第一个版本）。 */
+  private downloadMark(): string {
+    if (this.streams.length === 0) {
+      return '↓';
+    }
+    const t = this.taskOf(this.streams[0].key);
+    if (t === undefined) {
+      return '↓';
+    }
+    if (t.status === 'done') {
+      return '✓';
+    }
+    return t.status === 'run' || t.status === 'pause' || t.status === 'waiting' ? '·' : '↓';
+  }
+
+  private downloadDone(): boolean {
+    if (this.streams.length === 0) {
+      return false;
+    }
+    const t = this.taskOf(this.streams[0].key);
+    return t !== undefined && t.status === 'done';
+  }
+
+  /**
+   * 下载这部片：只有一个版本就直接下，多版本打开面板让用户挑。
+   *
+   * 这条路径是为「单文件」准备的 —— 那种片没有版本面板，否则就完全没有下载入口。
+   */
+  private async downloadAny(): Promise<void> {
+    // 没开过版本面板时 streams 是空的：先拉一次，否则这一行永远是「没有可下载的版本」
+    if (this.streams.length === 0) {
+      await this.loadStreams();
+    }
+    if (this.streams.length === 0) {
+      this.flash('没有可下载的版本');
+      return;
+    }
+    if (this.streams.length === 1) {
+      this.downloadStream(this.streams[0]);
+      return;
+    }
+    this.openVersions();
+  }
+
+  /** 移动网络下点下载：先说清楚，再让用户决定（2.5.7）。 */
+  private askCellular(s: StreamItem): void {
+    AlertDialog.show({
+      title: '当前是移动网络',
+      message: '「只在 WiFi 下下载」是开着的。要用流量下这一部吗？' +
+        '（已经在下或已排队的不会被这个开关打断）',
+      primaryButton: {
+        value: '等 WiFi',
+        action: () => {
+          this.toast = '已跳过，连上 WiFi 再点下载';
+          setTimeout(() => {
+            this.toast = '';
+          }, 2000);
+        }
+      },
+      secondaryButton: {
+        value: '用流量继续',
+        action: () => {
+          this.downloadNow(s);
+        }
+      }
+    });
+  }
+
+  private flash(msg: string): void {
+    this.toast = msg;
+    setTimeout(() => {
+      this.toast = '';
+    }, 2000);
+  }
+
+  /** 入队（默认路径）：走「仅 WiFi」与队列规则。 */
+  private async downloadStream(s: StreamItem): Promise<void> {
+    const cur = this.taskOf(s.key);
+    if (cur !== undefined && cur.status === 'done') {
+      this.flash('这一版已经下好了，断网也能看');
+      return;
+    }
+    if (cur !== undefined && (cur.status === 'run' || cur.status === 'waiting')) {
+      this.flash('这一版已经在下或排队了');
+      return;
+    }
+    try {
+      Downloader.init(getContext(this) as common.UIAbilityContext);
+    } catch (err) {
+      console.info('[amane] offline init on download');
+    }
+    const err: string = await Downloader.enqueue(
+      this.metaId, s.key, Store.I.playbackSource, this.detail.number, s.name);
+    this.afterEnqueue(err, s, false);
+  }
+
+  /** 用户明确选「用流量继续」时走这条：跳过 WiFi 判断。 */
+  private async downloadNow(s: StreamItem): Promise<void> {
+    const err: string = await Downloader.enqueue(
+      this.metaId, s.key, Store.I.playbackSource, this.detail.number, s.name, true);
+    this.afterEnqueue(err, s, true);
+  }
+
+  private afterEnqueue(err: string, s: StreamItem, forced: boolean): void {
+    if (err === NEED_WIFI) {
+      this.askCellular(s);
+      return;
+    }
+    if (err === 'done') {
+      this.flash('这一版已经下好了，断网也能看');
+      return;
+    }
+    if (err === 'queued') {
+      this.flash('这一版已经在下或排队了');
+      return;
+    }
+    if (err.length > 0) {
+      this.flash(err);
+      return;
+    }
+    const pos: number = Downloader.waitingPos(this.metaId, s.key);
+    if (pos > 0) {
+      this.flash(forced
+        ? `已加入队列（用流量），前面还有 ${pos - 1} 个`
+        : `已加入队列，前面还有 ${pos - 1} 个`);
+    } else {
+      this.flash('开始下载，进度在「设置 → 离线缓存」里看');
+    }
+  }
+
+  /** 把这一部的所有版本一次排进队列（最多 20 部，防止误点）。 */
+  private async downloadAllVersions(): Promise<void> {
+    if (this.streams.length === 0) {
+      this.flash('没有可下载的版本');
+      return;
+    }
+    let ok: number = 0;
+    let needWifi: number = 0;
+    let other: string = '';
+    for (let i = 0; i < this.streams.length && i < 20; i++) {
+      const err: string = await Downloader.enqueue(
+        this.metaId, this.streams[i].key, Store.I.playbackSource,
+        this.detail.number, this.streams[i].name);
+      if (err.length === 0) {
+        ok++;
+      } else if (err === NEED_WIFI) {
+        needWifi++;
+      } else if (err !== 'queued' && err !== 'done') {
+        other = err;
+      }
+    }
+    this.showVersions = false;
+    if (needWifi > 0) {
+      this.flash('移动网络下没排队，连上 WiFi 再点');
+      return;
+    }
+    if (other.length > 0) {
+      this.flash(other);
+      return;
+    }
+    this.flash(ok > 0 ? `已把 ${ok} 个版本排进队列` : '这些版本都已经下过或在队列里了');
+  }
+
   private playFile(fileKey: string, fileName: string): void {
     const start: number = this.startAt >= 0
       ? this.startAt
@@ -702,9 +1126,14 @@ export struct DetailPage {
     }, 1800);
   }
 
-  /** 拉取该条目的全部可播版本（含分辨率/体积/时长/所在库）。 */
-  private async openVersions(): Promise<void> {
-    this.showVersions = true;
+  /**
+   * 只拉版本列表，不开面板。
+   *
+   * 2.5.7 修：`streams` 原来只在 `openVersions()` 里拉，主按钮行的「下载」在
+   * 没开过面板时永远面对空数组 → 点下去只会说「没有可下载的版本」。
+   * 现在下载键先调这个，拿到列表再决定「直接下 / 开面板挑」。
+   */
+  private async loadStreams(): Promise<void> {
     if (this.streams.length > 0 || this.versionsLoading) {
       return;
     }
@@ -716,12 +1145,15 @@ export struct DetailPage {
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] streams: ${e.code} ${e.message}`);
-      this.toast = '版本列表加载失败';
-      setTimeout(() => {
-        this.toast = '';
-      }, 1800);
+      this.flash('版本列表加载失败');
     }
     this.versionsLoading = false;
+  }
+
+  /** 拉取该条目的全部可播版本（含分辨率/体积/时长/所在库）。 */
+  private async openVersions(): Promise<void> {
+    this.showVersions = true;
+    await this.loadStreams();
   }
 
   private versionLine(s: StreamItem): string {
@@ -745,6 +1177,7 @@ export struct DetailPage {
     try {
       const on: boolean = await Store.I.toggleFav(this.detail.id);
       this.fav = on;
+      // 收藏是有明确结果的操作，给一下确认感（播放器里不加）
       this.toast = on ? '已加入收藏' : '已取消收藏';
       setTimeout(() => {
         this.toast = '';
@@ -801,6 +1234,28 @@ export struct DetailPage {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
 
+      // 下载这一版到手机（离线缓存，2.5.6）
+      // 两轮反馈「看不见」：先是纯图标、再是 8px 小字。这次直接做成胶囊写全「下载」。
+      Row({ space: 4 }) {
+        Text(this.offlineMark(s))
+          .fontSize(12)
+          .fontColor(this.offlineMark(s) === '✓' ? Theme.GOLD : Theme.TEXT)
+        Text(this.offlineMark(s) === '✓' ? '已缓存' : '下载')
+          .fontSize(10)
+          .fontColor(this.offlineMark(s) === '✓' ? Theme.GOLD : Theme.TEXT_DIM)
+      }
+      .height(30)
+      .padding({ left: 9, right: 9 })
+      .borderRadius(15)
+      .backgroundColor(Theme.CARD_HI)
+      .border({
+        width: 1,
+        color: this.offlineMark(s) === '✓' ? Theme.GOLD : '#4DFFFFFF'
+      })
+      .onClick(() => {
+        this.downloadStream(s);
+      })
+
       Text('▶')
         .fontSize(12)
         .fontColor('#FFFFFF')
@@ -835,6 +1290,20 @@ export struct DetailPage {
           }
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
+          // 投屏：默认隐藏（没有真机能验）。偏好 `enable_cast=1` 才出现。
+          if (this.castOn) {
+            Text('投屏')
+              .fontSize(12)
+              .fontColor(Theme.ACCENT)
+              .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+              .backgroundColor(Theme.ACCENT_SOFT)
+              .borderRadius(9)
+              .onClick(() => {
+                this.showVersions = false;
+                this.startAt = -1;
+                this.openCast();
+              })
+          }
           Text('✕')
             .fontSize(14)
             .fontColor(Theme.TEXT_DIM)
@@ -887,6 +1356,21 @@ export struct DetailPage {
           .scrollBar(BarState.Off)
           .constraintSize({ maxHeight: 340 })
           .width('100%')
+
+          // 批量：多版本片子一次全排进队列（2.5.7）。单文件没有这条，主按钮那个就够了。
+          if (this.streams.length > 1) {
+            Text(`把 ${this.streams.length} 个版本都排进下载队列`)
+              .fontSize(11)
+              .fontColor(Theme.ACCENT)
+              .width('100%')
+              .textAlign(TextAlign.Center)
+              .padding({ top: 10, bottom: 10 })
+              .backgroundColor(Theme.CARD)
+              .borderRadius(10)
+              .onClick(() => {
+                this.downloadAllVersions();
+              })
+          }
         }
       }
       .width('100%')
@@ -1118,6 +1602,61 @@ export struct DetailPage {
       .margin({ right: 6, bottom: 6 })
   }
 
+  private reasonMain(): string {
+    const l: ReasonLine | undefined = this.todayReason;
+    return l === undefined ? '' : l.reason;
+  }
+
+  private reasonExtra(): string {
+    const l: ReasonLine | undefined = this.todayReason;
+    return l === undefined ? '' : l.extra;
+  }
+
+  /**
+   * 今日推荐理由卡（2.5.7.21）：把首页抽屉里那句话复制到详情页。
+   * 不常驻、不占卡片版面 —— 没上推荐位（或开关关掉）时整块不渲染。
+   * 注意：@Builder 的传值参数不随 @State 刷新，所以这里直接读 getter，
+   * 并在 if 里显式触碰 this.todayReason，保证状态变化能触发重绘。
+   */
+  @Builder
+  ReasonCard() {
+    if (this.todayReason !== undefined && this.reasonMain().length > 0) {
+      Column({ space: 7 }) {
+        Row({ space: 6 }) {
+          Text('✦ 今日推荐理由')
+            .fontSize(11)
+            .fontColor(Theme.GOLD)
+            .fontWeight(FontWeight.Medium)
+          Blank()
+          Text('每日推荐')
+            .fontSize(10)
+            .fontColor(Theme.TEXT_FAINT)
+        }
+        .width('100%')
+
+        Text(this.reasonMain())
+          .fontSize(13)
+          .fontColor(Theme.GOLD)
+          .width('100%')
+          .lineHeight(19)
+
+        if (this.reasonExtra().length > 0) {
+          Text(this.reasonExtra())
+            .fontSize(11)
+            .fontColor(Theme.TEXT_DIM)
+            .width('100%')
+        }
+      }
+      .alignItems(HorizontalAlign.Start)
+      .width('100%')
+      .padding(12)
+      .backgroundColor(Theme.CARD)
+      .borderRadius(12)
+      .border({ width: 0.5, color: '#26FFFFFF' })
+      .margin({ top: 14 })
+    }
+  }
+
   /**
    * 详情页主体（顶部大图 + 全部信息块）。
    *
@@ -1137,13 +1676,29 @@ export struct DetailPage {
 
             Column() {
               Row({ space: 14 }) {
-                Image(Store.I.img(this.coverUrl()))
-                  .width(104)
-                  .height(148)
-                  .objectFit(ImageFit.Cover)
-                  .borderRadius(10)
-                  .backgroundColor(Theme.CARD)
-                  .shadow({ radius: 16, color: '#99000000', offsetY: 6 })
+                // 封面右上角挂一个「换」：叠在图上，不额外占一行（2.5.5）
+                Stack({ alignContent: Alignment.TopEnd }) {
+                  Image(Store.I.img(this.coverUrl()))
+                    .width(104)
+                    .height(148)
+                    .objectFit(ImageFit.Cover)
+                    .borderRadius(10)
+                    .backgroundColor(Theme.CARD)
+                    .shadow({ radius: 16, color: '#99000000', offsetY: 6 })
+
+                  if (this.metaOk) {
+                    Text(this.coverBusy ? '…' : (this.detail.poster_is_custom === true ? '已换' : '换'))
+                      .fontSize(9)
+                      .fontColor('#F2FFFFFF')
+                      .padding({ left: 7, right: 7, top: 3, bottom: 3 })
+                      .backgroundColor(this.detail.poster_is_custom === true ? '#B37C5CFF' : '#B3000000')
+                      .borderRadius({ topRight: 10, bottomLeft: 8 })
+                      // 点它只出菜单，不直接弹相册：菜单里才有「恢复原封面」（2.5.5.4）
+                      .bindMenu(this.coverMenu())
+                  }
+                }
+                .width(104)
+                .height(148)
 
                 Column({ space: 6 }) {
                   Text(this.detail.number)
@@ -1160,14 +1715,38 @@ export struct DetailPage {
                     .fontSize(11)
                     .fontColor(Theme.TEXT_FAINT)
                     .maxLines(2)
-                  if (this.detail.score > 0) {
-                    Text(`★ ${scoreText(this.detail.score)}`)
-                      .fontSize(12)
-                      .fontColor(Theme.GOLD)
+                  // 2.5.5：本地覆盖层可用才给编辑入口（老服务端 404 时整块不出现）
+                  if (this.metaOk) {
+                    Text('✎ 编辑信息')
+                      .fontSize(10)
+                      .fontColor(Theme.ACCENT)
+                      .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+                      .backgroundColor(Theme.ACCENT_SOFT)
+                      .borderRadius(9)
+                      .onClick(() => {
+                        this.openMetaEdit();
+                      })
                   }
-                  if (this.marks().length > 0) {
-                    MarkBadges({ marks: this.marks(), max: 4, badgeSize: 10, fill: 'card' })
+                  Row() {
+                    Column({ space: 6 }) {
+                      if (this.detail.score > 0) {
+                        Text(`★ ${scoreText(this.detail.score)}`)
+                          .fontSize(12)
+                          .fontColor(Theme.GOLD)
+                      }
+                      if (this.marks().length > 0) {
+                        MarkBadges({ marks: this.marks(), max: 4, badgeSize: 10, fill: 'card' })
+                      }
+                    }
+                    .alignItems(HorizontalAlign.Start)
+
+                    Blank()
+
+                    // 字幕：跟评分/标记同一行的右侧空位，点开是底部抽屉
+                    SubtitleBlock({ metaId: this.detail.id, chosenId: $subChosenId })
                   }
+                  .width('100%')
+                  .alignItems(VerticalAlign.Bottom)
                 }
                 .alignItems(HorizontalAlign.Start)
                 .layoutWeight(1)
@@ -1247,6 +1826,25 @@ export struct DetailPage {
                   this.showCollections = true;
                 })
 
+                // 下载（离线缓存，2.5.6）：**单文件时没有「选择版本」面板**，
+                // 这里是唯一的下载入口，所以按钮必须常驻，不能只挂在版本行上。
+                Column({ space: 1 }) {
+                  Text(this.downloadMark())
+                    .fontSize(15)
+                    .fontColor(this.downloadDone() ? Theme.GOLD : Theme.TEXT)
+                  Text(this.downloadDone() ? '已缓存' : '下载')
+                    .fontSize(9)
+                    .fontColor(this.downloadDone() ? Theme.GOLD : Theme.TEXT_FAINT)
+                }
+                .width(58)
+                .height(42)
+                .justifyContent(FlexAlign.Center)
+                .backgroundColor(Theme.CARD)
+                .borderRadius(21)
+                .onClick(() => {
+                  this.downloadAny();
+                })
+
               }
               .width('100%')
               .margin({ top: 16 })
@@ -1299,10 +1897,10 @@ export struct DetailPage {
                     metaId: this.metaId,
                     score: this.myRating,
                     showDesc: true,
-                    onRate: (v: number) => {
-                      this.myRating = v;
-                      this.rateHint = false;
-                      this.toast = v > 0 ? `已打分：${rateLabel(v)}` : '已清除评分';
+        onRate: (v: number) => {
+          this.myRating = v;
+          this.rateHint = false;
+          this.toast = v > 0 ? `已打分：${rateLabel(v)}` : '已清除评分';
                       setTimeout(() => {
                         this.toast = '';
                       }, 1800);
@@ -1367,6 +1965,8 @@ export struct DetailPage {
                 .margin({ top: 14 })
               }
 
+              // 本片字幕的入口已经挪到标题区右侧（评分/标记那一行），这里不再重复放。
+
               // 公开扩展 actors：演员名变成可点 chip，直接进演员页；
               // 关掉 ENABLE_ACTORS 时退回原来的纯文本，核心不残留扩展行为。
               if (this.detail.actors.length > 0) {
@@ -1387,6 +1987,9 @@ export struct DetailPage {
                   .margin({ top: 14 })
                 }
               }
+
+              // 今日推荐理由：这部片当天上了推荐位才显示（2.5.7.21）
+              this.ReasonCard()
 
               // 简介
               if (this.detail.plot.length > 0) {
@@ -1787,6 +2390,33 @@ export struct DetailPage {
                 this.toast = '';
               }, 1800);
             }
+          })
+        }
+
+        if (this.showCast) {
+          Column() {
+            Column() {
+              CastSheet({
+                metaId: this.metaId,
+                number: this.detail.number,
+                title: this.detail.title,
+                source: this.castSource,
+                fileKey: this.castKey,
+                onClose: () => {
+                  this.showCast = false;
+                }
+              })
+            }
+            .width('100%')
+            .backgroundColor(Theme.BG_RAISED)
+            .borderRadius({ topLeft: 18, topRight: 18 })
+            .margin({ top: 'auto' })
+          }
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#99000000')
+          .onClick(() => {
+            this.showCast = false;
           })
         }
 

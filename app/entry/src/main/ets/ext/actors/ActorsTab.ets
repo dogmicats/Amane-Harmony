@@ -3,6 +3,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
+import { Personalize } from '../../common/Personalize';
 import { ChipOption, SortOption } from '../../common/BrowseOptions';
 import { ActorItem, ActorList, ActorParams, safeActorList } from './ActorTypes';
 import { KeywordBox } from '../../view/KeywordBox';
@@ -23,6 +24,8 @@ const PAGE_SIZE: number = 30;
  */
 @Component
 export struct ActorsTab {
+  /** 海报列数：设置页与双指捏合共用同一个值（2.5.2）。 */
+  @StorageProp('amaneCols') posterCols: number = 3;
   @Prop @Watch('onRefresh') refreshKey: number = 0;
   @State items: ActorItem[] = [];
   @State total: number = 0;
@@ -43,6 +46,8 @@ export struct ActorsTab {
   @State cupBand: string = '';
   @State bustBand: string = '';
   @State place: string = '';
+  /** 我的评分筛选：''=不限 / none=未给星 / 1..5 */
+  @State rating: string = '';
   private placeTimer: number = -1;
   private sorts: SortOption[] = [
     { key: 'count', label: '作品数', def: 'desc' },
@@ -53,7 +58,8 @@ export struct ActorsTab {
     { key: 'waist', label: '腰围', def: 'desc' },
     { key: 'hip', label: '臀围', def: 'desc' },
     { key: 'cup', label: '罩杯', def: 'desc' },
-    { key: 'updated_at', label: '更新', def: 'desc' }
+    { key: 'updated_at', label: '更新', def: 'desc' },
+      { key: 'my_rating', label: '我的评分', def: 'desc' }
   ];
   private genders: ChipOption[] = [
     { key: '', label: '全部' },
@@ -204,6 +210,9 @@ export struct ActorsTab {
     }
     if (this.onlyPerson) {
       parts.push('has_person=true');
+    }
+    if (this.rating.length > 0) {
+      parts.push(`rating=${this.rating}`);
     }
     const born: string[] = this.birthdayBounds();
     if (born[0].length > 0) {
@@ -502,6 +511,25 @@ export struct ActorsTab {
       tabInset: 84
     }) {
       ChipGroup({
+        title: '我的评分', current: this.rating,
+        options: [
+          { key: '', label: '不限' },
+          { key: 'none', label: '未给星' },
+          { key: '5', label: '★5' },
+          { key: '4', label: '★4' },
+          { key: '3', label: '★3' },
+          { key: '2', label: '★2' },
+          { key: '1', label: '★1' }
+        ],
+        onPick: (key: string) => {
+          if (this.rating === key) {
+            return;
+          }
+          this.rating = key;
+          this.reload();
+        }
+      })
+      ChipGroup({
         title: '性别', options: this.genders, current: this.gender,
         onPick: (key: string) => {
           if (this.gender === key) {
@@ -674,7 +702,10 @@ export struct ActorsTab {
               }
             }
           }
-          .columnsTemplate('1fr 1fr 1fr')
+          .columnsTemplate(Personalize.colsTemplate(this.posterCols))
+          .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
+            Personalize.zoom(event.scale);
+          }))
           .columnsGap(9)
           .rowsGap(12)
           .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 84 })

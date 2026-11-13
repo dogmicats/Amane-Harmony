@@ -3,6 +3,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { Personalize } from '../common/Personalize';
 import { BrowseResult, DetailParams, FavList, MediaItem } from '../common/Types';
 import { safeItems } from '../common/Safe';
 import { BuildConfig } from '../common/BuildConfig';
@@ -44,6 +45,8 @@ const PREF_FAV_VIEW: string = 'favView';
  */
 @Component
 export struct FavoritesTab {
+  /** 海报列数：设置页与双指捏合共用同一个值（2.5.2）。 */
+  @StorageProp('amaneCols') posterCols: number = 3;
   @Prop @Watch('onRefresh') refreshKey: number = 0;
   @State items: MediaItem[] = [];
   @State loading: boolean = true;
@@ -57,6 +60,13 @@ export struct FavoritesTab {
   @State fMyRating: string = '';
   /** 当前分段：film / still / actor / director / tag / series。 */
   @State seg: string = 'film';
+  /** 下拉刷新中（2.5.7.19）：Refresh 的双向绑定状态。 */
+  @State pullSeg: boolean = false;
+  /**
+   * 下拉刷新的自增令牌：`refreshKey` 是外部（Index）传进来的 @Prop，本页不能自增，
+   * 所以自己再拿一个计数器，拼在一起传给子块，子块 @Watch 到变化就重拉。
+   */
+  @State pullKey: number = 0;
   /** 演员与分类的展示形态：false = 横版大行，true = 3 列简版。 */
   @State favGrid: boolean = false;
   /** 影片段的搜索与抽屉（2.4.6.26 起与媒体库一致）。 */
@@ -324,7 +334,7 @@ export struct FavoritesTab {
       })
     }
     .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 10 })
 
     // 排序 + 筛选收进底部抽屉（原来两行 chip 常驻，一屏剩下的地方不多）
     ListToolbar({
@@ -429,7 +439,10 @@ export struct FavoritesTab {
           }
         }, (item: MediaItem) => `fav-${item.id}`)
       }
-      .columnsTemplate('1fr 1fr 1fr')
+      .columnsTemplate(Personalize.colsTemplate(this.posterCols))
+      .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
+        Personalize.zoom(event.scale);
+      }))
       .columnsGap(10)
       .rowsGap(14)
       // 底部要同时避开悬浮 Tab 栏和左下角的入库圆环
@@ -449,26 +462,44 @@ export struct FavoritesTab {
             Blank().height(HEADER_H)
             this.FilmContent()
           } else {
-            Scroll() {
-              Column() {
-                if (this.seg === 'still') {
-                  LikedStillsView({ refreshKey: this.refreshKey })
-                } else if (this.seg === 'actor') {
-                  FavoriteActorsView({ refreshKey: this.refreshKey, grid: this.favGrid })
-                } else {
-                  FavoriteFacetsView({
-                    kind: this.seg, refreshKey: this.refreshKey, grid: this.favGrid
-                  })
+            // 剧照瀑布流自带随机（/stills/liked?order=random），下拉就换一批（2.5.7.19）；
+            // 其它两段一起挂上，行为一致，成本为零。
+            Refresh({ refreshing: $$this.pullSeg }) {
+              Scroll() {
+                Column() {
+                  if (this.seg === 'still') {
+                    LikedStillsView({
+                      refreshKey: this.refreshKey + this.pullKey, pulling: $pullSeg
+                    })
+                  } else if (this.seg === 'actor') {
+                    FavoriteActorsView({
+                      refreshKey: this.refreshKey + this.pullKey, grid: this.favGrid
+                    })
+                  } else {
+                    FavoriteFacetsView({
+                      kind: this.seg, refreshKey: this.refreshKey + this.pullKey,
+                      grid: this.favGrid
+                    })
+                  }
                 }
+                .width('100%')
+                // 留白放在滚动内容里（不是外层），图才会滑到板子底下，玻璃才有东西可糊
+                .padding({ top: HEADER_H + 4, bottom: Theme.BOTTOM_SAFE + 48 })
               }
               .width('100%')
-              // 留白放在滚动内容里（不是外层），图才会滑到板子底下，玻璃才有东西可糊
-              .padding({ top: HEADER_H + 4, bottom: Theme.BOTTOM_SAFE + 48 })
+              .height('100%')
+              .align(Alignment.Top)
+              .scrollBar(BarState.Off)
+              .edgeEffect(EdgeEffect.Spring)
             }
             .layoutWeight(1)
-            .align(Alignment.Top)
-            .scrollBar(BarState.Off)
-            .edgeEffect(EdgeEffect.Spring)
+            .onRefreshing(() => {
+              this.pullKey += 1;
+              // 兜底收圈：剧照块加载完会自己置 false，万一没加载（空/报错）也能收
+              setTimeout(() => {
+                this.pullSeg = false;
+              }, 4000);
+            })
           }
         }
         .width('100%')

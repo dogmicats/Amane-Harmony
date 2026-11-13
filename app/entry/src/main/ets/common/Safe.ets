@@ -1,5 +1,6 @@
 import {
-  CommentItem, HistoryItem, HomeData, HomeRow, ItemDetail, LibraryInfo, MediaFile, MediaItem,
+  CommentItem, HistoryItem, HomeData, HomeRow, ItemDetail, LibraryInfo, LibraryStats,
+  MediaFile, MediaItem, StatKV,
   PosterRef, StreamItem, StreamList, SuggestItem, SuggestResult, SuggestTotals, emptySuggestTotals,
   SearchHistoryItem, SearchHistoryList
 } from './Types';
@@ -70,6 +71,9 @@ export function safeItem(raw: MediaItem): MediaItem {
   // 横幅按真实比例定宽，这个字段必须接住（marks 就踩过一次）
   item.fanart_ratio = num(raw.fanart_ratio === undefined || raw.fanart_ratio === null
     ? 0 : raw.fanart_ratio);
+  // 2.5.7.7：文件个数（多版本属性）。老服务端没有 → 0，界面上不显示「N 个版本」。
+  item.versions = Math.trunc(num(raw.versions === undefined || raw.versions === null
+    ? 0 : raw.versions));
   return item;
 }
 
@@ -213,6 +217,9 @@ export function safeDetail(raw: ItemDetail): ItemDetail {
     }
   }
   d.my_stills = mine;
+  // 覆盖层标记：老服务端没有这两个字段，一律按「没改过」处理
+  d.poster_is_custom = raw.poster_is_custom === true;
+  d.overridden = raw.overridden === true;
   return d;
 }
 
@@ -245,6 +252,74 @@ export function safeHistory(list: HistoryItem[]): HistoryItem[] {
     out.push(item);
   }
   return out;
+}
+
+/** 统计键白名单：键名、数量都逐条兜底，避免 null 把首页打崩。 */
+function safeStatKVs(value: StatKV[]): StatKV[] {
+  const out: StatKV[] = [];
+  if (value === undefined || value === null || !Array.isArray(value)) {
+    return out;
+  }
+  for (let i = 0; i < value.length && out.length < 160; i++) {
+    const src: StatKV = value[i];
+    if (src === undefined || src === null) {
+      continue;
+    }
+    const k: string = str(src.k);
+    if (k.length > 0) {
+      out.push({ k: k, n: Math.trunc(num(src.n)) });
+    }
+  }
+  return out;
+}
+
+/** 定长分桶：缺的补 0，多的截断，客户端累加时不会越界。 */
+function safeBins(value: number[], size: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < size; i++) {
+    let n: number = 0;
+    if (value !== undefined && value !== null && Array.isArray(value) && i < value.length) {
+      n = Math.trunc(num(value[i]));
+    }
+    out.push(n > 0 ? n : 0);
+  }
+  return out;
+}
+
+/**
+ * 全库统计摘要（2.5.7.21）。重建式白名单：服务端多给的字段不在这里补就会静默丢掉。
+ * total<=0 一律返回 undefined —— 老服务端 / 统计失败时，理由引擎跳过全库族。
+ */
+export function safeLibraryStats(raw: LibraryStats | undefined): LibraryStats | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  const src: LibraryStats = raw;
+  if (Math.trunc(num(src.total)) <= 0) {
+    return undefined;
+  }
+  const s: LibraryStats = {
+    total: Math.trunc(num(src.total)),
+    scored: Math.trunc(num(src.scored)),
+    avg_score: num(src.avg_score),
+    max_score: num(src.max_score),
+    min_year: Math.trunc(num(src.min_year)),
+    max_year: Math.trunc(num(src.max_year)),
+    watched: Math.trunc(num(src.watched)),
+    favorites: Math.trunc(num(src.favorites)),
+    tag_kinds: Math.trunc(num(src.tag_kinds)),
+    actor_kinds: Math.trunc(num(src.actor_kinds)),
+    prefix_kinds: Math.trunc(num(src.prefix_kinds)),
+    score_bins: safeBins(src.score_bins, 21),
+    runtime_bins: safeBins(src.runtime_bins, 12),
+    tags: safeStatKVs(src.tags),
+    actors: safeStatKVs(src.actors),
+    series: safeStatKVs(src.series),
+    studios: safeStatKVs(src.studios),
+    prefixes: safeStatKVs(src.prefixes),
+    years: safeStatKVs(src.years)
+  };
+  return s;
 }
 
 export function safeHome(raw: HomeData): HomeData {  const home: HomeData = { hero: [], continue: [], recommend: [], banners: [], rows: [], libraries: [], generated_at: '' };
@@ -290,6 +365,10 @@ export function safeHome(raw: HomeData): HomeData {  const home: HomeData = { he
     }
   }
   home.libraries = libs;
+  const stats: LibraryStats | undefined = safeLibraryStats(raw.library_stats);
+  if (stats !== undefined) {
+    home.library_stats = stats;
+  }
   return home;
 }
 

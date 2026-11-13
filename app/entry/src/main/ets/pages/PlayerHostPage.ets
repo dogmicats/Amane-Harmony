@@ -46,9 +46,10 @@ struct PlayerHostPage {
         ? 0 : Number(params.position);
       this.pos = p > 5 ? p : 0;
     }
-    // 「跳播放页」只服务 Emby 模式；B 站模式不会走到这里（播放器长在详情页顶部）
-    this.mode = Store.I.prefString('player_open_mode', 'bili') === 'emby'
-      ? 'landscape' : 'portraitFull';
+    // 「跳播放页」只服务 Emby 模式；B 站模式不会走到这里（播放器长在详情页顶部）。
+    // 形态固定 'landscape'：竖屏全屏（portraitFull）这个中间态已废弃 ——
+    // 它会和窗口方向互相拉扯（横竖来回切、surface 反复重建），是多个播放 bug 的源头。
+    this.mode = 'landscape';
     this.curMode = this.mode;
     this.ready = true;
   }

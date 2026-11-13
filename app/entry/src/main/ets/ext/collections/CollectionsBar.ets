@@ -238,37 +238,53 @@ export struct CollectionsBar {
   }
 
   build() {
-    Row({ space: 8 }) {
-      Row({ space: 6 }) {
+    Row({ space: 10 }) {
+      // 左：清单选择器（唯一主入口）。做成一颗胶囊，前缀「清单」提示这是筛选，
+      // 名字 + 箭头合在同一颗里，避免原来是「三段字 + 两个紧贴的小块」粘成一坨。
+      Row({ space: 7 }) {
+        Text('清单')
+          .fontSize(10)
+          .fontColor(this.current.length > 0 ? '#E8FFFFFF' : Theme.TEXT_FAINT)
         Text(this.currentLabel())
-          .fontSize(11)
-          .fontColor(this.current.length > 0 ? '#FFFFFF' : Theme.TEXT_DIM)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.current.length > 0 ? Theme.ON_ACCENT : Theme.TEXT)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .constraintSize({ maxWidth: 150 })
         Text('▾')
           .fontSize(9)
-          .fontColor(Theme.TEXT_FAINT)
+          .fontColor(this.current.length > 0 ? '#CCFFFFFF' : Theme.TEXT_FAINT)
       }
-      .padding({ left: 11, right: 9, top: 5, bottom: 5 })
+      .padding({ left: 14, right: 12, top: 8, bottom: 8 })
       .backgroundColor(this.current.length > 0 ? Theme.ACCENT : Theme.CARD)
-      .borderRadius(12)
+      .borderRadius(18)
       .onClick(() => {
         this.open();
       })
 
-      if (this.showManage) {
-        Text('管理')
-          .fontSize(10)
-          .fontColor(Theme.TEXT_FAINT)
-          .padding({ left: 6, right: 4, top: 5, bottom: 5 })
-          .onClick(() => {
-            router.pushUrl({ url: 'pages/CollectionsPage' });
-          })
-      }
       Blank()
+
+      if (this.showManage) {
+        // 右：管理是「另一个动作」，做成独立的圆形图标按钮 —— 与左侧胶囊拉开距离，
+        // 不再像一条被切开的按钮。
+        Column() {
+          Text('⚙')
+            .fontSize(15)
+            .fontColor(Theme.TEXT_DIM)
+        }
+        .width(36)
+        .height(36)
+        .borderRadius(18)
+        .backgroundColor(Theme.CARD)
+        .justifyContent(FlexAlign.Center)
+        .onClick(() => {
+          router.pushUrl({ url: 'pages/CollectionsPage' });
+        })
+      }
     }
     .width('100%')
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4, bottom: 10 })
     .bindSheet($$this.show, this.Picker(), {
       height: 520,
       dragBar: true,

@@ -41,7 +41,6 @@ struct SettingsConnectionPage {
   /**
    * 外网用户数据走哪条路：
    *   domain —— 跟随域名，由隧道按路径分流到 8770（默认，等价于以前）
-   *   dev    —— 域名 + /dev 前缀，隧道转到宿主 8771（测试实例；外网只开了 443，只能走前缀）
    *   custom —— 自己写完整地址，**可以带端口和路径**（把某个端口直接映射到公网时用）
    */
   @State wanPreset: string = 'domain';
@@ -171,7 +170,7 @@ struct SettingsConnectionPage {
   /** 三种走法各说各的原理；发布版不提 /dev 与端口号（那是本仓库的部署细节）。 */
   private wanHint(): string {
     if (this.wanPreset === 'dev') {
-      return '走 https://域名/dev：隧道把这个前缀转到宿主 8771，前缀会被剥掉。外网只映射了 443，所以端口方式连不通，只能用前缀。';
+      return '该预设不在发布版提供。';
     }
     if (this.wanPreset === 'custom') {
       return '填完整地址，端口和路径都按你写的来；前提是那个端口真的能从公网连上（路由器 / 反向代理有映射）。';
@@ -270,7 +269,6 @@ struct SettingsConnectionPage {
 
           // 外网用户数据默认跟随外网地址（隧道按路径分流）。
           // 「自定义」两条通道都开：发布版用户可以填自己的域名/端口/反代前缀。
-          // 「测试实例」只是自用线的调试捷径（本仓库的 8771 + /dev 前缀），
           // 不该出现在发布版里 —— 端口号和前缀是部署细节，不是用户该关心的事。
           Text('外网用户数据走哪儿')
             .fontSize(11)
@@ -279,7 +277,6 @@ struct SettingsConnectionPage {
           Row({ space: 7 }) {
             this.WanChip(BuildConfig.CHANNEL === 'self' ? '跟随域名 8770' : '跟随外网地址', 'domain')
             if (BuildConfig.CHANNEL === 'self') {
-              this.WanChip('测试实例 8771', 'dev')
             }
             this.WanChip('自定义', 'custom')
           }
@@ -288,7 +285,7 @@ struct SettingsConnectionPage {
           if (this.wanPreset === 'custom') {
             this.Field('外网用户数据地址（可带端口 / 路径）', this.draftWanUser,
               BuildConfig.CHANNEL === 'self'
-                ? 'https://域名:端口/前缀，例如 https://example.com:8443'
+                ? 'https://域名:端口/前缀'
                 : 'https://域名:端口/前缀，留空则同外网地址',
               (v: string) => {
                 this.draftWanUser = v;
