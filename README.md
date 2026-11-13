@@ -30,31 +30,36 @@
 
 <table>
   <tr>
-    <td width="33%" valign="top">
+    <td width="33%" align="center" valign="top">
       <img src="docs/screenshots/cast-finder.png" width="210"><br>
-      <strong>① 共演检索</strong><br>
-      <sub>想看导演 × 演员的合作、想看某几个人同台（男女、女女、男男都行）、还是就想找人多的大场面？一个筛选器全包：最多 6 位演员，「1 女 + 2 男」这种配比也能直接指定。<br><strong>离散人数多选 · 导演可包含可排除</strong></sub>
+      <strong>① 共演检索</strong>
     </td>
-    <td width="33%" valign="top">
+    <td width="33%" align="center" valign="top">
       <img src="docs/screenshots/gacha.png" width="210"><br>
-      <strong>② 抽卡</strong><br>
-      <sub>片荒、列表翻到麻木的时候别选了——整屏随机剧照瀑布流，看上哪张看哪张；从媒体库到收藏、从演员的全部作品到搜索结果，任意清单都能抽。<br><strong>不满意随时重抽 · 全站清单通用</strong></sub>
+      <strong>② 抽卡</strong>
     </td>
-    <td width="33%" valign="top">
+    <td width="33%" align="center" valign="top">
       <img src="docs/screenshots/facets.png" width="210"><br>
-      <strong>③ 分类体系</strong><br>
-      <sub>Emby 连一个能翻的演员墙都没有——想看某个人的全部作品，得进设置翻 metadata 里的 people 文件夹自己导出来。标签管理更是混乱的鸡肋功能。这里演员、标签、系列、制片厂、导演都是能直接翻的墙，视图多变，保你好看。<br><strong>多类入口 · 优化布局 · 横幅生成 · 可隐藏、可收藏</strong></sub>
+      <strong>③ 分类体系</strong>
     </td>
   </tr>
 </table>
 
+① **共演检索**　想看导演 × 演员的合作、想看某几个人同台（男女、女女、男男都行）、还是就想找人多的大场面？一个筛选器全包：最多 6 位演员，「1 女 + 2 男」这种配比也能直接指定。<br><strong>离散人数多选 · 导演可包含可排除</strong>
+
+② **抽卡**　片荒、列表翻到麻木的时候别选了——整屏随机剧照瀑布流，看上哪张看哪张；从媒体库到收藏、从演员的全部作品到搜索结果，任意清单都能抽。<br><strong>不满意随时重抽 · 全站清单通用</strong>
+
+③ **分类体系**　Emby 连一个能翻的演员墙都没有——想看某个人的全部作品，得进设置翻 metadata 里的 people 文件夹自己导出来。标签管理更是混乱的鸡肋功能。这里演员、标签、系列、制片厂、导演都是能直接翻的墙，视图多变，保你好看。<br><strong>多类入口 · 优化布局 · 横幅生成 · 可隐藏、可收藏</strong>
+
 <p><img src="docs/screenshots/frame-picks.png" width="460"></p>
 
-④ **亮点**　自动生成带时间点的本片画面，点哪张从哪秒开始播；观看时随手截的帧也能插进亮点。后台管理列着你所有的截图，点一下直接空降你最爱的场景，再也不用盯着剧照拉进度条。
+④ **亮点**　自动生成带时间点的本片画面，点哪张从哪秒开始播。观看时随手截的帧，也能插进亮点。
+
+**截帧与回看**　后台管理列着你所有的截图，点一下直接空降你最爱的场景，再也不用盯着剧照拉进度条。
 
 ⑤ **播放体验**　用腻了旧 Emby 式播放器的古早操作逻辑？这里换成 B 站客户端那套：详情页原地起播，小窗 / 全屏 / 横屏随手切，退出记着进度；倍速、手势、亮度音量都在手边。<br><strong>原地起播 · 三态窗口 · 记住进度</strong>
 
-⑥ **弹幕与评价**　对整部片想锐评？看到一半想说点啥？增加了弹幕与评价功能。连接 Amane 的评价数据库，你的评价也能提交；看到一半还可以随时发送弹幕，锐评场景。飞行式滚动、样式可调，支持后台查看并管理所有你自己的弹幕和评价，点击一键跳转详情页。
+⑥ **弹幕与评价**　对整部片想锐评？看到一半想说点啥？评价留给整部片，弹幕留给那个瞬间；发过的都能回头查看、管理，点一下就回到详情页。<br><strong>飞行弹幕 · 样式可调 · 评价管理</strong>
 
 <p><img src="docs/screenshots/detail-age-crop.png" width="460"></p>
 
@@ -82,13 +87,13 @@
 
 <table>
   <tr>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/home.png" width="120"><br><strong>首页</strong><br><sub>想放啥放啥 · 继续观看 · 每日推荐</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/library-250.png" width="120"><br><strong>媒体库</strong><br><sub>7 种排序 · 5 类筛选 · 抽卡</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/home.png" width="120"><br><strong>首页</strong><br><sub>想放啥放啥</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/library-250.png" width="120"><br><strong>媒体库</strong><br><sub>7 种排序 · 抽卡</sub></td>
     <td width="25%" align="center" valign="top"><img src="docs/screenshots/actors.png" width="120"><br><strong>演员</strong><br><sub>身材 · 年龄 · 收藏</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/detail.png" width="120"><br><strong>详情</strong><br><sub>一切信息 · 大众点评 · 相似影片</sub></td>
+    <td width="25%" align="center" valign="top"><img src="docs/screenshots/detail.png" width="120"><br><strong>详情</strong><br><sub>一切信息 · 大众点评</sub></td>
   </tr>
   <tr>
-    <td align="center" valign="top"><img src="docs/screenshots/detail-stills.png" width="120"><br><strong>剧照</strong><br><sub>瀑布流 · 标记喜爱 · 尽收眼底</sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/detail-stills.png" width="120"><br><strong>剧照</strong><br><sub>喜欢就收起来</sub></td>
     <td align="center" valign="top"><img src="docs/screenshots/filter-sheet.png" width="120"><br><strong>筛选</strong><br><sub>想怎么筛就怎么筛</sub></td>
     <td align="center" valign="top"><img src="docs/screenshots/search.png" width="120"><br><strong>搜索</strong><br><sub>联想 · 别名 · 拼音繁体</sub></td>
     <td align="center" valign="top"><img src="docs/screenshots/player-settings.png" width="120"><br><strong>播放器</strong><br><sub>内置 mpv · 倍速 · 手势</sub></td>
@@ -97,9 +102,14 @@
 
 <sub>演员墙按身材和年龄挑：从娇小到丰满、从人妻到 JK，总有一款对味；想挑奶狗或大叔也不是不行。</sub>
 
+想看的先放进**稍后再看**，喜欢的分进自己的**清单**；这次没看完，下次接着看。
+
 <sub>多清单 · 稍后再看 · 自建标签与系列 · 手机编辑信息 · 8 套主题 · 列数可调 · 首页编排 · 检查更新 · 设置分块 · 全矢量图标 · 导出日志</sub>
 
 ## 播放链路
+
+<details>
+<summary>想看看它怎么播得顺？展开看播放链路</summary>
 
 <p align="center"><img src="assets/architecture.png" width="100%" alt="系统架构"></p>
 
@@ -108,17 +118,20 @@
 - **mpv 硬解**：左右拖进度、竖直调亮度音量、0.75–2x 倍速、音轨字幕切换、退出记进度。
 - **悬浮玻璃控制层**：视频从栏下透出，播放页两侧用封面晕出光晕。
 - **参数锁定**：旧配置自动重置；诊断行看缓存秒数，一眼分清网络还是解码。
+
+</details>
+
 - **外挂字幕**：同目录 / 手机导入 / URL / 在线搜索，记住每部片的选择；多种常见编码自动转 WebVTT。
 
 ## 快速开始
 
 **完全不懂怎么装？看 [从零开始（傻瓜版）](docs/START.md)** —— 每一步都写了「做什么 / 看到什么算成功 / 不对怎么办」，装服务、签名装 App、连库、以后怎么更新都在里面。
 
-已经知道自己在干什么的，看这张表：
+已经知道自己在干什么的，按三步走：
 
-| 01 · 部署旁挂服务 | 02 · 安装客户端 | 03 · 连接媒体库 |
-|---|---|---|
-| 在运行 Amane 的机器上 `cp deploy/.env.example .env` 填好 `AMANE_DATA` 与 `MEDIA_PATH_MAP`，`docker compose -f deploy/compose.example.yml up -d` | 从 [Releases](../../releases) 下载 HAP，用你自己的证书签名后安装，或用 Hokit 等侧载工具 | 「我的 → 连接设置」填 Amane 地址 `:8000`、用户服务地址 `:8770` 与 API token |
+1. **部署旁挂服务**　在运行 Amane 的机器上 `cp deploy/.env.example .env`，填好 `AMANE_DATA` 与 `MEDIA_PATH_MAP`，再 `docker compose -f deploy/compose.example.yml up -d`。
+2. **安装客户端**　从 [Releases](../../releases) 下载 HAP，用你自己的证书签名后安装，或交给 Hokit 这类侧载工具。
+3. **连接媒体库**　「我的 → 连接设置」填 Amane 地址 `:8000`、用户服务地址 `:8770` 与 API token。
 
 详细步骤见 [部署指南](docs/DEPLOY.md) 与 [签名安装](docs/BUILD_HAP.md)；不想手写配置，就把部署指南开头那段话发给 AI 助手，它会用 `tools/agentctl.py` 带你部署并验证。
 
@@ -128,6 +141,8 @@
 
 - 第一次装：[部署指南](docs/DEPLOY.md) · [签名安装](docs/BUILD_HAP.md)
 - 已经有旧版：[升级服务端](docs/UPGRADE.md)（含一段可以直接发给 AI 助手的提示词）
+- 使用与排错：[字幕](docs/SUBTITLES.md) · [兼容性](docs/COMPATIBILITY.md) · [排障](docs/TROUBLESHOOTING.md) · [非鸿蒙设备](docs/ANDROID.md)
+- 维护与贡献：[README 设计规范](docs/DESIGN.md) · [AI 助手约定](AGENTS.md)
 
 ## 交流
 
@@ -135,8 +150,6 @@
 - **[更新频道](https://t.me/+iEyg1f5Q_6UxYjY1)** —— 只发版本更新，不闲聊
 
 版本发布后会自动往更新频道推一条（标题 + 本次更新摘要 + Release 链接）。
-
-仓库内另有：[部署](docs/DEPLOY.md) · [签名安装](docs/BUILD_HAP.md) · [字幕](docs/SUBTITLES.md) · [兼容性](docs/COMPATIBILITY.md) · [排障](docs/TROUBLESHOOTING.md) · [非鸿蒙设备](docs/ANDROID.md) · [README 设计规范](docs/DESIGN.md) · [AI 助手约定](AGENTS.md)。
 
 ## 许可
 
