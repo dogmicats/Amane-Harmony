@@ -1,17 +1,18 @@
 {
-  "published_at": "2026-11-12T21:09+08:00",
+  "published_at": "2026-11-13T16:55+08:00",
   "channel": "public",
-  "release": "v2.5.0",
+  "release": "v2.6.0",
   "client": {
-    "version": "2.5.0",
-    "code": 2005000,
-    "url": "https://github.com/dogmicats/Amane-Harmony/releases/download/v2.5.0/Amane-2.5.0-unsigned.hap",
-    "size": 41885731,
-    "sha256": "463da38886ce5285e1bb806a4be60cd37dd06934e7d3e46403194cd1e593fb37",
-    "notes": "Amane-Harmony 2.5.0（v2.5.0）"
+    "version": "2.6.0",
+    "code": 2006000,
+    "url": "https://github.com/dogmicats/Amane-Harmony/releases/download/v2.6.0/Amane-2.6.0-unsigned.hap",
+    "size": 44116500,
+    "sha256": "6372df35d6a4b6b2d41900dc5873283a4bd77c4d149333c9845c0634f299cb61",
+    "notes": "2.6.0：观看统计、从夯到拉、俗称与别名检索、手机编辑、外观与首页编排"
   },
   "server": {
-    "version": "2.5.0",
-    "notes": "服务端代码版本 2.5.0；升级步骤见 App 内「怎么升级服务端」"
+    "version": "2.6.0",
+    "notes": "服务端代码版本 2.6.0；升级步骤见 App 内「怎么升级服务端」",
+    "howto": "在跑服务的那台机器上操作（不是手机上）：\n1. 备份：cp -r data data.bak-$(date +%Y%m%d)\n2. 到仓库目录：git pull\n3. 重建：docker compose -f deploy/compose.example.yml up -d --build\n   （当初把 compose 改成 image: 的，先把 tag 改成新版本号，再 docker compose pull && up -d）\n4. 回本页点「重新检查」，服务端那行会变成新版本号\n想退回上一版：把 data.bak-<日期> 换回 data，再做一次第 3 步"
   }
 }
