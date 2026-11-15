@@ -889,6 +889,14 @@ struct ActorDetailPage {
     .width('100%')
   }
 
+  /** 统一转场（2.6.1.18）：二级页统一 200ms 淡入，不再硬切。 */
+  pageTransition(): void {
+    PageTransitionEnter({ type: RouteType.None, duration: 200, curve: Curve.EaseOut })
+      .opacity(0)
+    PageTransitionExit({ type: RouteType.None, duration: 160, curve: Curve.EaseIn })
+      .opacity(0)
+  }
+
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.loading) {

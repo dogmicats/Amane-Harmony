@@ -21,9 +21,12 @@ export struct ToolPill {
     Text(this.label)
       .fontSize(12)
       .fontColor(this.active ? '#FFFFFF' : Theme.TEXT_DIM)
-      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+      .padding({ left: 12, right: 12, top: 7, bottom: 7 })
       .backgroundColor(this.active ? Theme.ACCENT : Theme.CARD)
-      .borderRadius(12)
+      // 胶囊 + 细边（2026-11-14）：和媒体库那排 chips 用同一套形状，
+      // 原来圆角 12 的方块夹在胶囊中间，一眼就是两种控件。
+      .borderRadius(Theme.R_PILL)
+      .border({ width: 1, color: this.active ? Theme.accentAlpha(0.55) : Theme.STROKE })
       .onClick(() => {
         this.onTap();
       })
@@ -167,7 +170,8 @@ export struct ChipRow {
           .fontColor(this.current === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
           .padding({ left: 11, right: 11, top: 5, bottom: 5 })
           .backgroundColor(this.current === opt.key ? Theme.ACCENT : Theme.CARD)
-          .borderRadius(12)
+          .borderRadius(Theme.R_PILL)
+          .border({ width: 1, color: this.current === opt.key ? Theme.accentAlpha(0.55) : Theme.STROKE })
           .onClick(() => {
             this.onPick(opt.key);
           })

@@ -16,7 +16,7 @@ import { util } from '@kit.ArkTS';
  */
 
 /** 播放参数版本：改默认值或字段含义时 +1，老配置会被重新生成。 */
-export const MPV_CONF_VERSION: string = 'amane-conf: 11';
+export const MPV_CONF_VERSION: string = 'amane-conf: 13';
 
 export interface PlayerTuning {
   /** 硬件解码（走 PlayerConfig，不进 conf）。 */
@@ -41,6 +41,12 @@ export interface PlayerTuning {
    * 第二次播同一部片能命中大半，不用每次从网盘重拉（用户第 4 条）。
    */
   diskMiB: number;
+  /**
+   * 起播优先（2.6.1.57）：`cache-pause-initial=no` + 压小预读，
+   * 拿到第一帧就播，不再「攒满 readahead 秒才开闸」。
+   * 观感=网页播放器那种秒开；代价是弱网时画面上来可能先顿一下。
+   */
+  startFast: boolean;
 }
 
 export interface PresetOption {
@@ -71,7 +77,7 @@ export const PRESETS: PresetOption[] = [
  * 改这个函数必须同时升 `TUNING_LOCK` 与 `MPV_CONF_VERSION`，否则老设备上
  * 写脏的值会盖住新默认（`load()` 只在 lock 不匹配时整份重置）。
  */
-export const TUNING_LOCK: string = 'lock-v10';
+export const TUNING_LOCK: string = 'lock-v12';
 
 /** 锁定值单独导出：设置页与自检都用它，避免两处写死后对不上。 */
 export const LOCKED_PAUSE_WAIT: number = 1.0;
@@ -86,7 +92,10 @@ function baseTuning(): PlayerTuning {
     backMiB: 32,
     hrSeek: false,
     extra: '',
-    diskMiB: 0
+    diskMiB: 0,
+    // 起播优先（2.6.1.57，默认开）：见 confText 里的说明 ——
+    // mpv 默认「攒满 readahead 秒才开播」，这就是起播慢/拖动卡的真因。
+    startFast: true
   };
   return t;
 }
@@ -102,7 +111,8 @@ export function presetTuning(key: string, current: PlayerTuning): PlayerTuning {
     backMiB: current.backMiB,
     hrSeek: current.hrSeek,
     extra: current.extra,
-    diskMiB: current.diskMiB
+    diskMiB: current.diskMiB,
+    startFast: current.startFast
   };
   if (key === 'smooth') {
     t.pauseWait = 0.1;
@@ -150,13 +160,27 @@ export function confText(t: PlayerTuning): string {
     'stream-buffer-size=4MiB',
     `demuxer-max-bytes=${t.diskMiB > 0 ? t.diskMiB : t.maxMiB}MiB`,
     `demuxer-max-back-bytes=${Math.min(t.backMiB, t.diskMiB > 0 ? t.diskMiB : t.maxMiB)}MiB`,
-    `demuxer-readahead-secs=${t.readahead}`,
+    // ★ 2.6.1.85：开流探测不要 5MB ★
+    // mpv 默认 `demuxer-lavf-probesize=5000000` + `analyzeduration=1.5` ——
+    // 也就是说**开播前要先读到 5MB 才敢确定这是什么格式**。网页版是 `<video>`，
+    // 浏览器拿到几十 KB 就能画第一帧，这就是「人家一键开播、我们转圈」的核心差别。
+    // 网盘源 4MB 首块要 1.8~4.9 秒（实测），等于把这 5MB 的等待全算进首帧。
+    // 压到 256KB / 0.4 秒：容器头几十 KB 就够认 mp4/mkv，出画面立刻；万一认不出
+    // 会退回「边读边补」而不是直接失败（lavf 的行为）。
+    'demuxer-lavf-probesize=262144',
+    'demuxer-lavf-analyzeduration=0.4',
+    // 起播优先（2.6.1.57）：mpv 默认 `cache-pause-initial=yes`，会**先攒满
+    // `demuxer-readahead-secs` 秒的数据再开播** —— 23MiB/s 的本地片要等 2–4 秒，
+    // 1.1MiB/s 的网盘片要等 5–8 秒，拖动后还要重新攒一遍。网页播放器只等第一帧，
+    // 所以显得「秒开」。关掉它 + 把预读压到 6 秒，起播就对齐浏览器；弱网代价是先顿一下。
+    t.startFast ? 'cache-pause-initial=no' : 'cache-pause-initial=yes',
+    `demuxer-readahead-secs=${t.startFast ? Math.min(t.readahead, 6) : t.readahead}`,
     // 本地磁盘缓存：0 = 关；开了就把 demuxer 缓存落到 mpvconf 同级目录，
     // 第二次打开同一部片能命中大半，不用每次从网盘重拉。
     t.diskMiB > 0 ? 'cache-on-disk=yes' : 'cache-on-disk=no',
     'cache-dir=~~/stream-cache',
     'cache-pause=yes',
-    `cache-pause-wait=${t.pauseWait}`,
+    `cache-pause-wait=${t.startFast ? Math.min(t.pauseWait, 0.4) : t.pauseWait}`,
     'demuxer-seekable-cache=yes',
     `hr-seek=${t.hrSeek ? 'yes' : 'no'}`,
     '',
@@ -179,7 +203,8 @@ const PREF_TUNING_LOCK: string = 'tuning_lock';
 /** 生成配置里已有的键，迁移老 conf 时用来识别「用户自己加的」。 */
 const KNOWN_KEYS: string[] = [
   'vo', 'osc', 'osd-level', 'cache', 'demuxer-max-bytes', 'demuxer-max-back-bytes',
-  'demuxer-readahead-secs', 'cache-pause', 'cache-pause-wait', 'demuxer-seekable-cache',
+  'demuxer-readahead-secs', 'cache-pause', 'cache-pause-wait', 'cache-pause-initial',
+  'demuxer-seekable-cache',
   'hr-seek', 'demuxer-lavf-probe-info', 'hwdec', 'stream-buffer-size',
   'cache-on-disk', 'cache-dir', 'keepaspect', 'video-unscaled', 'panscan'
 ];
@@ -279,8 +304,11 @@ export class PlayerPrefs {
         t.hrSeek = raw.hrSeek === true;
         t.extra = raw.extra === undefined || raw.extra === null ? '' : raw.extra;
         t.diskMiB = raw.diskMiB === undefined || raw.diskMiB === null ? 0 : Number(raw.diskMiB);
-        // 均衡档就是锁定值：设备上残留的 0.2 之类一律拉回，防止「改对了又被顶掉」
-        if (t.preset === 'balanced' && t.pauseWait < LOCKED_PAUSE_WAIT) {
+        // 老配置里没有这个字段 → 按新默认「起播优先」
+        t.startFast = raw.startFast === undefined || raw.startFast === null ? true : raw.startFast === true;
+        // 均衡档就是锁定值：设备上残留的 0.2 之类一律拉回，防止「改对了又被顶掉」。
+        // 起播优先档例外：那一档本来就把 pauseWait 压到 0.4，别再拉回 1.0。
+        if (t.preset === 'balanced' && !t.startFast && t.pauseWait < LOCKED_PAUSE_WAIT) {
           t.pauseWait = LOCKED_PAUSE_WAIT;
         }
       }

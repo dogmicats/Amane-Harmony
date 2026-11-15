@@ -33,7 +33,9 @@ export struct LibraryTab {
       .fontColor(this.activeId === id ? '#FFFFFF' : Theme.TEXT_DIM)
       .padding({ left: 14, right: 14, top: 7, bottom: 7 })
       .backgroundColor(this.activeId === id ? Theme.ACCENT : Theme.CARD)
-      .borderRadius(16)
+      .borderRadius(Theme.R_PILL)
+      // 未选中加 1px 细边：深底上纯色块会和背景糊在一起（和首页卡片同一套判据）
+      .border({ width: 1, color: this.activeId === id ? Theme.accentAlpha(0.55) : Theme.STROKE })
       .onClick(() => {
         this.pickLibrary(id);
       })
@@ -47,15 +49,23 @@ export struct LibraryTab {
           .fontWeight(FontWeight.Bold)
           .fontColor(Theme.TEXT)
         Blank()
-        Text('⌕')
-          .fontSize(22)
-          .fontColor(Theme.TEXT)
-          .width(38)
-          .height(36)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            router.pushUrl({ url: 'pages/SearchPage' });
-          })
+        // 搜索入口与首页统一：真矢量图标 + 36vp 暗玻璃圆 + 1px 亮边。
+        // 原来这里是 '⌕' 字符（细、和首页那个图标不是一套），两页并排看就是"两套设计"。
+        Stack() {
+          Image($r('app.media.ic_search'))
+            .width(20)
+            .height(20)
+            .objectFit(ImageFit.Contain)
+            .draggable(false)
+        }
+        .width(36)
+        .height(36)
+        .borderRadius(18)
+        .backgroundColor('#33000000')
+        .border({ width: 1, color: '#40FFFFFF' })
+        .onClick(() => {
+          router.pushUrl({ url: 'pages/SearchPage' });
+        })
       }
       .width('100%')
       .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 8, bottom: 8 })

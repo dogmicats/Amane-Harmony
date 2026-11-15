@@ -79,6 +79,34 @@ export class Theme {
   static readonly POSTER_H: number = 164;
   static readonly HERO_H: number = 430;
 
+  // ── 视觉基线（2026-11-14 · 用户「要好看」）──────────────────────────────
+  // 目的只有一个：**把散落的魔数收成刻度**。以前圆角全是 12、间距到处 10/14/18，
+  // 单看每处都不难看，摆在一起就"廉价"。新代码一律用这些，老代码改到哪用哪，不强推。
+  /** 卡片圆角（比图片大一档，才有"内嵌"感）。 */
+  static readonly R_CARD: number = 16;
+  /** 图片 / 海报圆角。 */
+  static readonly R_IMG: number = 12;
+  /** 胶囊 / chip 圆角。 */
+  static readonly R_PILL: number = 999;
+  /** 卡片 1px 描边：深色底上唯一能"抬起"卡片又不脏的办法。 */
+  static readonly STROKE: string = '#17FFFFFF';
+  /** 强调描边（选中态 / 悬停）。 */
+  static readonly STROKE_HI: string = '#2EFFFFFF';
+  /** 间距刻度：4 / 8 / 12 / 16 / 24。 */
+  static readonly G_XS: number = 4;
+  static readonly G_S: number = 8;
+  static readonly G_M: number = 12;
+  static readonly G_L: number = 16;
+  static readonly G_XL: number = 24;
+  /** 字阶：标题 / 正文 / 注解。 */
+  static readonly T_TITLE: number = 17;
+  static readonly T_BODY: number = 14;
+  static readonly T_META: number = 11;
+  /** 圆角 + 描边一次到位：`Theme.card()` 给"能点的卡片"用。 */
+  static card(): number {
+    return Theme.R_CARD;
+  }
+
   /** 切到某套预设；未知键退回默认，不抛错（偏好文件被改坏也不至于白屏）。 */
   static applyPalette(key: string): void {
     const picked: ThemePalette = Theme.paletteOf(key);

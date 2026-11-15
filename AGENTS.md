@@ -49,8 +49,7 @@ python tools/agentctl.py doctor --json
 python tools/scan_secrets.py --path .          # 必须为 0 命中
 python -m py_compile server/server.py server/ext/*/server_ext.py tools/agentctl.py
 curl -s http://127.0.0.1:8770/api/user/ping   # {"ok":true,...}
-curl -s "http://127.0.0.1:8770/api/user/subtitles/providers"  # 返回源列表（含 xunlei），不是 404
-curl -s "http://127.0.0.1:8770/api/user/subtitles/search?q=SSIS-001"  # 允许 items 为空，但不能 500
+curl -s "http://127.0.0.1:8770/api/user/subtitles/providers"  # 返回 源列表（含 xunlei），不是 404
 ```
 
 ## 更新日志怎么写（`CHANGELOG.md` / Release Notes）

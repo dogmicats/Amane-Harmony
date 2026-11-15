@@ -1,17 +1,18 @@
 import { promptAction, router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
-import { Updater, CheckResult } from '../common/Updater';
+import { Updater, CheckResult, UpgradeStatus } from '../common/Updater';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { BuildConfig } from '../common/BuildConfig';
+import { UpdateWatch } from '../common/UpdateWatch';
 
 /** 公开版的兜底步骤（`BuildConfig.CHANNEL === 'public'`）。不写端口、不写账号密码。 */
 const HOWTO_PUBLIC: string =
   '在跑服务的那台机器上操作（不是手机上）：\n' +
   '1. 备份：cp -r data data.bak-$(date +%Y%m%d)\n' +
   '2. 到仓库目录：git pull\n' +
-  '3. 重建：docker compose -f deploy/compose.yml up -d --build\n' +
+  '3. 重建：docker compose -f deploy/compose.example.yml up -d --build\n' +
   '   （当初把 compose 改成 image: 的，先把 tag 改成新版本号，再 docker compose pull && up -d）\n' +
   '4. 回本页点「重新检查」，服务端那行会变成新版本号\n' +
   '想退回上一版：把 data.bak-<日期> 换回 data，再做一次第 3 步';
@@ -95,6 +96,13 @@ struct UpdatePage {
   @State fellBack: boolean = false;
   @State attempts: string = '';
   @State hint: string = '';
+  /** 服务端自动升级：宿主机装了 deploy/auto-update.sh 才有 supported。 */
+  @State upSupported: boolean = false;
+  @State upEnabled: boolean = false;
+  @State upState: string = '';
+  @State upMessage: string = '';
+  @State upAt: string = '';
+  @State upBusy: boolean = false;
 
   aboutToAppear(): void {
     try {
@@ -105,6 +113,67 @@ struct UpdatePage {
     }
     this.draft = Store.I.prefString('update_manifest_url', '');
     this.runCheck();
+    this.loadUpgrade();
+  }
+
+  /** 读一次自动升级状态：没装助手时什么也不显示，退回手动步骤。 */
+  private async loadUpgrade(): Promise<void> {
+    const s: UpgradeStatus = await Updater.upgradeStatus();
+    this.upSupported = s.supported;
+    this.upEnabled = s.enabled;
+    this.upState = s.state;
+    this.upMessage = s.message;
+    this.upAt = s.at;
+  }
+
+  /** 开关：写服务端，成功后本地同步；失败就弹一句，不改状态。 */
+  private async toggleUpgrade(on: boolean): Promise<void> {
+    if (this.upBusy) {
+      return;
+    }
+    this.upBusy = true;
+    const ok: boolean = await Updater.setUpgradeAuto(on);
+    if (ok) {
+      this.upEnabled = on;
+    } else {
+      promptAction.showToast({ message: '没写进去，检查服务端是否在线', duration: 2000 });
+    }
+    this.upBusy = false;
+  }
+
+  /** 立即升级：投一个请求，定时器一分钟内动手。 */
+  private async upgradeNow(): Promise<void> {
+    if (this.upBusy) {
+      return;
+    }
+    this.upBusy = true;
+    const target: string = this.serverLatest.length > 0 ? this.serverLatest : '';
+    const ok: boolean = await Updater.requestUpgrade(target);
+    if (ok) {
+      this.upState = 'upgrading';
+      this.upMessage = '已交给机器上的助手，通常 1 分钟内开始';
+      promptAction.showToast({ message: '已开始，稍后回这一页看结果', duration: 2200 });
+    } else {
+      promptAction.showToast({ message: '没发出去，检查服务端是否在线', duration: 2000 });
+    }
+    this.upBusy = false;
+  }
+
+  /** 自动升级那一行的人话状态。 */
+  private upgradeLine(): string {
+    if (this.upState === 'upgrading') {
+      return '正在升级，别关这台机器…';
+    }
+    if (this.upState === 'done') {
+      return `上次已自动升到 ${this.upMessage.replace('已升级到 ', '')}（${this.upAt}）`;
+    }
+    if (this.upState === 'failed') {
+      return `上次没升成：${this.upMessage}`;
+    }
+    if (this.upEnabled) {
+      return '开着：每 10 分钟检查一次，有新版自动升（同大版本内）';
+    }
+    return '关着：需要我点一下才升';
   }
 
   private apply(r: CheckResult): void {
@@ -377,6 +446,44 @@ struct UpdatePage {
           .color(Theme.CARD_HI)
         this.VerRow('server')
       }
+      // 「本次更新不提醒」（2026-11-14）：记下当前这组版本号，红点消失；
+      // 出了更新的版本仍会提示 —— 不是一刀切关掉更新提醒。
+      if (this.clientUpdatable || this.serverUpdatable) {
+        Divider()
+          .color(Theme.CARD_HI)
+        Row({ space: 8 }) {
+          Text('本次更新不提醒')
+            .fontSize(11)
+            .fontColor(Theme.TEXT_DIM)
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            .backgroundColor(Theme.CARD_HI)
+            .borderRadius(9)
+            .onClick(() => {
+              UpdateWatch.mute();
+              promptAction.showToast({ message: '这次不再提示；出了更新的版本会再提醒', duration: 1800 });
+            })
+          Blank()
+        }
+        .width('100%')
+      } else if (UpdateWatch.mutedSig().length > 0) {
+        // 静音过的用户要能回来：不然「不提醒」等于永久失聪，下一个版本也没人知道
+        Divider()
+          .color(Theme.CARD_HI)
+        Row({ space: 8 }) {
+          Text('恢复更新提醒')
+            .fontSize(11)
+            .fontColor(Theme.ACCENT)
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            .backgroundColor(Theme.CARD_HI)
+            .borderRadius(9)
+            .onClick(() => {
+              UpdateWatch.unmute();
+              promptAction.showToast({ message: '已恢复：下次检测到更新会再提示', duration: 1800 });
+            })
+          Blank()
+        }
+        .width('100%')
+      }
     }
     .width('100%')
     .padding(12)
@@ -465,49 +572,106 @@ struct UpdatePage {
   @Builder
   ServerCard() {
     Column({ space: 8 }) {
-      Row({ space: 6 }) {
-        Text(this.serverUpdatable
-          ? `服务端也有新版本 · ${this.serverLatest}`
-          : '怎么升级服务端（目前是最新）')
-          .fontSize(12)
-          .fontColor(this.serverUpdatable ? Theme.GOLD : Theme.TEXT_DIM)
+      if (this.upSupported) {
+        // 机器上装了 auto-update.sh：能自动升，就别再让人读步骤了
+        Row({ space: 8 }) {
+          Column({ space: 3 }) {
+            Text('服务端自动升级')
+              .fontSize(12)
+              .fontColor(Theme.TEXT)
+            Text(this.upgradeLine())
+              .fontSize(9)
+              .fontColor(this.upState === 'failed' ? Theme.GOLD : Theme.TEXT_DIM)
+              .lineHeight(14)
+          }
+          .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
-        Text(this.howtoOpen ? '收起' : '展开')
-          .fontSize(10)
-          .fontColor(Theme.ACCENT)
-          .padding({ left: 8, right: 8, top: 5, bottom: 5 })
-          .backgroundColor(Theme.CARD)
-          .borderRadius(8)
-          .onClick(() => {
-            this.howtoOpen = !this.howtoOpen;
-          })
-        Text('复制步骤')
-          .fontSize(10)
-          .fontColor(Theme.ACCENT)
-          .padding({ left: 8, right: 8, top: 5, bottom: 5 })
-          .backgroundColor(Theme.CARD)
-          .borderRadius(8)
-          .onClick(() => {
-            this.copyHowto();
-          })
-      }
-      .width('100%')
 
-      if (this.howtoOpen) {
-        Text(this.serverHowto)
-          .fontSize(10)
-          .fontColor(Theme.TEXT_DIM)
-          .width('100%')
-          .lineHeight(17)
-          .copyOption(CopyOptions.LocalDevice)
+          Toggle({ type: ToggleType.Switch, isOn: this.upEnabled })
+            .selectedColor(Theme.ACCENT)
+            .onChange((on: boolean) => {
+              this.toggleUpgrade(on);
+            })
+        }
+        .width('100%')
 
-        Text('为什么这里不能一键升：服务端跑在 NAS 的容器里，换版本要落到宿主机的文件与容器上。' +
-          '把「能换服务端代码」做成 App 里的一个按钮，等于谁拿到这把钥匙都能在你机器上跑东西；' +
-          '而且升挂了 App 自己也连不上，没法自救。所以这一步留在你能看到输出的地方做。')
-          .fontSize(9)
-          .fontColor(Theme.TEXT_FAINT)
-          .width('100%')
-          .lineHeight(14)
+        Row({ space: 8 }) {
+          Text(this.upState === 'upgrading' ? '升级中…' : (this.serverUpdatable
+            ? `立即升级到 ${this.serverLatest}` : '检查并升级'))
+            .fontSize(11)
+            .fontColor(this.serverUpdatable ? '#0B0B14' : Theme.TEXT_DIM)
+            .textAlign(TextAlign.Center)
+            .padding({ left: 12, right: 12, top: 7, bottom: 7 })
+            .backgroundColor(this.serverUpdatable ? Theme.ACCENT : Theme.CARD)
+            .borderRadius(9)
+            .onClick(() => {
+              this.upgradeNow();
+            })
+          Text('看手动步骤')
+            .fontSize(10)
+            .fontColor(Theme.ACCENT)
+            .padding({ left: 8, right: 8, top: 5, bottom: 5 })
+            .backgroundColor(Theme.CARD)
+            .borderRadius(8)
+            .onClick(() => {
+              this.howtoOpen = !this.howtoOpen;
+            })
+        }
+        .width('100%')
+
+        if (this.howtoOpen) {
+          Text(this.serverHowto)
+            .fontSize(9)
+            .fontColor(Theme.TEXT_FAINT)
+            .width('100%')
+            .lineHeight(15)
+            .copyOption(CopyOptions.LocalDevice)
+        }
+      } else {
+        Row({ space: 6 }) {
+          Text(this.serverUpdatable
+            ? `服务端也有新版本 · ${this.serverLatest}`
+            : '怎么升级服务端（目前是最新）')
+            .fontSize(12)
+            .fontColor(this.serverUpdatable ? Theme.GOLD : Theme.TEXT_DIM)
+            .layoutWeight(1)
+          Text(this.howtoOpen ? '收起' : '展开')
+            .fontSize(10)
+            .fontColor(Theme.ACCENT)
+            .padding({ left: 8, right: 8, top: 5, bottom: 5 })
+            .backgroundColor(Theme.CARD)
+            .borderRadius(8)
+            .onClick(() => {
+              this.howtoOpen = !this.howtoOpen;
+            })
+          Text('复制步骤')
+            .fontSize(10)
+            .fontColor(Theme.ACCENT)
+            .padding({ left: 8, right: 8, top: 5, bottom: 5 })
+            .backgroundColor(Theme.CARD)
+            .borderRadius(8)
+            .onClick(() => {
+              this.copyHowto();
+            })
+        }
+        .width('100%')
+
+        if (this.howtoOpen) {
+          Text(this.serverHowto)
+            .fontSize(10)
+            .fontColor(Theme.TEXT_DIM)
+            .width('100%')
+            .lineHeight(17)
+            .copyOption(CopyOptions.LocalDevice)
+
+          Text('为什么这里不能一键升：服务端跑在 NAS 的容器里，换版本要落到宿主机的文件与容器上。' +
+            '把「能换服务端代码」做成 App 里的一个按钮，等于谁拿到这把钥匙都能在你机器上跑东西；' +
+            '而且升挂了 App 自己也连不上，没法自救。所以这一步留在你能看到输出的地方做。')
+            .fontSize(9)
+            .fontColor(Theme.TEXT_FAINT)
+            .width('100%')
+            .lineHeight(14)
+        }
       }
     }
     .width('100%')

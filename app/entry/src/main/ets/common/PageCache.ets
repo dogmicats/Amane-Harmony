@@ -197,3 +197,15 @@ export function cacheSizeKb(): number {
   }
   return Math.round(total / 1024);
 }
+
+/** 磁盘上有多少条缓存（给「存储与缓存」页显示）。 */
+export function cacheCount(): number {
+  if (baseDir.length === 0) {
+    return 0;
+  }
+  try {
+    return fs.listFileSync(baseDir).length;
+  } catch (err) {
+    return 0;
+  }
+}

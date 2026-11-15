@@ -1,13 +1,18 @@
 import { promptAction, router } from '@kit.ArkUI';
+import { display } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { util } from '@kit.ArkTS';
 import { fileIo } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
-import { httpDelete, httpGet, httpGetCached, cachedBody, dropPageCache, httpPost } from '../common/Http';
+import { httpDelete, httpGet, httpGetCached, cachedBody, dropPageCache, httpPost, httpWarmStream } from '../common/Http';
+import { cachePut } from '../common/PageCache';
 import { Store } from '../common/Store';
+import { PoolParams } from '../common/PoolParams';
 import { Theme } from '../common/Theme';
 import { Personalize } from '../common/Personalize';
+import { markScroll } from '../view/Fx';
 import { HomeData, HomeRow, LibraryInfo, MediaItem, BrowseParams, DetailParams, PlayerParams } from '../common/Types';
+import { CardPayload, KEY_CARD, payloadOf } from '../common/CardCache';
 import { safeHome } from '../common/Safe';
 import { BuildConfig } from '../common/BuildConfig';
 import { Reason, ReasonPack, ReasonLine } from '../common/Reason';
@@ -36,6 +41,15 @@ export function emptyHome(): HomeData {
 function emptyReasons(): ReasonPack {
   return { headline: Reason.DEFAULT_SUBTITLE, topic: '', lines: [], count: 0 };
 }
+
+/**
+ * 首页预热节流（2.6.1.85）：`metaId → 上次预热时刻`。
+ *
+ * 首页那张大图是「最短路径」的播放入口（点一下「立即播放」就开流），没有详情页那段
+ * 「用户要看两秒」的缓冲。在这里先替它把服务端首块热起来，点下去才会快。
+ * 同一部片 10 分钟内只热一次，别让来回刷首页把网盘回源拉爆。
+ */
+const HOME_WARM_AT: Map<number, number> = new Map();
 
 /**
  * 首页的一行（2.5.2 起首页由数据驱动）。
@@ -313,6 +327,10 @@ struct LibCardCell {
 @Component
 export struct HomeTab {
   @Prop @Watch('onRefresh') refreshKey: number = 0;
+  /** 每次回到首页 +1：只换内容，不显示骨架（见 silentRefresh）。 */
+  @Prop @Watch('onResume') resumeKey: number = 0;
+  /** 左侧光晕的当前透明度（0 = 不显示）。 */
+  @State glowA: number = 0;
   @State home: HomeData = emptyHome();
   /** 这次真的要铺的行（顺序 / 显隐来自「设置 → 首页内容」）。 */
   @State sections: HomeSection[] = [];
@@ -325,12 +343,65 @@ export struct HomeTab {
   /** 每日推荐的整批理由（纯客户端生成，不占卡片版面）。 */
   @State reasonPack: ReasonPack = emptyReasons();
   @State reasonOn: boolean = true;
-  @State showReasons: boolean = false;
   /** 老缓存补拉统计只试一次，避免不支持该字段的服务端每次冷启动都被多打一次。 */
   private statsTried: boolean = false;
+  /** 右滑进负一屏的触摸采样（只观测，不参与手势仲裁；-1 = 本次未起手）。 */
+  private swipeX0: number = -1;
+  private swipeY0: number = 0;
+  private swipeX1: number = 0;
+  private swipeY1: number = 0;
+  /** Down 时的横坐标（用来判断「是不是从左侧边缘起手」）。 */
+  private swipeStartX0: number = -1;
+  /** 起手点的 Y（vp，屏幕绝对），用来判断"上半屏起手"。 */
+  private swipeStartY0: number = -1;
+  /** 屏幕高缓存（vp）。只在第一次取，避免 Move 里频繁查询 display。 */
+  private cachedScreenH: number = 0;
 
   aboutToAppear(): void {
     this.load();
+    this.pulseGlowOnce();
+  }
+
+  /**
+   * 打开负一屏（刷一刷）——**不再 router.push**（2026-11-14 13:15）。
+   *
+   * 用户反馈：「不跟手，一开始只出来一点，拉到中间偏右了才突然弹出来」。
+   * 根因是 router 页面要等**抬手**才会开始转场，手指移动过程中页面上什么都没有。
+   * 现在改成：首页把手指位移实时写进 `AppStorage['minusDx']`，
+   * 由 `Index` 里的负一屏图层按这个位移实时平移（跟手），抬手再决定吸附开/关。
+   */
+  private openShorts(): void {
+    this.glowA = 0;
+    // 学会了就不再提醒（2.6.1.64）：进过一次负一屏，把光晕提示关掉。
+    // 但用户如果在设置里手动打开过（minus_glow_keep=1），就别擅自关。
+    if (Store.I.prefString('minus_glow', '1') === '1'
+      && Store.I.prefString('minus_glow_keep', '0') !== '1') {
+      Store.I.prefSetString('minus_glow', '0');
+    }
+    AppStorage.setOrCreate<string>('minusCmd', 'open');
+  }
+
+  /**
+   * 左侧光晕：一次会话只闪一次（AppStorage 记住），三次呼吸后停。
+   * 「提示到、但不烦人」是这个组件唯一的目标；可在 设置 → 预览 里关掉。
+   */
+  private pulseGlowOnce(): void {
+    if (Store.I.prefString('minus_glow', '1') === '0') {
+      return;
+    }
+    if (AppStorage.get<boolean>('glowShown') === true) {
+      return;
+    }
+    AppStorage.setOrCreate<boolean>('glowShown', true);
+    let step: number = 0;
+    const tick = () => {
+      step++;
+      this.glowA = step % 2 === 1 ? 0.42 : 0;
+      if (step < 6) {
+        setTimeout(tick, 760);
+      }
+    };
+    setTimeout(tick, 700);
   }
 
   /**
@@ -343,7 +414,8 @@ export struct HomeTab {
       this.reasonPack = emptyReasons();
       return;
     }
-    const items: MediaItem[] = this.home.banners.length > 0 ? this.home.banners : this.home.recommend;
+    // 理由要对着「推荐那一行实际展示的片」生成（旧服务端兜底时会剔掉顶部已用的前 6 部）
+    const items: MediaItem[] = this.bannerRowList();
     if (items.length === 0) {
       this.reasonPack = emptyReasons();
       return;
@@ -360,10 +432,20 @@ export struct HomeTab {
     }
   }
 
+  /**
+   * 首页接口地址：带上「大图候选池」。
+   * 条件 → 参数的拼法在 `common/PoolParams.ets`（负一屏共用同一份，见那里的说明）。
+   */
+  private homeUrl(fresh: boolean): string {
+    const head: string = `${Store.I.user}/api/user/home?`;
+    const q: string = PoolParams.query();
+    return head + (fresh ? `fresh=1&${q}` : q);
+  }
+
   /** 只补统计字段，不替换整份 home，避免把用户正在看的列表刷掉。 */
   private async fetchStatsAndRebuild(items: MediaItem[]): Promise<void> {
     try {
-      const text: string = await httpGet(`${Store.I.user}/api/user/home`, Store.I.token);
+      const text: string = await httpGet(this.homeUrl(false), Store.I.token);
       const fresh: HomeData = safeHome(JSON.parse(text) as HomeData);
       if (fresh.library_stats !== undefined) {
         this.home.library_stats = fresh.library_stats;
@@ -379,10 +461,61 @@ export struct HomeTab {
     this.load();
   }
 
+  onResume(): void {
+    if (this.resumeKey <= 0) {
+      return;
+    }
+    this.silentRefresh();
+  }
+
+  /**
+   * 每次回到首页：**静默换一批**（2.6.2.x）。
+   *
+   * 以前进首页走 `httpGetCached`（5 分钟）+ 服务端 5 分钟聚合缓存，所以一整天看到的推荐都一样，
+   * 只有手动下拉才换。现在进页面就带 `fresh=1` 拿一份新的，但**不显示骨架屏**：
+   * 旧内容先留着，新数据到了直接替换 —— 既不闪，也不会看着像在刷新。
+   */
+  private async silentRefresh(): Promise<void> {
+    if (!Store.I.ready) {
+      return;
+    }
+    try {
+      const text: string = await httpGet(
+        `${this.homeUrl(true)}`, Store.I.token);
+      this.home = safeHome(JSON.parse(text) as HomeData);
+      this.syncCard();
+      this.error = '';
+      this.loading = false;
+      this.refreshReasons();
+      this.buildLibCards();
+      this.buildSections();
+    } catch (err) {
+      const e = err as BusinessError;
+      // 静默失败：留着旧内容，别因为换推荐失败就变成错误页
+      console.info(`[amane] home silent: ${e.code} ${e.message}`);
+    }
+  }
+
+  /**
+   * 把「今日推荐 + 继续观看」写进偏好，桌面服务卡片读它（见 `common/CardCache`）。
+   *
+   * 只写一次字符串、不碰网络：卡片进程里没有 Store 的登录态，也不该为了看一眼
+   * 今日推荐去跑一遍内网/外网判定。写失败不影响首页本身，所以整体吞掉。
+   */
+  private syncCard(): void {
+    try {
+      const p: CardPayload = payloadOf(this.home, (raw: string) => Store.I.img(raw));
+      Store.I.prefSetString(KEY_CARD, JSON.stringify(p));
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] card sync: ${e.code}`);
+    }
+  }
+
   /**
    * 下拉刷新：**必须绕开两层缓存**，否则转了圈还是旧数据。
    * ① 客户端 httpGetCached（load() 用的）；② 服务端 /home 的 5 分钟聚合缓存 ——
-   *    所以要带 `fresh=1`，服务端才会重算并把横幅重新洗一批（推荐仍按日固定）。
+   *    所以要带 `fresh=1`，服务端才会重算（横幅与推荐都会重新洗一批）。
    */
   private async pullRefresh(): Promise<void> {
     if (!Store.I.ready) {
@@ -392,8 +525,9 @@ export struct HomeTab {
     this.pulling = true;
     try {
       const text: string = await httpGet(
-        `${Store.I.user}/api/user/home?fresh=1`, Store.I.token);
+        `${this.homeUrl(true)}`, Store.I.token);
       this.home = safeHome(JSON.parse(text) as HomeData);
+      this.syncCard();
       this.error = '';
       this.loading = false;
       this.refreshReasons();
@@ -416,13 +550,14 @@ export struct HomeTab {
       return;
     }
     this.error = '';
-    const url: string = `${Store.I.user}/api/user/home`;
+    const url: string = this.homeUrl(false);
     // 先用缓存把首页画出来（哪怕已过期）：来回切 tab 不用每次都看骨架屏
     if (this.home.rows.length === 0 && this.home.hero.length === 0) {
       const stale: string | undefined = cachedBody(url);
       if (stale !== undefined) {
         try {
           this.home = safeHome(JSON.parse(stale) as HomeData);
+    this.syncCard();
           this.loading = false;
         } catch (err) {
           console.info('[amane] home cache parse failed');
@@ -430,9 +565,15 @@ export struct HomeTab {
       }
     }
     try {
-      // 5 分钟内重复进入直接读缓存，不发请求
-      const text: string = await httpGetCached(url, Store.I.token, 300000);
+      // 冷启动也不吃缓存：带 fresh=1 直接拿新的一批（推荐 / 横幅都要换）。
+      // 以前这里是 httpGetCached(..., 300000)，所以「重开 App 还是同一份」（2026-11-13 反馈）。
+      // 首屏仍然先用上面那段 cachedBody 铺出来，不闪骨架；网络回来再替换。
+      const text: string = await httpGet(
+        `${this.homeUrl(true)}`, Store.I.token);
       this.home = safeHome(JSON.parse(text) as HomeData);
+      // 留一份给下次冷启动"先画出来"用（只是画面上的一帧，不代表数据是最新的）
+      cachePut(url, text, 1800000);
+      this.syncCard();
       this.loading = false;
     } catch (err) {
       const e = err as BusinessError;
@@ -445,6 +586,95 @@ export struct HomeTab {
     this.refreshReasons();
     this.buildLibCards();
     this.buildSections();
+    this.warmHero();
+  }
+
+  /**
+   * 预热首页大图那部片的首块（2.6.1.85）。
+   *
+   * 为什么只预热第 1 部：它是进首页默认显示的那张，也是「立即播放」最可能点到的。
+   * 用户划到第 3 张再点，那就回到「没预热」的老路径 —— 和以前一样，不会更差。
+   */
+  private warmHero(): void {
+    if (!Store.I.ready) {
+      return;
+    }
+    const hero: MediaItem[] = this.heroList();
+    if (hero.length === 0) {
+      return;
+    }
+    const id: number = hero[0].id;
+    const now: number = Date.now();
+    const at: number | undefined = HOME_WARM_AT.get(id);
+    if (at !== undefined && now - at < 600000) {
+      return;
+    }
+    HOME_WARM_AT.set(id, now);
+    const url: string = Store.I.playUrl(id);
+    // 等首屏图片和布局先跑完，再抢带宽去做预热
+    setTimeout(() => {
+      httpWarmStream(url).catch(() => {
+        // 预热失败不影响任何东西
+      });
+    }, 900);
+  }
+
+  /**
+   * 顶部大图的数据源（2.6.1.78）。
+   *
+   * 线上 8770 还是服务端 1.4.52 —— 那个版本的 `hero` **就是「每日推荐」的前 6 部**
+   * （`h[0].id === recommend[0].id` 是它的指纹），而推荐是按分数固定排序的：
+   * 客户端就算每次带 `fresh=1`，服务端也只洗「横幅」那一行，顶部永远同一部。
+   * 用户 2026-11-13 23:35：「每次打开 app，首页 hero 横幅一直是同一个影片」。
+   *
+   * 兜底：旧服务端时顶部改用 `banners` —— 那一行**服务端每次 fresh 都会洗**，
+   * 实测连续三次请求 banner0 分别是 JUR-081 / SDAM-8302 / ABP-171。
+   * 新服务端（1.4.58+）有独立 hero 池且与推荐互斥，这个分支不会进来。
+   */
+  private legacyHero(): boolean {
+    const h: MediaItem[] = this.home.hero;
+    const r: MediaItem[] = this.home.recommend;
+    if (h.length === 0) {
+      return true;
+    }
+    if (r.length === 0) {
+      return false;
+    }
+    return h[0].id === r[0].id;
+  }
+
+  private heroList(): MediaItem[] {
+    if (!this.legacyHero()) {
+      return this.home.hero;
+    }
+    const pool: MediaItem[] = this.home.banners.length >= 6 ? this.home.banners : this.home.recommend;
+    return pool.slice(0, 6);
+  }
+
+  /**
+   * 「每日推荐」那一行。
+   *
+   * 旧服务端走兜底时，顶部已经吃掉了 banners 的前 6 部 —— 这一行跳过它们，
+   * 免得同一部在顶部和推荐位各出现一次（2.6.1.30 定下的规矩）。
+   * 剩下不够 6 部就整份照给：宁可重复，也不要只剩两张。
+   */
+  private bannerRowList(): MediaItem[] {
+    const pool: MediaItem[] = this.home.banners.length > 0 ? this.home.banners : this.home.recommend;
+    if (!this.legacyHero()) {
+      return pool;
+    }
+    const used: Set<number> = new Set<number>();
+    const hero: MediaItem[] = this.heroList();
+    for (let i = 0; i < hero.length; i++) {
+      used.add(hero[i].id);
+    }
+    const rest: MediaItem[] = [];
+    for (let i = 0; i < pool.length; i++) {
+      if (!used.has(pool[i].id)) {
+        rest.push(pool[i]);
+      }
+    }
+    return rest.length >= 6 ? rest : pool;
   }
 
   /**
@@ -508,7 +738,7 @@ export struct HomeTab {
         key: 'banner', kind: 'banner', title: '每日推荐',
         subtitle: this.reasonOn ? this.reasonPack.headline : Reason.DEFAULT_SUBTITLE,
         libraryId: 0, moreKind: 'library',
-        items: this.home.banners.length > 0 ? this.home.banners : this.home.recommend
+        items: this.bannerRowList()
       });
       keys.push('banner');
     }
@@ -654,11 +884,14 @@ export struct HomeTab {
   @Builder
   Header() {
     Row() {
+      // 标题让位给封面（2026-11-14）：原来 20 号粗体压在亮封面上像水印，
+      // 现在收到 15 号 + 半透明白 + 字间距，只当"品牌签名"用。
       Text('Amane')
-        .fontSize(20)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(Theme.TEXT)
-        .textShadow({ radius: 8, color: '#99000000', offsetX: 0, offsetY: 2 })
+        .fontSize(15)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#CCFFFFFF')
+        .letterSpacing(0.6)
+        .textShadow({ radius: 10, color: '#B3000000', offsetX: 0, offsetY: 2 })
       Blank()
       // 搜索键（2.5.7.8）：原先是「42vp 半透明灰圆盘 + `⌕` 字形」——46% 的灰底压在亮色
       // 横幅上像一块脏印子，字形又细又小。现在换成真矢量图标（20vp）+ 36vp 暗玻璃底 +
@@ -720,16 +953,17 @@ export struct HomeTab {
 
         Text('去试 ›')
           .fontSize(12)
-          .fontColor('#FFFFFF')
-          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          .backgroundColor(Theme.ACCENT)
-          .borderRadius(14)
+          .fontColor(Theme.TEXT)
+          .padding({ left: 14, right: 14, top: 7, bottom: 7 })
+          .backgroundColor(Theme.accentAlpha(0.22))
+          .borderRadius(Theme.R_PILL)
+          .border({ width: 1, color: Theme.accentAlpha(0.45) })
       }
       .width('100%')
-      .padding(14)
+      .padding(Theme.G_L)
       .backgroundColor(Theme.CARD)
-      .borderRadius(14)
-      .border({ width: 0.5, color: '#1FFFFFFF' })
+      .borderRadius(Theme.R_CARD)
+      .border({ width: 1, color: Theme.STROKE })
       .onClick(() => {
         router.pushUrl({ url: 'ext/actors/CastFinderPage' });
       })
@@ -739,109 +973,15 @@ export struct HomeTab {
     .margin({ bottom: 12 })
   }
 
-  /** 推荐理由抽屉：整批理由都在这里读，卡片版面一个字都不加。 */
-  @Builder
-  ReasonSheet() {
-    Column() {
-      Row({ space: 8 }) {
-        Text('今天的推荐理由')
-          .fontSize(18)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
-          .layoutWeight(1)
-        Text('关闭')
-          .fontSize(11)
-          .fontColor(Theme.ACCENT)
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-          .backgroundColor(Theme.CARD)
-          .borderRadius(9)
-          .onClick(() => {
-            this.showReasons = false;
-          })
+  /** 理由卡左侧的封面：按 id 从当天这批里找，找不到就不画图（不占位）。 */
+  private reasonCover(id: number): string {
+    const arr: MediaItem[] = this.home.banners.length > 0 ? this.home.banners : this.home.recommend;
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i].id === id) {
+        return arr[i].poster.length > 0 ? arr[i].poster : arr[i].fanart;
       }
-      .width('100%')
-      .padding({ top: 6, bottom: 10 })
-
-      Text(this.reasonPack.headline)
-        .fontSize(13)
-        .fontColor(Theme.GOLD)
-        .width('100%')
-        .padding({ bottom: 8 })
-
-      Text(this.reasonPack.topic)
-        .fontSize(11)
-        .fontColor(Theme.TEXT_DIM)
-        .width('100%')
-        .lineHeight(17)
-        .padding({ bottom: 12 })
-
-      Scroll() {
-        Column({ space: 10 }) {
-          ForEach(this.reasonPack.lines, (l: ReasonLine) => {
-            Column({ space: 5 }) {
-              Row({ space: 8 }) {
-                Text(l.number)
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .constraintSize({ maxWidth: 110 })
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                Text(l.title)
-                  .fontSize(12)
-                  .fontColor(Theme.TEXT)
-                  .layoutWeight(1)
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-              }
-              .width('100%')
-
-              if (l.reason.length > 0) {
-                Text(l.reason)
-                  .fontSize(13)
-                  .fontColor(Theme.GOLD)
-                  .width('100%')
-                  .lineHeight(19)
-              } else {
-                Text('今天没替它找到说法，就先不编了')
-                  .fontSize(11)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .width('100%')
-              }
-              if (l.extra.length > 0) {
-                Text(l.extra)
-                  .fontSize(11)
-                  .fontColor(Theme.TEXT_DIM)
-                  .width('100%')
-              }
-            }
-            .width('100%')
-            .padding(12)
-            .backgroundColor(Theme.CARD)
-            .borderRadius(12)
-            .onClick(() => {
-              this.showReasons = false;
-              const params: DetailParams = { id: l.id };
-              router.pushUrl({ url: 'pages/DetailPage', params: params });
-            })
-          }, (l: ReasonLine) => `rs-${l.id}`)
-        }
-        .width('100%')
-        .padding({ bottom: Theme.BOTTOM_SAFE })
-      }
-      .layoutWeight(1)
-      .width('100%')
-      .scrollBar(BarState.Off)
-
-      Text(`共 ${this.reasonPack.count} 句 · 每天换一种说法，同一部片当天不变`)
-        .fontSize(10)
-        .fontColor(Theme.TEXT_FAINT)
-        .width('100%')
-        .padding({ top: 10, bottom: 18 })
     }
-    .width('100%')
-    .height('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 12 })
-    .backgroundColor(Theme.BG)
+    return '';
   }
 
   build() {
@@ -884,7 +1024,7 @@ export struct HomeTab {
           List() {
           ListItem() {
             HeroBanner({
-              items: this.home.hero,
+              items: this.heroList(),
               onPlay: (item: MediaItem) => {
                 this.openPlayer(item);
               },
@@ -893,6 +1033,9 @@ export struct HomeTab {
               }
             })
           }
+
+          // 2.6.1.61：原来那行「刷一刷」入口删了 —— 挪到负一屏（首页左滑进入），
+          // 首页只保留最左侧那条会闪几次的光晕做提示（见 build() 里 GlowHint）。
 
 
           // 行的顺序与显隐来自「设置 → 首页内容」（2.5.2）：这里按 sections 铺，
@@ -924,15 +1067,18 @@ export struct HomeTab {
                   title: s.title,
                   subtitle: s.subtitle,
                   items: s.items,
+                  // 每张卡自己的理由（2.6.1.36）：贴在各自海报下方，和片对得上号
+                  lines: this.reasonOn ? this.reasonPack.lines : [],
                   whyLabel: this.reasonOn ? '推荐理由' : '',
                   onWhy: () => {
-                    this.showReasons = true;
+                    router.pushUrl({ url: 'pages/ReasonsPage' });
                   },
                   onTap: (item: MediaItem) => {
                     this.openDetail(item);
                   },
+                  // 「全部」= 今天这批推荐的全部理由（原来是跳到全部影片，语义不对）
                   onMore: () => {
-                    this.openLibrary(0, '全部影片');
+                    router.pushUrl({ url: 'pages/ReasonsPage' });
                   }
                 })
               } else {
@@ -968,6 +1114,11 @@ export struct HomeTab {
           .height('100%')
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
+          // 滚动时让粒子闭嘴（2.6.1.18 光效预算）：指到新的可见行就喊一声，
+          // 停手 420ms 后自动恢复。首页大图那块 Canvas 是整页最贵的一层。
+          .onScrollIndex((first: number, last: number) => {
+            markScroll();
+          })
         }
         .width('100%')
         .height('100%')
@@ -976,15 +1127,181 @@ export struct HomeTab {
         })
 
         this.Header()
+
+        // 负一屏提示（2.6.1.68）：首页元素太密，光带本身在满屏内容里几乎看不见，
+        // 所以提示时**把整页压暗一点**（8% 黑），光带在暗底上才跳得出来；闪完两层一起退。
+        Column()
+          .width('100%')
+          .height('100%')
+          .align(Alignment.TopStart)
+          .backgroundColor('#000000')
+          .opacity(this.glowA * 0.22)
+          .animation({ duration: 620, curve: Curve.EaseInOut })
+          .hitTestBehavior(HitTestMode.None)
+
+        // 最左侧一根从顶到底的光晕：宽 8vp、峰值 0.42、三次呼吸（约 4 秒）
+        Column()
+          .width(8)
+          .height('100%')
+          .align(Alignment.TopStart)
+          .linearGradient({
+            angle: 180,
+            colors: [['#00FFD37A', 0], ['#B3FFD37A', 0.35], ['#B3FFD37A', 0.65], ['#00FFD37A', 1]]
+          })
+          .blur(3)
+          .opacity(this.glowA)
+          .animation({ duration: 620, curve: Curve.EaseInOut })
+          // 光带本身也能点（8vp 宽，不影响别处）：滑动万一被仲裁掉，这里还有兜底入口
+          .onClick(() => {
+            this.openShorts();
+          })
+
+        // 内容区左滑进负一屏（2.6.1.65）：手势挂在**根 Stack** 上（见下面的 .gesture），
+        // 不在顶层再盖一层感应区 —— 盖一层会挡掉下面的点击，还得靠 hitTest 兜。
       }
     }
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)
-    .bindSheet($$this.showReasons, this.ReasonSheet(), {
-      height: SheetSize.LARGE,
-      dragBar: true,
-      backgroundColor: Theme.BG
+    // 内容区**右滑** = 进负一屏（用户 00:49 定的方向）。
+    //
+    // ★ 为什么用 onTouch 自己算，而不是 PanGesture（2026-11-14 实测）★
+    //   `.gesture()`      → 被列表/横向海报行先吃掉，收不到；
+    //   `.priorityGesture()` → 父优先能收到，但**纵向也一起被它接管**，首页下拉刷新废掉
+    //                        （2.6.2.8 就是这么把「大图下拉换一批」搞坏的）；
+    //   Tabs 原生滑动开着时，横向手势同样先被 Tabs 的识别器拿走。
+    // 触摸事件不受手势仲裁影响，parent 的 onTouch 照样能收到 down/move/up，
+    // 所以我们只**观测**位移、不参与竞争：下拉、横滑海报行、点击全都不受影响。
+    .onTouch((ev: TouchEvent) => {
+      this.trackSwipe(ev);
     })
   }
+
+  /** 记一次触摸的起止点（只观测，不消费事件）。 */
+  private trackSwipe(ev: TouchEvent): void {
+    // ★ 抬手时 `touches` 是**空数组**（那根手指已经离开），别拿它判「单指」——
+    //   第一版就是这么写的，Up 全被守卫挡掉，「右滑没反应」照旧。位置在 Move 里存。
+    // ★ 坐标用 `screenX/screenY`（**屏幕**绝对）★
+    // 先试过 `x/y`：那是被点组件的局部坐标，手指落在「继续观看」那一行时是相对那一行的，
+    // 行还会跟着手指滚动 —— 实测一次 500→1100 的滑动报成 x0=148 / dx=177，全被带偏。
+    if (ev.type === TouchType.Down) {
+      if (ev.touches.length === 1) {
+        this.swipeX0 = ev.touches[0].screenX;
+        this.swipeY0 = ev.touches[0].screenY;
+        this.swipeX1 = this.swipeX0;
+        this.swipeY1 = this.swipeY0;
+        this.swipeStartX0 = this.swipeX0;
+        this.swipeStartY0 = this.swipeY0;
+      } else {
+        this.swipeX0 = -1;
+        this.swipeStartX0 = -1;
+        this.swipeStartY0 = -1;
+      }
+      return;
+    }
+    if (ev.type === TouchType.Move) {
+      if (ev.touches.length === 1 && this.swipeX0 >= 0) {
+        this.swipeX1 = ev.touches[0].screenX;
+        this.swipeY1 = ev.touches[0].screenY;
+        // 跟手（2026-11-14 13:15）：手指还在滑的时候就把位移交给 Index 的负一屏图层，
+        // 让它按真实位移平移；只在「看起来是右滑」时才发，避免纵向滚动把页面带着抖。
+        const mvx: number = this.swipeX1 - this.swipeX0;
+        const mvy: number = this.swipeY1 - this.swipeY0;
+        if (this.entryZone(this.swipeStartX0, this.swipeStartY0) && !this.rowBusy()
+          && mvx > 0 && Math.abs(mvx) > Math.abs(mvy) * 1.2) {
+          AppStorage.setOrCreate<number>('minusDx', mvx);
+        }
+      }
+      return;
+    }
+    if (this.swipeX0 < 0) {
+      AppStorage.setOrCreate<number>('minusDx', 0);
+      return;
+    }
+    const dx: number = this.swipeX1 - this.swipeX0;
+    const dy: number = this.swipeY1 - this.swipeY0;
+    const from: number = this.swipeStartX0;
+    const startY: number = this.swipeStartY0;
+    this.swipeX0 = -1;
+    this.swipeStartX0 = -1;
+    this.swipeStartY0 = -1;
+    // 抬手：按位移决定吸附（开还是弹回）。阈值用屏宽的 30%，跟手之后不需要再卡「起手位置」。
+    const w: number = this.screenW();
+    if (ev.type === TouchType.Up && from >= 0 && this.entryZone(from, startY) && !this.rowBusy()
+      && dx > 40 && Math.abs(dx) > Math.abs(dy) * 1.6) {
+      if (dx > w * 0.30) {
+        this.openShorts();
+      } else {
+        AppStorage.setOrCreate<string>('minusCmd', 'cancel');
+      }
+    } else {
+      AppStorage.setOrCreate<number>('minusDx', 0);
+    }
+  }
+
+  /**
+   * 右滑进负一屏的**起手区**（2026-11-14 21:02 用户要求放宽）。
+   *
+   * 之前只有「左侧 60vp」或「上半屏 520vp 以内」才算，实际手感是：
+   * 站在列表里（"继续观看"那一带的下半屏）往右滑根本没反应，得贴着最左边才行。
+   * 现在放宽成：**左侧 1/3 任意高度**，或 **0.8 屏高以内任意位置**。
+   *
+   * 会不会和横向海报行打架？不会 —— 行自己开始滚时会往 `rowDragAt` 记一笔
+   * （`MediaRow` / `BannerRow` 的 `onScrollStart`），`rowBusy()` 为真时这一划直接不抢。
+   */
+  private entryZone(x: number, y: number): boolean {
+    if (x < 0) {
+      return false;
+    }
+    const h: number = this.screenH();
+    // 底栏（胶囊 tab）以上**整屏都能起手**；横向海报行的区域由 rowBusy() 排除。
+    return y >= 0 && y < h - 96;
+  }
+
+  /**
+   * 这一划是不是落在横向行上（海报行 / banner 行）。
+   *
+   * 行组件在 `onTouch` 里持续写 `rowTouchAt`；`onTouch` 是子先父后，
+   * 所以父层的 Move/Up 读到的永远是**刚被行刷新过**的时间戳 → 这一划不抢。
+   * 只认 250ms 内的，避免"刚滑完海报马上从空白处右滑"被误伤。
+   */
+  private rowBusy(): boolean {
+    const raw: number | undefined = AppStorage.get<number>('rowTouchAt');
+    const at: number = raw === undefined || raw === null ? 0 : raw;
+    return at > 0 && Date.now() - at < 250;
+  }
+
+  /** 屏幕宽（vp）。 */
+  private screenW(): number {
+    try {
+      const d: display.Display = display.getDefaultDisplaySync();
+      return px2vp(d.width);
+    } catch (e) {
+      return 390;
+    }
+  }
+
+  /**
+   * 屏幕高（vp），结果缓存一次（Move 里会被高频调用）。
+   * 2026-11-14 19:20 加：起手判定原来写死 `y < 520`，而「继续观看」那一行正好在 520 以下，
+   * 用户从「观看」两个字及右边起手永远进不去负一屏。改成按屏幕比例算，不写死像素。
+   */
+  private screenH(): number {
+    if (this.cachedScreenH > 0) {
+      return this.cachedScreenH;
+    }
+    try {
+      const d: display.Display = display.getDefaultDisplaySync();
+      this.cachedScreenH = px2vp(d.height);
+    } catch (e) {
+      this.cachedScreenH = 844;
+    }
+    return this.cachedScreenH;
+  }
+
+  /**
+   * 右滑进负一屏的起手区 —— 已由 `entryZone()`（左侧 1/3 任意高度，或 0.8 屏高内任意位置）
+   * 取代；旧版这里的 `inSwipeZone()`（x<130 或 y<68% 屏高）在合并 2026-11-14 时删掉，
+   * 因为它既没有 `rowBusy()` 这层「这一划落在横向海报行上就不抢」的保护，范围也更窄。
+   */
 }

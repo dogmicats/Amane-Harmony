@@ -3,6 +3,7 @@ import { httpGet } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
 import { clock } from '../../common/Util';
+import { SectionHead } from '../../view/SectionHead';
 import { HighlightItem, HighlightList, safeHighlights } from './HighlightTypes';
 
 /**
@@ -154,14 +155,10 @@ export struct HighlightStrip {
   build() {
     Column({ space: 8 }) {
       Row({ space: 8 }) {
-        Text('亮点')
-          .fontSize(12)
-          .fontColor(Theme.TEXT_FAINT)
-        if (this.items.length > 0) {
-          Text(`${this.items.length}`)
-            .fontSize(10)
-            .fontColor(Theme.TEXT_FAINT)
-        }
+        SectionHead({
+          title: '亮点',
+          count: this.items.length > 0 ? `${this.items.length}` : ''
+        })
         Blank()
         // 网盘库首次打开要现场抽帧（一帧约 4s，抽完永久缓存），给个明确的状态，
         // 否则一排灰块看起来像加载失败

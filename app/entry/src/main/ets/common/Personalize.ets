@@ -14,17 +14,29 @@
 import { promptAction } from '@kit.ArkUI';
 import { Store } from './Store';
 import { Theme, DEFAULT_THEME_KEY } from './Theme';
+import { Haptics } from './Haptics';
 
 /** 偏好键。 */
 export const PREF_THEME: string = 'ui_theme_palette';
 export const PREF_COLS: string = 'ui_poster_cols';
 export const PREF_STILL_COLS: string = 'ui_still_cols';
 export const PREF_HOME_ROWS: string = 'ui_home_rows';
+/** 沉浸光效强度：0 关 / 1 轻 / 2 强（见 `view/Fx.ets`）。 */
+export const PREF_FX: string = 'ui_fx_level';
+/** 一次性迁移标记：自动小窗 / 后台出声改成默认关（2.6.1.47）。 */
+export const PREF_PLAY_MIG: string = 'play_defaults_v2';
 
 /** AppStorage 键：列表页用 `@StorageProp` 订阅（装饰器只吃字面量，页面里直接写字符串）。 */
 export const KEY_COLS: string = 'amaneCols';
 export const KEY_STILL_COLS: string = 'amaneStillCols';
 export const KEY_THEME_EPOCH: string = 'amaneThemeEpoch';
+/** 沉浸光效强度（0/1/2）：页面用 `@StorageProp('amaneFx')` 订阅。 */
+export const KEY_FX: string = 'amaneFx';
+
+export const FX_MIN: number = 0;
+export const FX_MAX: number = 2;
+/** 默认「强」：这个功能是用户点名要加强的，默认关掉等于没做；嫌亮的人可以自己调。 */
+export const FX_DEFAULT: number = 2;
 
 export const COLS_MIN: number = 2;
 export const COLS_MAX: number = 4;
@@ -58,6 +70,65 @@ export class Personalize {
     const stills: number = Personalize.clampStills(Personalize.readStillsPref());
     AppStorage.setOrCreate<number>(KEY_STILL_COLS, stills);
     AppStorage.setOrCreate<number>(KEY_THEME_EPOCH, 0);
+    AppStorage.setOrCreate<number>(KEY_FX, Personalize.clampFx(Number(Store.I.prefString(PREF_FX, `${FX_DEFAULT}`))));
+    // 触感开关（2.6.1.18）：和光效分开一套偏好 —— 有人愿意要光但不要震
+    Haptics.init();
+    Personalize.migratePlayDefaults();
+  }
+
+  /**
+   * 一次性迁移（2.6.1.47）：自动小窗 / 后台出声改成默认关。
+   *
+   * 只改默认值是不够的：老机器上这两个偏好早就被写成 `'1'`，读不到缺省值，
+   * 于是「默认关」对已经在用的设备等于没生效（用户 21:14 的要求就落空了）。
+   * 这里在启动时**只跑一次**（用 `PREF_PLAY_MIG` 打标记），之后用户自己开关不再被覆盖。
+   */
+  private static migratePlayDefaults(): void {
+    if (Store.I.prefString(PREF_PLAY_MIG, '0') === '1') {
+      return;
+    }
+    Store.I.prefSetString('player_pip_auto', '0');
+    Store.I.prefSetString('player_bg_play', '0');
+    Store.I.prefSetString(PREF_PLAY_MIG, '1');
+  }
+
+  // ---------- 沉浸光效 ----------
+
+  static clampFx(n: number): number {
+    if (n !== n) {
+      return FX_DEFAULT;
+    }
+    const v: number = Math.trunc(n);
+    if (v < FX_MIN) {
+      return FX_MIN;
+    }
+    if (v > FX_MAX) {
+      return FX_MAX;
+    }
+    return v;
+  }
+
+  /** 当前光效强度（页面里优先用 `@StorageProp('amaneFx')`，这里给非组件代码用）。 */
+  static fx(): number {
+    const v: number | undefined = AppStorage.get<number>(KEY_FX);
+    return Personalize.clampFx(v === undefined ? FX_DEFAULT : v);
+  }
+
+  /** 改光效：写 AppStorage（已在页面上的光效会立刻淡出/淡入）+ 落盘。 */
+  static setFx(n: number): void {
+    const v: number = Personalize.clampFx(n);
+    AppStorage.setOrCreate<number>(KEY_FX, v);
+    Store.I.prefSetString(PREF_FX, `${v}`);
+  }
+
+  static fxName(n: number): string {
+    if (n <= FX_MIN) {
+      return '关（最省电）';
+    }
+    if (n >= FX_MAX) {
+      return '强';
+    }
+    return '轻';
   }
 
   // ---------- 主题 ----------

@@ -59,6 +59,12 @@ export struct MediaRow {
       .height(210)
       .contentStartOffset(Theme.PAGE_PAD)
       .contentEndOffset(Theme.PAGE_PAD)
+      // 触碰落在这条横向行上 → 持续记时间戳：首页据此知道「这一划归行自己」，
+      // 不抢去拉负一屏。**不能只靠 onScrollStart**：首页在第一个 Move 就会把页面推走，
+      // 行根本没机会开始滚（2026-11-14 21:0x 实测），所以按"触碰过"算。
+      .onTouch((ev: TouchEvent) => {
+        AppStorage.setOrCreate<number>('rowTouchAt', Date.now());
+      })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)

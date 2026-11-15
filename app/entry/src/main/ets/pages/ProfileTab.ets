@@ -6,6 +6,7 @@ import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { StatsInfo } from '../common/Types';
 import { BuildConfig } from '../common/BuildConfig';
+import { UpdateWatch } from '../common/UpdateWatch';
 
 /** Tier 图历史只取 total（副标题用），不解析条目。 */
 interface TierListData {
@@ -25,6 +26,14 @@ export struct ProfileTab {
   @State tierCount: number = -1;
   @State serverLabel: string = '';
   @State appVersion: string = '';
+  /**
+   * 静默检测结果（`common/UpdateWatch.ets` 写，这里只读）。
+   * 两个红点分别代表：客户端有新包 / 服务端有新版本 —— 两者都能升的时候才是「两个」。
+   */
+  @StorageProp('update_dot_client') dotClient: boolean = false;
+  @StorageProp('update_dot_server') dotServer: boolean = false;
+  @StorageProp('update_ver_client') verClient: string = '';
+  @StorageProp('update_ver_server') verServer: string = '';
 
   /** 版本号从包信息读，别手写，省得发版忘了改。 */
   private readVersion(): string {
@@ -147,12 +156,71 @@ export struct ProfileTab {
         .fontColor(Theme.TEXT_FAINT)
     }
     .width('100%')
-    .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+    .padding({ left: Theme.G_L, right: Theme.G_L, top: 10, bottom: 10 })
     .backgroundColor(Theme.CARD)
-    .borderRadius(Theme.RADIUS)
+    .borderRadius(Theme.R_CARD)
+    .border({ width: 1, color: Theme.STROKE })
     .onClick(() => {
       action();
     })
+  }
+
+  /** 一个小圆点（红点 / 橙点）。空 Row 画点最省事，不会带进文字基线。 */
+  @Builder
+  Dot(size: number, color: string) {
+    Row()
+      .width(size)
+      .height(size)
+      .borderRadius(size / 2)
+      .backgroundColor(color)
+  }
+
+  /**
+   * 「我的」右上角的更新入口（2026-11-14）。
+   *
+   * 只有检测到更新才出现：左点 = 客户端有新包（红），右点 = 服务端有新版本（橙、略小）。
+   * 点它弹菜单，给用户两条路：去更新 / **本次更新不提醒**（记下当前这组版本号，
+   * 下次真出了更新的版本仍会提示，不会一按就永久失聪）。
+   */
+  @Builder
+  UpdateEntry() {
+    Row({ space: 7 }) {
+      Row({ space: 3 }) {
+        if (this.dotClient) {
+          this.Dot(9, '#FF3B30')
+        }
+        if (this.dotServer) {
+          this.Dot(7, '#FF9F0A')
+        }
+      }
+      Text('更新')
+        .fontSize(12)
+        .fontColor(Theme.TEXT)
+    }
+    .padding({ left: 11, right: 12, top: 6, bottom: 6 })
+    .backgroundColor(Theme.CARD_HI)
+    .borderRadius(Theme.R_PILL)
+    .border({ width: 1, color: Theme.STROKE })
+    .bindMenu([
+      {
+        value: this.verClient.length > 0 ? `去更新（${this.verClient}）` : '去更新',
+        action: () => {
+          router.pushUrl({ url: 'pages/UpdatePage' });
+        }
+      },
+      {
+        value: this.verServer.length > 0 ? `服务端新版 ${this.verServer}，看说明` : '看更新说明',
+        action: () => {
+          router.pushUrl({ url: 'pages/UpdatePage' });
+        }
+      },
+      {
+        value: '本次更新不提醒',
+        action: () => {
+          UpdateWatch.mute();
+        }
+      }
+    ])
   }
 
   build() {
@@ -163,6 +231,10 @@ export struct ProfileTab {
             .fontSize(20)
             .fontWeight(FontWeight.Bold)
             .fontColor(Theme.TEXT)
+          Blank()
+          if (this.dotClient || this.dotServer) {
+            this.UpdateEntry()
+          }
         }
         .width('100%')
         .padding({ top: 8 })
@@ -186,7 +258,8 @@ export struct ProfileTab {
         }
         .width('100%')
         .backgroundColor(Theme.CARD)
-        .borderRadius(Theme.RADIUS)
+        .borderRadius(Theme.R_CARD)
+        .border({ width: 1, color: Theme.STROKE })
         .clip(true)
 
         Column({ space: 10 }) {
@@ -213,6 +286,11 @@ export struct ProfileTab {
           this.MenuRow('◷', '稍后再看', '想看的先记一下，回头再看', 'static', () => {
             router.pushUrl({ url: 'pages/WatchLaterPage' });
           })
+          // 2.6.2.20（用户 23:53）：刷一刷的「喜爱」单独一个入口。
+          // 措辞刻意避开「收藏」二字 —— 那是服务端的影片收藏，和这里不是一回事。
+          this.MenuRow('♡', '我的喜爱', '刷一刷里点过心的片段（和「收藏」无关）', 'static', () => {
+            router.pushUrl({ url: 'pages/MyLikedShortsPage' });
+          })
           this.MenuRow('▤', '网页管理', '刮削、入库、任务队列', 'static', () => {
             router.pushUrl({ url: 'pages/WebPage' });
           })
@@ -237,7 +315,7 @@ export struct ProfileTab {
             .fontColor(Theme.TEXT_FAINT)
         }
         .width('100%')
-        .padding({ top: 10, bottom: 24 })
+        .padding({ top: 10, bottom: Theme.BOTTOM_SAFE })
         .onClick(() => {
           router.pushUrl({ url: 'pages/AboutPage' });
         })

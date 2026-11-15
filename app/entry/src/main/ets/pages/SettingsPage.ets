@@ -1,6 +1,4 @@
 import { router, promptAction } from '@kit.ArkUI';
-import { BusinessError } from '@kit.BasicServicesKit';
-import { httpPost } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { BuildConfig } from '../common/BuildConfig';
@@ -10,22 +8,26 @@ import { common } from '@kit.AbilityKit';
 /**
  * 设置（一级页）：只做分区导航，不放具体设置项。
  *
- * 布局照 hosplayer 的思路：先把整页切成几大块，二级入口按语义归到各块里。
- * **一组只放一种东西**，宁可多切一组，也别设「其他」这种垃圾桶组。
+ * 2026-11-15 重排（依据 `docs/ai-context/queue/agent1-mine-ia-catalog.md`）：原来的
+ * 通用 / 外观 / 播放 / 我的内容 / 高级 / 重置 六组，改成按「用户想干什么」分的五组：
  *
- *   通用     —— 全局环境：连接（地址 / Token）、检索别名（名字映射）
- *   外观     —— 看起来是什么样：主题与列数、首页内容、列表页抽卡
- *   播放     —— 与看片直接相关：播放器设置、进度条预览
- *   我的内容 —— 我自己的东西：离线缓存、清单、截帧、自建标签
- *   高级     —— 管理/排查：入库、还行、投屏令牌、导出日志
- *   重置     —— 不可撤销的破坏性动作，单独成组沉到最底，不许和日常项混排
+ *   连接与服务 —— 这台手机怎么连上服务器（地址、Token、投屏钥匙）
+ *   外观与浏览 —— 看起来是什么样、列表怎么摆
+ *   播放       —— 与看片直接相关：播放方式、刷一刷、进度条预览
+ *   存储与数据 —— 占了多少、留多大、怎么清、怎么备份
+ *   维护与排障 —— 后台队列与日志，平时用不到
  *
- * 「关于 Amane / 检查更新 / 更新日志」2.6.1.7 起不在设置里了：
- * 三行搬到「我的 → 关于」（`pages/AboutHubPage`）。设置里那组已删，别再往这里加回来 ——
- * 同一个东西两处入口，改一处忘一处就是下一个「点进去还是旧版」的 bug。
+ * 同轮做的三件去重 / 归拢：
+ *  1. 「我的清单」「我的截帧」从设置里删掉 —— 收藏页的「管理清单」和「我的」页已有入口，
+ *     同一个东西两处入口，改一处忘一处就是下一个「点进去还是旧版」的 bug。
+ *  2. 「检索别名」+「自建标签 / 系列」合成 `资料整理`，「数据与入库」+「还行管理」合成 `管理工具`，
+ *     一级页变短，二级页各自保留原页面（行为零变化）。
+ *  3. 「清空所有自定义修改」从「重置」组搬进 `资料整理` 页底部危险区 —— 它清的就是那一页管的改动。
  *
- * 组内顺序：常用的在上、排障/偏门在下。新增设置先想清楚落在哪块；
- * 块内再拆二级页，别把一堆控件平铺回来。
+ * 「关于 Amane / 检查更新 / 更新日志」2.6.1.7 起不在设置里：三行在「我的 → 关于」（`pages/AboutHubPage`）。
+ * 别往这里加回来。
+ *
+ * 组内顺序：常用的在上、排障/偏门在下。新增设置先想清楚落在哪块；块内再拆二级页。
  */
 interface NavRow {
   key: string;
@@ -36,7 +38,8 @@ interface NavRow {
   needOk?: boolean;
   /** 仅在开着投屏（偏好 enable_cast）时显示；目前默认关 —— 没有真机能验。 */
   needCast?: boolean;
-  /** 动作行（url 为空）右侧的动词，如「清空」「导出」；有它就不画 ›。 */
+  /** 仅在「入库」或「还行」至少有一个开着时显示（管理工具聚合页）。 */
+  /** 动作行（url 为空）右侧的动词，如「导出」；有它就不画 ›。 */
   action?: string;
   /** 破坏性动作：标题用 DANGER 色，提醒「这一行不一样」。 */
   danger?: boolean;
@@ -50,45 +53,39 @@ interface NavGroup {
 
 const GROUPS: NavGroup[] = [
   {
-    key: 'general', title: '通用', rows: [
-      { key: 'conn', label: '连接', desc: '局域网 / 外网地址、API Token、测试与重连', url: 'pages/SettingsConnectionPage', selfOnly: false },
-      { key: 'alias', label: '检索别名', desc: '俗称和库里的名字对不上时，在这儿挂钩（如 搜查官 → 女检察官）', url: 'pages/AliasPage', selfOnly: false }
+    key: 'conn', title: '连接与服务', rows: [
+      { key: 'conn', label: '服务器连接', desc: '局域网 / 外网地址、API Token、测试与重连', url: 'pages/SettingsConnectionPage', selfOnly: false },
+      // 投屏（2.5.6）暂时隐藏：没有真机能验，先不对外开。
+      // 要开：设置里把偏好 `enable_cast` 置 true（详情页的「投屏」按钮读同一个开关）
+      { key: 'casttoken', label: '投屏令牌', desc: '投给电视时用的只读钥匙，12 小时过期，可随时吊销', url: 'pages/CastTokenPage', selfOnly: false, needCast: true }
     ]
   },
   {
-    key: 'look', title: '外观', rows: [
-      { key: 'appearance', label: '主题与列数', desc: '8 套主题色、海报列数、剧照瀑布流列数（都能双指一捏切换）', url: 'pages/SettingsAppearancePage', selfOnly: false },
-      { key: 'home', label: '首页内容', desc: '首页哪几行显示、从上到下怎么排', url: 'pages/SettingsHomePage', selfOnly: false },
-      { key: 'list', label: '列表页', desc: '抽卡模式：每轮张数与默认开关', url: 'pages/SettingsListPage', selfOnly: false }
+    key: 'look', title: '外观与浏览', rows: [
+      { key: 'appearance', label: '外观与布局', desc: '8 套主题色、海报列数、剧照瀑布流列数；光效强度与触感反馈也在这里', url: 'pages/SettingsAppearancePage', selfOnly: false },
+      { key: 'home', label: '首页内容', desc: '哪几行显示、从上到下怎么排；顶部大图取自哪里、刷一刷是否共用筛选', url: 'pages/SettingsHomePage', selfOnly: false },
+      { key: 'list', label: '列表与抽卡', desc: '抽卡模式：每轮张数与默认开关', url: 'pages/SettingsListPage', selfOnly: false }
     ]
   },
   {
     key: 'player', title: '播放', rows: [
-      { key: 'player', label: '播放器设置', desc: '解码、渲染、字幕等播放参数', url: 'pages/PlayerSettingsPage', selfOnly: false },
+      { key: 'player', label: '播放设置', desc: '播放方式、返回桌面后怎么办、字幕与弹幕；解码与缓冲在页内折叠', url: 'pages/PlayerSettingsPage', selfOnly: false },
+      { key: 'shorts', label: '刷一刷', desc: '后台准备素材的开关、占用上限、片段怎么挑的；负一屏提示光晕也在这里', url: 'pages/ShortsSettingsPage', selfOnly: false },
       { key: 'preview', label: '进度条预览', desc: '闲时预生成开关、占用上限与清理', url: 'pages/PreviewSettingsPage', selfOnly: false }
     ]
   },
   {
-    key: 'mine', title: '我的内容', rows: [
-      { key: 'offline', label: '离线缓存', desc: '下到手机里的影片：进度、队列、仅 WiFi、上限与清理', url: 'pages/OfflinePage', selfOnly: false },
-      { key: 'collections', label: '我的清单', desc: '收藏清单：新建、改名、删除', url: 'pages/CollectionsPage', selfOnly: false },
-      { key: 'picks', label: '我的截帧', desc: '我截的关键帧：看、跳、删、存到手机', url: 'pages/FramePicksPage', selfOnly: false },
-      { key: 'selffacet', label: '自建标签 / 系列', desc: '你自己起的名字都在这儿，可单独删；库里的分类不在这里', url: 'pages/SelfFacetPage', selfOnly: false }
+    key: 'data', title: '存储与数据', rows: [
+      { key: 'cache', label: '空间管理', desc: '这台手机与服务器各占多少：哪些能清、各留多大上限', url: 'pages/CachePage', selfOnly: false },
+      { key: 'offline', label: '下载管理', desc: '下到手机里的影片：进度、队列、仅 WiFi、上限与清理', url: 'pages/OfflinePage', selfOnly: false },
+      { key: 'organize', label: '资料整理', desc: '检索别名、自建标签与系列；清空自定义修改在最底', url: 'pages/OrganizePage', selfOnly: false },
+      { key: 'backup', label: '数据备份与迁移', desc: '收藏、评分、历史、稍后再看、清单的导出与导入（按番号匹配）', url: 'pages/BackupPage', selfOnly: false }
     ]
   },
   {
-    key: 'advanced', title: '高级', rows: [
-      // 投屏（2.5.6）暂时隐藏：没有真机能验，先不对外开。
-      // 要开：设置里把偏好 `enable_cast` 置 true（详情页的「投屏」按钮读同一个开关）
-      { key: 'casttoken', label: '投屏令牌', desc: '投给电视时用的只读钥匙，12 小时过期，可随时吊销', url: 'pages/CastTokenPage', selfOnly: false, needCast: true },
+    key: 'ops', title: '维护与排障', rows: [
       // 排查用：把最近运行日志存成 txt（用户手上没有电脑抓 hilog 时用）
-      { key: 'logexport', label: '导出运行日志', desc: '把最近几千条运行日志存成 txt，出问题时发给我就能定位', url: '', selfOnly: false, action: '导出' }
-    ]
-  },
-  {
-    // 破坏性动作单独成组：不挨着日常项，手指蹭不到；颜色也和其他行不一样。
-    key: 'reset', title: '重置', rows: [
-      { key: 'resetmeta', label: '清空所有自定义修改', desc: '把改过的片名/演员/标签与换过的封面全部还原成刮削原样（所有设备一起变）', url: '', selfOnly: false, action: '清空', danger: true }
+      { key: 'logexport', label: '诊断与日志', desc: '把最近几千条运行日志存成 txt，出问题时发给我就能定位', url: '', selfOnly: false, action: '导出' }
     ]
   }
 ];
@@ -102,6 +99,7 @@ struct SettingsPage {
     if (row.needCast === true && Store.I.prefString('enable_cast', '0') !== '1') {
       return false;
     }
+    // 管理工具是聚合页：入库与「还行」都没开时，整行不显示（否则点进去是空页）。
     return true;
   }
 
@@ -112,51 +110,6 @@ struct SettingsPage {
    */
   private rowsOf(g: NavGroup): NavRow[] {
     return g.rows.filter((r: NavRow) => this.visible(r));
-  }
-
-  /**
-   * 清空所有本地修改（2.5.5）。破坏性且不可撤销 —— 先问再发，返回里带上清掉几条。
-   * 老服务端 404 就说「本版没有」而不是报错。
-   */
-  private confirmResetMeta(): void {
-    AlertDialog.show({
-      title: '清空所有自定义修改？',
-      message: '你改过的片名、演员、标签、封面会全部回到刮削原样（所有设备一起变），且不能撤销。',
-      primaryButton: {
-        value: '清空',
-        fontColor: Theme.DANGER,
-        action: () => {
-          this.resetMeta();
-        }
-      },
-      secondaryButton: {
-        value: '算了',
-        action: () => {
-        }
-      }
-    });
-  }
-
-  private async resetMeta(): Promise<void> {
-    try {
-      const raw: string = await httpPost(
-        `${Store.I.user}/api/user/meta_override/clear`, Store.I.token, '{"confirm":true}');
-      const obj = JSON.parse(raw) as Record<string, Object>;
-      const data = obj.data;
-      let n: number = 0;
-      if (data !== undefined && data !== null) {
-        const v = (data as Record<string, Object>).removed;
-        n = v === undefined || v === null ? 0 : Number(v);
-      }
-      promptAction.showToast({ message: `已清空 ${n} 部`, duration: 1600 });
-    } catch (err) {
-      const e = err as BusinessError;
-      console.error(`[amane] meta clear: ${e.code} ${e.message}`);
-      promptAction.showToast({
-        message: e.code === 404 ? '这个版本还不支持自定义修改' : '清空失败，稍后再试',
-        duration: 1800
-      });
-    }
   }
 
   private async exportLog(): Promise<void> {
@@ -233,11 +186,7 @@ struct SettingsPage {
                     .width('100%')
                     .padding({ left: 14, right: 14, top: 12, bottom: 12 })
                     .onClick(() => {
-                      // 2.5.5：「清空所有本地修改」是个动作行（没有目标页）
-                      if (r.key === 'resetmeta') {
-                        this.confirmResetMeta();
-                        return;
-                      }
+                      // 动作行（没有目标页）：诊断与日志 = 导出 txt
                       if (r.key === 'logexport') {
                         this.exportLog();
                         return;

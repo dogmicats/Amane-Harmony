@@ -23,6 +23,19 @@ interface Choice {
   label: string;
 }
 
+/** `/api/user/libraries` 的一条（字段与服务端 `libraries()` 对齐）。 */
+interface LibItem {
+  id: number;
+  name: string;
+  count: number;
+  /** 用户换过的封面；空串 = 没有，用名字首字兜底（与首页媒体库卡同口径）。 */
+  cover: string;
+}
+
+interface LibResp {
+  items?: LibItem[];
+}
+
 @Component
 struct PickChips {
   options: Choice[] = [];
@@ -232,6 +245,12 @@ struct CastFinderPage {
   /** 我的评分 / 收藏夹：走服务端 cast_find 的同名参数。 */
   @State fMyRating: string = '';
   @State fCollection: string = '';
+  // 2.6.1.78（用户 23:51）：「在某个指定媒体库搜共演」。
+  // 服务端 `_cast_filter` 已支持 `library_id`（同时也让抽卡墙的 scope=cast 一起生效）。
+  @State fLib: string = '';
+  @State libChoices: Choice[] = [{ key: '', label: '全部库' }];
+  /** 媒体库卡片的数据（比一串文字 chips 直观：有封面、有片数）。 */
+  @State libCards: LibItem[] = [];
   private searchTimer: number = -1;
   private sorts: SortOption[] = [
     { key: 'release', label: '发行时间', def: 'desc' },
@@ -264,6 +283,84 @@ struct CastFinderPage {
     // 抽卡模式默认关（设置页开了「默认开启」才进）：这页本来就靠条件筛，
     // 无条件时抽卡等于抽全库，不适合当默认视图。
     this.gachaOn = BuildConfig.ENABLE_GACHA && Store.I.gachaAuto;
+    this.loadLibs();
+  }
+
+  /** 媒体库列表（给「在哪个库里搜共演」用）。失败就保持只有「全部库」，不影响主流程。 */
+  private async loadLibs(): Promise<void> {
+    try {
+      const text: string = await httpGet(`${Store.I.user}/api/user/libraries`, Store.I.token);
+      const r = JSON.parse(text) as LibResp;
+      const items: LibItem[] = r.items === undefined || r.items === null ? [] : r.items;
+      this.libCards = items;
+      const out: Choice[] = [{ key: '', label: '全部库' }];
+      for (let i = 0; i < items.length; i++) {
+        const it: LibItem = items[i];
+        out.push({ key: `${it.id}`, label: `${it.name}` });
+      }
+      this.libChoices = out;
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] cast libs: ${e.code}`);
+    }
+  }
+
+  /**
+   * 一张媒体库卡（2.6.1.83 · 用户 23:59：「参照媒体库那套布局」）。
+   *
+   * 之前是一行文字 chips，塞在男女演员人数和总人数中间，看着像又一个数字条件，
+   * 完全看不出「这是先选哪个库」。改成和首页媒体库同一种卡：**封面 / 首字 + 名字 + 片数**，
+   * 选中描一圈金色 —— 一眼就知道自己在哪个库里找。
+   */
+  @Builder
+  LibTile(id: number, name: string, count: number, cover: string) {
+    Column({ space: 3 }) {
+      Stack() {
+        if (cover.length > 0) {
+          Image(Store.I.img(cover))
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Cover)
+            .borderRadius(9)
+        } else {
+          Text(name.length > 0 ? name.substring(0, 1) : '库')
+            .fontSize(20)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.fLib === `${id}` ? Theme.GOLD : Theme.TEXT_DIM)
+            .width('100%')
+            .height('100%')
+            .textAlign(TextAlign.Center)
+            .backgroundColor(Theme.CARD_HI)
+            .borderRadius(9)
+        }
+      }
+      .width('100%')
+      .height(64)
+      .borderRadius(9)
+      .border({
+        width: this.fLib === `${id}` ? 2 : 1,
+        color: this.fLib === `${id}` ? Theme.ACCENT : '#1FFFFFFF'
+      })
+
+      Text(name)
+        .fontSize(10)
+        .fontColor(this.fLib === `${id}` ? Theme.GOLD : Theme.TEXT_DIM)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .width('100%')
+        .textAlign(TextAlign.Center)
+      Text(count > 0 ? `${count}` : '空')
+        .fontSize(9)
+        .fontColor(Theme.TEXT_FAINT)
+        .width('100%')
+        .textAlign(TextAlign.Center)
+    }
+    .width(78)
+    .padding({ top: 2, bottom: 2 })
+    .onClick(() => {
+      this.fLib = id > 0 ? `${id}` : '';
+      this.runQuery();
+    })
   }
 
   aboutToDisappear(): void {
@@ -335,6 +432,9 @@ struct CastFinderPage {
     }
     if (this.fCollection.length > 0) {
       parts.push(`collection=${this.fCollection}`);
+    }
+    if (this.fLib.length > 0) {
+      parts.push(`library_id=${this.fLib}`);
     }
     return parts.join('&');
   }
@@ -1019,6 +1119,36 @@ struct CastFinderPage {
           this.runQuery();
         }
       })
+
+      // 2.6.1.83：媒体库改成横向卡片（封面/首字 + 名字 + 片数），
+      // 和首页「媒体库」一栏同一套观感 —— 用户 23:59 说原来那行文字 chips 又丑又看不出意思。
+      // 放在所有人条件之前：媒体库是先决范围，不是附加筛选。
+      Column({ space: 6 }) {
+        Row() {
+          Text('在哪个库里找')
+            .fontSize(11)
+            .fontColor(Theme.TEXT_FAINT)
+          Blank()
+          Text(this.fLib.length > 0 ? '只搜这个库' : '全部库')
+            .fontSize(10)
+            .fontColor(this.fLib.length > 0 ? Theme.GOLD : Theme.TEXT_FAINT)
+        }
+        .width('100%')
+
+        Scroll() {
+          Row({ space: 8 }) {
+            this.LibTile(0, '全部库', 0, '')
+            ForEach(this.libCards, (it: LibItem) => {
+              this.LibTile(it.id, it.name, it.count, it.cover)
+            }, (it: LibItem) => `${it.id}`)
+          }
+          .padding({ right: 4 })
+        }
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
+        .width('100%')
+      }
+      .width('100%')
 
       PickChips({
         options: this.casts,

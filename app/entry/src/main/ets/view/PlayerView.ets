@@ -2,7 +2,7 @@ import { router, window, PiPWindow } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { sensor } from '@kit.SensorServiceKit';
 import { AudioTrack, Media, Player, PlayerConfig, SubtitleTrack } from '@mpv-ohos/mpv-arkts';
-import { httpGet, httpPost, httpPut } from '../common/Http';
+import { httpGet, httpGetCached, httpPost, httpPut } from '../common/Http';
 import { savePickLocal } from '../common/FrameStore';
 import { Gallery } from '../common/Gallery';
 import { Store } from '../common/Store';
@@ -10,11 +10,16 @@ import { Theme } from '../common/Theme';
 import { AppLog } from '../common/AppLog';
 import { DetailParams, PlayerParams } from '../common/Types';
 import { clock } from '../common/Util';
+import { inPartGroup, partGroupKeys, partNoOf, partsHint } from '../common/Parts';
 import { common } from '@kit.AbilityKit';
 import { SubtitleClient, SubtitleItem, LocalCandidate, SubtitleChoice } from '../common/Subtitles';
 import { PlayerPrefs, PlayerTuning } from '../common/PlayerPrefs';
 import { RATE_LABELS, rateFilm } from '../ext/ratings/RatingStars';
 import { PipHub } from '../common/PipHub';
+import { SubStyle, SubStyleSpec, SUB_SIZE_OPTS, SUB_OUTLINE_OPTS, SUB_POS_OPTS, SUB_BG_OPTS, SubOpt } from '../common/SubStyle';
+import { BackgroundPlay } from '../common/BackgroundPlay';
+import { BackAudio } from '../common/BackAudio';
+import { PlayHandoff, PlaySession } from '../common/PlaySession';
 import { PlayerChrome } from '../view/PlayerChrome';
 
 const SPEEDS: number[] = [0.75, 1.0, 1.25, 1.5, 2.0];
@@ -188,6 +193,24 @@ export struct PlayerView {
     this.applyKeepScreenOn();
   }
 
+  /**
+   * 诊断（2.6.1.68）：「点字幕，菜单闪一下就消失」到底是谁关的。
+   *
+   * 以前只有 350ms 抬手守卫这一道防线，日志里看不出是哪条路径把 showPanel 置回 false，
+   * 所以每轮都只能猜。现在开关面板都留一条带「距打开多少毫秒」的记录：
+   * 若是 <350ms 自己关的，说明守卫没拦住；若是几百毫秒之后，说明是别的代码在收面板。
+   */
+  @Monitor('showPanel')
+  private onPanelVisibilityChange(): void {
+    const since: number = this.panelOpenedAt > 0 ? Date.now() - this.panelOpenedAt : -1;
+    AppLog.mark('subpanel', `showPanel=${this.showPanel} kind=${this.panelKind} sinceOpen=${since}ms`);
+  }
+
+  @Monitor('subStyleOpen')
+  private onSubStyleVisibilityChange(): void {
+    AppLog.mark('substyle', `面板 ${this.subStyleOpen ? '开' : '关'} size=${this.subSizePct} outline=${this.subOutlineW} pos=${this.subPosPct} bg=${this.subBgMode}`);
+  }
+
   private player: Player | undefined = undefined;
   private metaId: number = 0;
   private metaNumber: string = '';
@@ -269,6 +292,8 @@ export struct PlayerView {
   @Local showBufferOverlay: boolean = false;
   /** 起播时刻：开头这几秒的 buffering 是正常起播，不算「卡住」（用户第 4 条）。 */
   private openAt: number = 0;
+  /** surface attach 成功的时刻：`attach → 首帧` 这一段才是 mpv 真正等数据 + 解码的时间。 */
+  private attachAt: number = 0;
   private bufferSince: number = -1;
   private lastSeekAt: number = 0;
   /** 长按临时倍速前的固定档位（R11）。 */
@@ -336,6 +361,18 @@ export struct PlayerView {
   @Local vpH: number = 780;
   /** surface 尺寸去抖定时器（尺寸每帧在变时别每帧重绑）。 */
   private sizeTimer: number = -1;
+  /** 屏灭巡检（2.6.1.37）：后台期间每 600ms 看一眼屏幕，锁屏就停播。 */
+  private bgWatch: number = -1;
+  /** 小窗正在启动中（2.6.1.41）：窗口可见性回调会连发，没这个标记会重复 startPiP → 1300013。 */
+  private pipStarting: boolean = false;
+  private pipPreparing: boolean = false;
+  private pipEpoch: number = 0;
+  private pipRestoring: boolean = false;
+  private pipAutoArmed: boolean = false;
+  private pipState: PiPWindow.PiPState = PiPWindow.PiPState.STOPPED;
+  private disposed: boolean = false;
+  private windowVisible: boolean = true;
+  private visibilityListener: ((visible: boolean) => void) | undefined = undefined;
   /** XComponent 的「代」：换一代 = 重建组件 = 一块新 surface（形态切换时用）。 */
   @Local surfaceGen: number = 0;
   /** 上次重建 surface 的时刻（节流用，避免自激重建）。 */
@@ -356,8 +393,10 @@ export struct PlayerView {
   /** 本页在 PipHub 里的身份（同一页复用同一个 id）。 */
   private pipOwner: string = `pp-${Date.now()}`;
   @Local pipActive: boolean = false;
-  /** 返回桌面自动画中画（设置项，默认关）。 */
+  /** 回桌面出系统小窗（设置项）。默认关：2026-11-13 21:14 用户定，与设置页一致。 */
   private pipAuto: boolean = false;
+  /** 切后台继续出声（设置项）。默认关；与小窗二选一（小窗优先）。 */
+  private bgPlay: boolean = false;
   @Local errorText: string = '';
   /** 我的评分（0 = 没打），看完时就地弹一张打分卡。 */
   @Local myRating: number = 0;
@@ -366,6 +405,14 @@ export struct PlayerView {
   private rateBusy: boolean = false;
   @Local showPanel: boolean = false;
   @Local panelKind: string = 'subs';
+  /** 字幕样式面板（2.6.1.55）：四个维度的当前值，改一下就写偏好 + 重设 mpv。 */
+  @Local subStyleOpen: boolean = false;
+  /** 样式面板打开时刻（「样式」是面板里的第二层，单独算抬手守卫）。 */
+  private subStyleOpenedAt: number = 0;
+  @Local subSizePct: number = 100;
+  @Local subOutlineW: number = 3;
+  @Local subPosPct: number = 100;
+  @Local subBgMode: number = 0;
   /**
    * 面板打开时刻（毫秒）。打开面板的那一次点击，**抬手**会落到刚插进来的第一行上，
    * 直接触发 pickSub/pickAudio → 面板刚开就关，观感就是「点字幕闪退」。
@@ -373,6 +420,16 @@ export struct PlayerView {
    * （2.6.1.5 补上，用户报的「横屏字幕又闪退」就是它）。
    */
   private panelOpenedAt: number = 0;
+  /**
+   * 2.6.1.68：「抬手落到刚插进来的面板上」的**精确**判据。
+   *
+   * 时间窗（350ms）只能挡住手快的情况；按住 0.6 秒再松手照样会误触。真正的特征是
+   * **面板只收到了 Up、没收到 Down** —— 按下的那一刻面板还不存在。所以给面板容器
+   * 挂一层 onTouch 记录 Down，点击处理里要求「这次点击的 Down 确实落在面板上」。
+   * 两套判据同时保留：Down 判据管精确，时间窗管兜底。
+   */
+  private subPanelDown: boolean = false;
+  private stylePanelDown: boolean = false;
   @Local subLabels: string[] = [];
   @Local audioLabels: string[] = [];
   @Local hint: string = '';
@@ -390,6 +447,9 @@ export struct PlayerView {
   @Local subHint: string = '';
 
   aboutToAppear(): void {
+    this.disposed = false;
+    // 全局小窗要「此刻在放什么」：由本页自己解释状态，别人别猜（2.6.2.1）
+    PlaySession.exporter = () => this.buildSession();
     this.metaId = this.metaIdParam;
     this.metaNumber = this.numberParam;
     this.metaTitle = this.titleParam;
@@ -413,10 +473,17 @@ export struct PlayerView {
         this.viewMode = 'landscape';
       }
     }
-    // 返回桌面自动画中画（默认关，避免一按 home 就冒小窗）
-    this.pipAuto = Store.I.prefString('player_pip_auto', '0') === '1';
+    // 自动小窗 / 后台出声：**默认都关**（2026-11-13 21:14 用户定）。
+    // 两者都要用户主动去「播放设置」里开；默认按 Home 就正常退到桌面（播放暂停）。
+    this.pipAuto = Store.I.prefString('player_pip_auto', '0') !== '0';
+    this.bgPlay = Store.I.prefString('player_bg_play', '0') !== '0';
     const ts: number = Number(Store.I.prefString('player_temp_speed', '3'));
     this.tempSpeedValue = ts >= 1.5 && ts <= 5 ? ts : 3;
+    // 字幕样式：面板里的选中态从这里来（真值在偏好里，mpv 那边由 applySubStyle 写）
+    this.subSizePct = SubStyle.size();
+    this.subOutlineW = SubStyle.outline();
+    this.subPosPct = SubStyle.pos();
+    this.subBgMode = SubStyle.bg();
     try {
       // configDir 让 mpv 读沙箱里的 mpv.conf（缓存 / demuxer / gpu 等参数都在那儿调）；
       // hwdec 走构造参数，因为配置文件里的 hwdec 会被它覆盖。
@@ -470,7 +537,42 @@ export struct PlayerView {
     }, 10000);
   }
 
+  /** 导出「此刻在放什么」，交给浮窗/播放页接着放（2.6.2.1）。 */
+  private buildSession(): PlayHandoff {
+    let pos: number = this.pos;
+    const p: Player | undefined = this.player;
+    if (p !== undefined) {
+      try {
+        const st = p.state;
+        if (st !== undefined && st !== null && st.position > 0) {
+          pos = st.position;
+        }
+      } catch (err) {
+        console.info(`[amane] session pos: ${JSON.stringify(err)}`);
+      }
+    }
+    const h: PlayHandoff = {
+      mid: this.metaId,
+      number: this.metaNumber,
+      title: this.metaTitle,
+      fileKey: this.fileKey,
+      fileName: this.fileName,
+      pos: pos,
+      speed: this.speed,
+      subId: this.currentSubId,
+      localSub: this.currentLocalName,
+      audioIndex: this.currentSubIndex >= 0 ? this.currentSubIndex : -1,
+      compact: true
+    };
+    return h;
+  }
+
   aboutToDisappear(): void {
+    this.disposed = true;
+    if (this.win !== undefined && this.visibilityListener !== undefined) {
+      this.win.off('windowVisibilityChange', this.visibilityListener);
+      this.visibilityListener = undefined;
+    }
     this.stopGravity();
     if (this.lockTimer >= 0) {
       clearTimeout(this.lockTimer);
@@ -482,6 +584,9 @@ export struct PlayerView {
     }
     // 页面走了 mpv 也销毁了，小窗留着只会黑屏
     this.stopPip();
+    this.clearScreenWatch();
+    // 播放器没了就别再占着后台长时任务（否则通知栏一直挂着「正在播放」）
+    BackgroundPlay.stop(getContext(this) as common.UIAbilityContext);
     if (this.sizeTimer >= 0) {
       clearTimeout(this.sizeTimer);
       this.sizeTimer = -1;
@@ -514,6 +619,9 @@ export struct PlayerView {
 
   private enterFullscreen(): void {
     window.getLastWindow(getContext(this)).then((win: window.Window) => {
+      if (this.disposed) {
+        return;
+      }
       this.win = win;
       const props: window.WindowProperties = win.getWindowProperties();
       this.vpW = px2vp(props.windowRect.width);
@@ -539,6 +647,9 @@ export struct PlayerView {
         this.syncModeWithWindow();
       }, 600);
       win.on('windowSizeChange', (size: window.Size) => {
+        if (this.disposed) {
+          return;
+        }
         const oldMode: string = this.viewMode;
         this.vpW = px2vp(size.width);
         this.vpH = px2vp(size.height);
@@ -590,12 +701,36 @@ export struct PlayerView {
           }
         }
       });
-      // 返回桌面 / 切到后台：开关打开就自动进画中画（R18）
-      win.on('windowVisibilityChange', (visible: boolean) => {
-        if (!visible && this.pipAuto && !this.pipActive) {
-          this.startPip();
+      // 自动 PiP 由系统在退后台时拉起，不能在窗口已经不可见后再手动 start。
+      this.visibilityListener = (visible: boolean) => {
+        if (this.disposed) {
+          return;
         }
-      });
+        this.windowVisible = visible;
+        if (!visible) {
+          // 锁屏 / 息屏 = 退出（2.6.1.37 用户定）：不申请长时任务，直接把播放停住。
+          // 先切桌面、再按电源键的情况由下面那个 600ms 的巡检接住。
+          if (BackAudio.screenOff()) {
+            this.pauseForScreenOff();
+            BackgroundPlay.stop(getContext(this) as common.UIAbilityContext);
+            return;
+          }
+          // 长时任务 + AVSession：**自动小窗待命时不要申请** —— 小窗自己持有音频，
+          // 再挂一路后台长时任务，两边会互相抢焦点（2026-11-13 21:14 用户指出的冲突）。
+          // 小窗关着（开关没开 / 页面没准备好）才走纯后台出声这条。
+          if (!PipHub.autoArmed && this.bgPlay && this.playing) {
+            BackgroundPlay.start(getContext(this) as common.UIAbilityContext);
+          }
+          if (this.playing) {
+            this.watchScreenOff();
+          }
+        } else {
+          this.clearScreenWatch();
+          BackgroundPlay.stop(getContext(this) as common.UIAbilityContext);
+          this.preparePip();
+        }
+      };
+      win.on('windowVisibilityChange', this.visibilityListener);
     }).catch((error: BusinessError) => {
       console.error(`[amane] fullscreen: ${error.code} ${error.message}`);
     });
@@ -670,7 +805,9 @@ export struct PlayerView {
       return;
     }
     const now: number = Date.now();
-    if (now - this.intentAt > 2000 || now - this.lastNudgeAt < 400) {
+    // 只在意图设定后 1.2 秒内补，两次之间至少隔 700ms ——
+    // 原来 2 秒 / 400ms 会在转场期间连发四五个方向请求，和系统转屏打架（跳来跳去）。
+    if (now - this.intentAt > 1200 || now - this.lastNudgeAt < 700) {
       return;
     }
     this.lastNudgeAt = now;
@@ -836,6 +973,19 @@ export struct PlayerView {
     if (this.orientIntent === 'auto') {
       return;
     }
+    // 刚点过「全屏 / 缩小」的 1.2 秒里：系统正在播转场、窗口在转，
+    // 这段时间的传感器抖动不能当成「用户把手机转过去了」，否则会立刻交还重力，
+    // 和刚发出去的方向请求互相拉扯 —— 表现就是界面跳来跳去（2.6.1.32 修老 bug）。
+    // 这段窗口里只把锚点对齐到当前物理方向，不做任何释放判断。
+    if (Date.now() - this.intentAt < 1200) {
+      this.anchorPortrait = nowPortrait;
+      this.anchorValid = true;
+      if (this.releaseTimer >= 0) {
+        clearTimeout(this.releaseTimer);
+        this.releaseTimer = -1;
+      }
+      return;
+    }
     if (!this.anchorValid) {
       this.anchorPortrait = nowPortrait;
       this.anchorValid = true;
@@ -908,22 +1058,34 @@ export struct PlayerView {
     if (this.player === undefined) {
       return;
     }
-    this.openAt = Date.now();
+    // ★ 分段计时（2.6.1.81）★
+    // 之前只有一个「first frame in 1.52s」的总数，看到数字也不知道慢在哪一步 ——
+    // 上一轮「起播优先」就是因此误判成「已经是 mpv 缓存策略的问题」。
+    // 现在把开流前那段也拆开：lan 探测 / 取 fileKey / player.open 各多少毫秒，
+    // 剩下的一大截才是 mpv 真正等数据 + 解码的时间。
+    const t0: number = Date.now();
+    this.openAt = t0;
     // 被判成外网但此刻局域网可达时，先把地址切回内网再开流
     await Store.I.preferLanForPlay();
+    const t1: number = Date.now();
     // 先定下「到底播哪个文件」：弹幕、进度、截帧都要跟着它走
     await this.ensureFileKey();
+    const t2: number = Date.now();
     try {
       // token 已经在 URL 的 query 里，不要再走 httpHeaders：
       // mpv-arkts 会把头名编码坏（%65%authorization），反而触发 401。
       // 有离线缓存就播本地（file://），没有才走代理 —— 见 Store.playSource
-      const media: Media = new Media(Store.I.playSource(this.metaId, this.fileKey), {
+      const src: string = Store.I.playSource(this.metaId, this.fileKey);
+      const media: Media = new Media(src, {
         start: this.startPos
       });
       this.player.stream.error.listen((message: string) => {
         this.errorText = message.length > 0 ? message : '播放失败';
       });
       this.player.open(media);
+      const t3: number = Date.now();
+      AppLog.mark('startup',
+        `prepare lan=${t1 - t0}ms fileKey=${t2 - t1}ms open=${t3 - t2}ms src=${src.startsWith('file://') ? 'local' : 'net'} key=${this.fileKey.length > 0 ? 'yes' : 'no'}`);
       this.pos = this.startPos;
       this.danmuClock = this.startPos;
       this.lastDanmuClock = this.startPos - 0.01;
@@ -958,7 +1120,11 @@ export struct PlayerView {
     try {
       const url: string =
         `${Store.I.user}/api/user/streams/${Store.I.playbackSource}/${this.metaId}`;
-      const text: string = await httpGet(url, Store.I.token);
+      // ★ 2.6.1.84：这里必须走缓存 ★
+      // 真机分段计时（00:02）暴露过一条 1197ms 的 fileKey 查询 —— 那 1.2 秒完全在
+      // 用户点下播放之后、mpv 开流之前白等。文件列表在几分钟内不会变，缓存 10 分钟；
+      // 同一部片再打开直接命中（实测 1197ms → 0ms，首帧 2.19s → 1.20s）。
+      const text: string = await httpGetCached(url, Store.I.token, 600000);
       const obj = JSON.parse(text) as Record<string, Object>;
       const raw = obj.items;
       if (!Array.isArray(raw) || raw.length === 0) {
@@ -987,7 +1153,18 @@ export struct PlayerView {
       if (st === undefined || st === null) {
         return;
       }
-      this.pos = st.position;
+      // 2.6.1.43：seek 后 1.5 秒内**不用轮询值覆盖本地位置**。
+      // mpv 的 `state.position` 在 seek 后要几帧到一秒才跟上（网络流更久），
+      // 期间这一段 300ms 轮询会把刚设好的 pos 覆盖回旧值 ——
+      // 表现就是用户报的「点进度条能跳转，但滑块又弹回开头」。
+      const nowMs: number = Date.now();
+      if (nowMs - this.lastSeekAt > 1500) {
+        this.pos = st.position;
+      } else if (Math.abs(st.position - this.pos) < 1.5) {
+        // mpv 已经跟到目标附近，提前解除保护
+        this.lastSeekAt = 0;
+        this.pos = st.position;
+      }
       this.duration = st.duration;
       this.playing = st.playing;
       this.buffering = st.buffering;
@@ -1008,12 +1185,24 @@ export struct PlayerView {
         const vp0 = st.videoParams;
         if (vp0 !== undefined && vp0.dw > 0) {
           this.firstFrame = true;
+          // 首帧耗时：排查「起播慢」时看这一行就够（2.6.1.57）
+          if (this.openAt > 0) {
+            const total: number = (Date.now() - this.openAt) / 1000;
+            // attach→首帧 = mpv 等首字节 + 解封装 + 解码；这段才是「起播慢」的真正战场
+            const afterAttach: number = this.attachAt > 0
+              ? (Date.now() - this.attachAt) / 1000 : -1;
+            AppLog.mark('startup',
+              `first frame in ${total.toFixed(2)}s（attach→frame ${afterAttach >= 0 ? afterAttach.toFixed(2) : '?'}s）`);
+            this.openAt = 0;
+          }
+          this.preparePip();
         }
       }
       if (st.eof && !this.completed) {
         this.completed = true;
         this.saveProgress(true);
       }
+      this.updatePipAutoStart();
       // 打分提示不再在这里弹（第 3 条）：改成「第一次从横屏转回竖屏」时
       // 让详情页高亮它自己的评分区，不打断播放。
     } catch (error) {
@@ -1093,6 +1282,17 @@ export struct PlayerView {
     try {
       this.player.playOrPause();
       this.playing = !this.playing;
+      this.updatePipAutoStart();
+      // 音频会话只在「需要它」时建：后台出声或自动小窗（2026-11-13 21:14 两个开关默认关）。
+      // 两个都关时按 Home 就该安静停下，不必向外声明「我在放媒体」——
+      // 否则系统会留一张媒体卡片，用户以为还能后台播。
+      // 会话要在**前台开始播放时**建（进后台再建，系统已经判过「没有会话」，焦点不还给你）。
+      if (this.bgPlay || this.pipAuto) {
+        BackAudio.setPlaying(this.playing);
+        if (this.playing) {
+          BackAudio.ensure(getContext(this) as common.UIAbilityContext, '');
+        }
+      }
     } catch (error) {
       const e = error as BusinessError;
       console.error(`[amane] play/pause: ${e.code} ${e.message}`);
@@ -1586,6 +1786,75 @@ export struct PlayerView {
     this.pickerLoading = false;
   }
 
+  /** 版本列表里的分段组键（见 `common/Parts.ets`）：同目录同前缀、至少两段才算。 */
+  private versionPartKeys(): string[] {
+    const names: string[] = [];
+    for (let i = 0; i < this.versions.length; i++) {
+      names.push(this.versions[i].name);
+    }
+    return partGroupKeys(names);
+  }
+
+  /**
+   * 版本 tab 拆成两块：**版本**（不同画质 / 来源）与**分集**（同一部被切开的 cd1/cd2）。
+   *
+   * 之前它们平铺在一个列表里 —— 用户看到「3 个版本」，实际是 1 版 + 3 段
+   * （2026-11-13 反馈：「多版本和分集堆在一起」）。判定保守，见 `common/Parts.ets`。
+   */
+  private versionOnly(): VerItem[] {
+    const keys: string[] = this.versionPartKeys();
+    const out: VerItem[] = [];
+    for (let i = 0; i < this.versions.length; i++) {
+      if (!inPartGroup(this.versions[i].name, keys)) {
+        out.push(this.versions[i]);
+      }
+    }
+    return out;
+  }
+
+  private partOnly(): VerItem[] {
+    const keys: string[] = this.versionPartKeys();
+    const out: VerItem[] = [];
+    for (let i = 0; i < this.versions.length; i++) {
+      if (inPartGroup(this.versions[i].name, keys)) {
+        out.push(this.versions[i]);
+      }
+    }
+    out.sort((a: VerItem, b: VerItem) => partNoOf(a.name) - partNoOf(b.name));
+    return out;
+  }
+
+  /** 选集面板里的一行：版本与分集共用同一套渲染，只有分组标题不同。 */
+  @Builder
+  VerRow(v: VerItem) {
+    Row({ space: 10 }) {
+      Column({ space: 3 }) {
+        Text(v.name)
+          .fontSize(12)
+          .fontColor(v.key === this.fileKey ? Theme.ACCENT : Theme.TEXT)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+        Text(`${v.definition.length > 0 ? v.definition : '未知清晰度'} · ${Math.round(v.size / 1048576)} MB`)
+          .fontSize(9)
+          .fontColor(Theme.TEXT_FAINT)
+          .width('100%')
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      if (v.key === this.fileKey) {
+        Text('播放中')
+          .fontSize(9)
+          .fontColor(Theme.ACCENT)
+      }
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 9, bottom: 9 })
+    .onClick(() => {
+      this.pickVersion(v);
+    })
+  }
+
   private async loadSiblings(): Promise<void> {
     if (this.siblings.length > 0 || this.metaId <= 0) {
       return;
@@ -1667,17 +1936,53 @@ export struct PlayerView {
    *  - 关掉小窗（X）只是关掉，**不跳页**；
    *  - 只有点小窗右上角「回到应用/全屏」才回到播放页，并按设置里的默认形态继续播。
    */
-  private async startPip(): Promise<void> {
-    if (this.pipActive) {
+  /**
+   * 后台期间的屏灭巡检（2.6.1.37）。
+   *
+   * 为什么不直接用 `display.on('change')`：那个回调要带 Display 参数、还要在
+   * struct 里管住 this 绑定，改播放器风险大；600ms 轮一次只在「已经在后台」时才跑，
+   * 开销可以忽略，逻辑也不会因为回调签名变化而失效。
+   */
+  private watchScreenOff(): void {
+    this.clearScreenWatch();
+    this.bgWatch = setInterval(() => {
+      if (!BackAudio.screenOff()) {
+        return;
+      }
+      this.pauseForScreenOff();
+      BackgroundPlay.stop(getContext(this) as common.UIAbilityContext);
+      this.clearScreenWatch();
+    }, 600);
+  }
+
+  private clearScreenWatch(): void {
+    if (this.bgWatch >= 0) {
+      clearInterval(this.bgWatch);
+      this.bgWatch = -1;
+    }
+  }
+
+  /** 锁屏就停：只在真的在播时切换，别把已经暂停的片切回播放。 */
+  private pauseForScreenOff(): void {
+    if (this.playing) {
+      this.togglePlay();
+    }
+    this.stopPip();
+  }
+
+  /** 前台 surface 就绪后注册；Home 自动启动交给系统选择正确时机。 */
+  private async preparePip(): Promise<void> {
+    if (this.disposed || !this.windowVisible || !this.surfaceReady
+      || this.pipCtrl !== undefined || this.pipPreparing || !PiPWindow.isPiPEnabled()) {
       return;
     }
+    const epoch: number = this.pipEpoch;
+    this.pipPreparing = true;
     try {
-      if (!PiPWindow.isPiPEnabled()) {
-        this.toast('这台设备不支持画中画');
+      if (this.xc.getXComponentSurfaceId().length === 0) {
         return;
       }
       const ctx = getContext(this) as common.UIAbilityContext;
-      // 小窗比例按**视频实际宽高**给：写死 16:9 会让 4:3、竖屏片源在小窗里被拉变形
       let cw: number = 1280;
       let ch: number = 720;
       const p: Player | undefined = this.player;
@@ -1696,51 +2001,157 @@ export struct PlayerView {
         contentHeight: ch
       };
       const ctrl: PiPWindow.PiPController = await PiPWindow.create(config);
+      // create 返回时页面或 surface 可能已经换代，旧 controller 不得注册自动启动。
+      if (this.disposed || epoch !== this.pipEpoch) {
+        ctrl.setAutoStartEnabled(false);
+        return;
+      }
       this.pipCtrl = ctrl;
       ctrl.on('stateChange', (state: PiPWindow.PiPState, reason: string) => {
-        if (state === PiPWindow.PiPState.ABOUT_TO_RESTORE) {
-          // 用户点了小窗上的「回到应用」：这才是「退出画中画」
-          this.restoreFromPip();
-        } else if (state === PiPWindow.PiPState.STOPPED) {
-          // 关掉小窗（X）或系统回收：停在这一页，不跳详情页
-          this.onPipClosed();
+        if (this.disposed || this.pipCtrl !== ctrl) {
+          return;
         }
         console.info(`[amane] pip state ${state}: ${reason}`);
+        this.pipState = state;
+        if (state === PiPWindow.PiPState.ABOUT_TO_START) {
+          this.pipStarting = true;
+        } else if (state === PiPWindow.PiPState.STARTED) {
+          this.pipStarting = false;
+          this.pipActive = true;
+          PipHub.claim(this.pipOwner, () => {
+            this.stopPip();
+            this.onPipClosed();
+          });
+          if (BackAudio.screenOff()) {
+            this.pauseForScreenOff();
+          }
+        } else if (state === PiPWindow.PiPState.ABOUT_TO_RESTORE) {
+          // 等 STOPPED 归还 surface 后再改方向，避免转屏重建抢走 PiP 的 surface。
+          this.pipRestoring = true;
+        } else if (state === PiPWindow.PiPState.STOPPED) {
+          const restoring: boolean = this.pipRestoring;
+          this.pipRestoring = false;
+          this.pipStarting = false;
+          this.pipActive = false;
+          PipHub.release(this.pipOwner);
+          if (restoring) {
+            this.restoreFromPip();
+          } else {
+            this.onPipClosed();
+          }
+        } else if (state === PiPWindow.PiPState.ERROR) {
+          this.pipStarting = false;
+          this.pipActive = false;
+          this.pipRestoring = false;
+          PipHub.autoArmed = false;
+          PipHub.release(this.pipOwner);
+          // 小窗起不来时别让声音一起没：退回纯后台出声（用户开了那个开关的话）
+          if (!this.windowVisible && this.bgPlay && this.playing) {
+            BackgroundPlay.start(getContext(this) as common.UIAbilityContext);
+          }
+        }
       });
+      ctrl.on('controlEvent', (event: PiPWindow.ControlEventParam) => {
+        if (this.disposed || this.pipCtrl !== ctrl || BackAudio.screenOff()) {
+          return;
+        }
+        if (event.controlType === PiPWindow.PiPControlType.VIDEO_PLAY_PAUSE
+          && event.status !== undefined
+          && (event.status === PiPWindow.PiPControlStatus.PLAY) !== this.playing) {
+          this.togglePlay();
+        }
+      });
+      this.updatePipAutoStart();
+      console.info('[amane] pip prepared');
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] pip prepare: ${e.code} ${e.message}`);
+    } finally {
+      if (epoch === this.pipEpoch) {
+        this.pipPreparing = false;
+      }
+    }
+  }
+
+  private updatePipAutoStart(): void {
+    const ctrl: PiPWindow.PiPController | undefined = this.pipCtrl;
+    if (ctrl === undefined) {
+      return;
+    }
+    const enable: boolean = !this.disposed && this.pipAuto && this.playing && this.firstFrame;
+    // 让「后台出声」那条路知道小窗要接管音频了（见 PipHub.autoArmed 的注释）。
+    PipHub.autoArmed = enable;
+    if (enable === this.pipAutoArmed) {
+      return;
+    }
+    try {
+      ctrl.setAutoStartEnabled(enable);
+      this.pipAutoArmed = enable;
+      console.info(`[amane] pip auto: ${enable}`);
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error(`[amane] pip auto: ${e.code} ${e.message}`);
+    }
+  }
+
+  private async startPip(): Promise<void> {
+    if (this.disposed || !this.windowVisible || this.pipActive || this.pipStarting || this.pipPreparing) {
+      return;
+    }
+    const epoch: number = this.pipEpoch;
+    this.pipStarting = true;
+    try {
+      if (!PiPWindow.isPiPEnabled()) {
+        this.toast('这台设备不支持画中画');
+        return;
+      }
+      await this.preparePip();
+      const ctrl: PiPWindow.PiPController | undefined = this.pipCtrl;
+      if (ctrl === undefined || epoch !== this.pipEpoch || this.disposed || !this.windowVisible
+        || this.pipActive || this.pipState === PiPWindow.PiPState.ABOUT_TO_START) {
+        return;
+      }
       await ctrl.startPiP();
-      this.pipActive = true;
-      // 全局只留一个小窗：别的播放页要是也在开小窗，先让它关掉
-      PipHub.claim(this.pipOwner, () => {
-        this.stopPip();
-        this.onPipClosed();
-      });
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] pip: ${e.code} ${e.message}`);
-      this.toast('画中画启动失败');
+    } finally {
+      if (epoch === this.pipEpoch && this.pipState !== PiPWindow.PiPState.ABOUT_TO_START) {
+        this.pipStarting = false;
+      }
     }
   }
 
   /** 小窗被关掉：留在当前页面，播放停住（没有画面了，继续放声音只会让人困惑）。 */
   private onPipClosed(): void {
     this.pipActive = false;
-    this.pipCtrl = undefined;
     PipHub.release(this.pipOwner);
     try {
       if (this.player !== undefined && this.playing) {
         this.player.playOrPause();
         this.playing = false;
+        BackAudio.setPlaying(false);
+        this.updatePipAutoStart();
       }
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] pause after pip: ${e.code} ${e.message}`);
     }
+    this.clearScreenWatch();
+    BackgroundPlay.stop(getContext(this) as common.UIAbilityContext);
   }
 
   /** 小窗「回到应用」：回到播放页，按设置里的默认形态继续播。 */
   private restoreFromPip(): void {
+    if (this.pipCtrl !== undefined && this.pipActive) {
+      this.pipRestoring = true;
+      this.pipCtrl.stopPiP().catch((err: BusinessError) => {
+        this.pipRestoring = false;
+        console.error(`[amane] restore pip: ${err.code} ${err.message}`);
+      });
+      return;
+    }
     this.pipActive = false;
-    this.pipCtrl = undefined;
     PipHub.release(this.pipOwner);
     this.showControls = true;
     const wantLandscape: boolean =
@@ -1765,10 +2176,29 @@ export struct PlayerView {
 
   private stopPip(): void {
     const c: PiPWindow.PiPController | undefined = this.pipCtrl;
+    const running: boolean = this.pipActive || this.pipStarting;
+    this.pipEpoch++;
+    this.pipPreparing = false;
     this.pipCtrl = undefined;
     this.pipActive = false;
+    this.pipStarting = false;
+    this.pipRestoring = false;
+    this.pipAutoArmed = false;
+    this.pipState = PiPWindow.PiPState.STOPPED;
+    PipHub.autoArmed = false;
     PipHub.release(this.pipOwner);
     if (c === undefined) {
+      return;
+    }
+    try {
+      c.setAutoStartEnabled(false);
+      c.off('stateChange');
+      c.off('controlEvent');
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] release pip: ${e.code} ${e.message}`);
+    }
+    if (!running) {
       return;
     }
     c.stopPiP().catch((err: BusinessError) => {
@@ -1931,11 +2361,12 @@ export struct PlayerView {
     }
     this.lastRebindAt = nowMs;
     AppLog.mark('surface', `rebind force=${forceSeek} gen=${this.surfaceGen}`);
-    if (this.pipActive) {
+    if (this.pipActive || this.pipStarting) {
       // 画中画期间 surface 借给小窗了，重建会把 controller 换掉，直接放弃这次重建
       return;
     }
     if (forceSeek) {
+      this.stopPip();
       this.surfaceGen = this.surfaceGen + 1;
     }
   }
@@ -1992,7 +2423,10 @@ export struct PlayerView {
       this.panelKind = 'subs';
       this.loadSubSources();
       this.panelOpenedAt = Date.now();
+      this.subPanelDown = false;
+      this.subStyleOpen = false;
       this.showPanel = true;
+      AppLog.mark('subpanel', `打开面板 字幕轨道=${subs.length} 音轨=${audios.length}`);
     } catch (error) {
       const e = error as BusinessError;
       console.error(`[amane] tracks: ${e.code} ${e.message}`);
@@ -2024,6 +2458,105 @@ export struct PlayerView {
     }
   }
 
+  /**
+   * 这次点击算不算数。
+   *
+   * `down` = 面板容器的 onTouch 有没有收到 Down（见字段注释）。两条判据任一成立即忽略：
+   *  - 没收到 Down：按下的那一下落在别处（打开面板的那个按钮），抬手才滑到面板上；
+   *  - 距面板打开不足 400ms：兜底，防个别机型 onTouch 派发顺序不同。
+   */
+  private panelTapAllowed(down: boolean, sinceOpen: number, label: string): boolean {
+    const dt: number = Date.now() - sinceOpen;
+    if (!down || (dt >= 0 && dt < 400)) {
+      AppLog.mark('subpanel', `守卫拦下 ${label}（down=${down} since=${dt}ms）`);
+      return false;
+    }
+    return true;
+  }
+
+  /** 字幕面板：本次点击是否有效。 */
+  private subTapOk(label: string): boolean {
+    return this.panelTapAllowed(this.subPanelDown, this.panelOpenedAt, label);
+  }
+
+  /** 字幕样式面板：本次点击是否有效（从字幕面板再开一层，单独计时）。 */
+  private styleTapOk(label: string): boolean {
+    return this.panelTapAllowed(this.stylePanelDown, this.subStyleOpenedAt, label);
+  }
+
+  /**
+   * 把字幕样式写进 mpv。播放中改一项就调一次，mpv 下一帧就套用（不重开流）。
+   *
+   * 2.6.1.68 起的诊断：`sub-font-size` / `sub-pos` / `sub-border-size` 在 mpv 里是
+   * **double** 类型，而 `setProperty` 的桥接层是按整型下发的 —— 写不进去时内核不一定
+   * 抛异常，`catch` 也就什么都不打印，表现就是「面板里选了、画面一点没变」，查了很多轮
+   * 都只能猜。现在写完立刻**回读一遍**，把「期望 / 实际」打进日志：
+   *   `[substyle] 写入 ... 回读 sub-font-size=50 ...`
+   * 一眼就能区分是「没写进 mpv」还是「写进去了但 libass 没用」。
+   */
+  private applySubStyle(): void {
+    const p: Player | undefined = this.player;
+    if (p === undefined) {
+      AppLog.mark('substyle', '跳过：内核还没建');
+      return;
+    }
+    const lib = p.native;
+    const spec: SubStyleSpec = SubStyle.spec();
+    // 一项一段 try：某个属性在个别 mpv 版本上不可写时，其余几项仍要生效。
+    // 默认值对齐 MIMK-091 的中文硬字幕（字号 50 / 描边 3 / 贴底且下边距 10 / 纯白无底）。
+    const names: string[] = ['sub-font-size', 'sub-pos', 'sub-margin-y', 'sub-border-size',
+      'sub-shadow-offset', 'sub-border-style', 'sub-back-color'];
+    const vals: (number | string)[] = [spec.fontSize, spec.pos, spec.marginY, spec.outline,
+      spec.shadow, spec.borderStyle, spec.backColor];
+    const failed: string[] = [];
+    for (let i = 0; i < names.length; i++) {
+      const name: string = names[i];
+      const val: number | string = vals[i];
+      // 首选 `command(['set', ...])`：mpv 的 `set` 命令走**字符串解析**，自己按属性的
+      // 真实类型（double / int / string）转换。`sub-font-size` / `sub-pos` /
+      // `sub-border-size` 都是 double，直接用 setProperty 按整型下发会被内核拒掉，
+      // 而且有些版本连异常都不抛 —— 这就是「面板选了、画面没变」的头号嫌疑。
+      let ok: boolean = false;
+      try {
+        lib.command(['set', name, `${val}`]);
+        ok = true;
+      } catch (err) {
+        ok = false;
+      }
+      if (!ok) {
+        try {
+          lib.setProperty(name, val);
+          ok = true;
+        } catch (err) {
+          failed.push(name);
+          console.info(`[amane] sub style ${name}: ${JSON.stringify(err)}`);
+        }
+      }
+    }
+    const back: string[] = [];
+    for (let i = 0; i < names.length; i++) {
+      let v: string = '?';
+      try {
+        v = lib.getPropertyString(names[i]);
+      } catch (err) {
+        v = '读不出';
+      }
+      back.push(`${names[i]}=${v}`);
+    }
+    let subInfo: string = '';
+    try {
+      const st = p.state;
+      const tracks = st === undefined || st === null ? undefined : st.tracks;
+      const subs = tracks === undefined || tracks === null ? undefined : tracks.subs;
+      const n: number = subs === undefined || subs === null ? 0 : subs.length;
+      subInfo = ` 轨道=${n} sid=${lib.getProperty('sid')}`;
+    } catch (err) {
+      subInfo = ' 轨道读不出';
+    }
+    AppLog.mark('substyle',
+      `写入${failed.length === 0 ? '成功' : `失败[${failed.join(' ')}]`} 回读 ${back.join(' ')}${subInfo}`);
+  }
+
   /** 所有来源统一走这里：一个 subtitle_id → 一条远程字幕轨道。
    *
    * `closePanel`：面板打开时异步回填「上次的选择」不能收面板，否则就是「面板闪关」。
@@ -2035,14 +2568,29 @@ export struct PlayerView {
       this.showPanel = false;
     }
     this.currentSubId = id;
-    this.currentSubIndex = -1;
+    // -999 而不是 -1：`PanelRow('不使用字幕', -1)` 用 index 比对勾选态，
+    // 挂外挂字幕时把 -1 写进去会让「不使用字幕」自己打上勾（真机 2026-11-13 23:00 看到）。
+    this.currentSubIndex = -999;
     this.subChosen = true;
+    AppLog.mark('sub', `apply id=${id} close=${closePanel} remember=${remember} player=${this.player !== undefined}`);
     if (this.player === undefined) {
       return;
     }
     try {
       const url: string = SubtitleClient.streamUrl(id, true);
       this.player.setSubtitleTrack(SubtitleTrack.uri(url, '', 'chi', 'external'));
+      AppLog.mark('sub', `setSubtitleTrack ok url=${url.substring(0, 72)}`);
+      // 选了字幕就一定让它显示：以前可能因为上一部片把 sub-visibility 关了（或内核默认 no）
+      // 出现「面板里勾上了、画面上没有」的情况，肉眼看着就像「没挂上」。
+      try {
+        this.player.native.command(['set', 'sub-visibility', 'yes']);
+      } catch (err) {
+        console.info(`[amane] sub visibility: ${JSON.stringify(err)}`);
+      }
+      // 挂载是异步的：800ms 后回读 sid，-1/0 就说明 mpv 根本没接这条轨道
+      setTimeout(() => {
+        this.reportSubState('after-apply');
+      }, 800);
       if (remember) {
         SubtitleClient.remember(this.metaId, id).catch(() => {
           // 记住失败不影响播放
@@ -2051,7 +2599,38 @@ export struct PlayerView {
       this.toast('已切换字幕');
     } catch (error) {
       console.error(`[amane] apply sub: ${JSON.stringify(error)}`);
+      AppLog.mark('sub', `apply 抛异常 ${JSON.stringify(error)}`);
       this.toast('加载字幕失败');
+    }
+  }
+
+  /** 诊断：把「mpv 现在到底挂了哪条字幕」打进日志（sid / 轨道数 / 可见性）。 */
+  private reportSubState(tag: string): void {
+    const p: Player | undefined = this.player;
+    if (p === undefined) {
+      return;
+    }
+    try {
+      const lib = p.native;
+      const st = p.state;
+      const tracks = st === undefined || st === null ? undefined : st.tracks;
+      const subs = tracks === undefined || tracks === null ? undefined : tracks.subs;
+      const n: number = subs === undefined || subs === null ? 0 : subs.length;
+      let labels: string = '';
+      if (n > 0 && subs !== undefined && subs !== null) {
+        for (let i = 0; i < n && i < 4; i++) {
+          labels += `[${i}]${subs[i].title}/${subs[i].lang}/${subs[i].isUri === true ? 'uri' : 'in'} `;
+        }
+      }
+      let vis: string = '?';
+      try {
+        vis = lib.getPropertyString('sub-visibility');
+      } catch (err) {
+        vis = '读不出';
+      }
+      AppLog.mark('sub', `${tag}: 轨道=${n} sid=${lib.getProperty('sid')} vis=${vis} ${labels}`);
+    } catch (err) {
+      AppLog.mark('sub', `${tag}: 读轨道失败 ${JSON.stringify(err)}`);
     }
   }
 
@@ -2074,7 +2653,7 @@ export struct PlayerView {
 
   private async useLocalSub(name: string): Promise<void> {
     // 同为面板行点击：刚打开的那一下不认（否则面板「点开即关」）
-    if (Date.now() - this.panelOpenedAt < 350) {
+    if (!this.subTapOk(`本地字幕 ${name}`)) {
       return;
     }
     this.currentLocalName = name;
@@ -2127,7 +2706,7 @@ export struct PlayerView {
 
   private pickSub(index: number): void {
     // 面板刚打开的 350ms 内忽略：那次点击的抬手会落到第一行上（不然面板「点开即关」）
-    if (Date.now() - this.panelOpenedAt < 350) {
+    if (!this.subTapOk(`pickSub(${index})`)) {
       return;
     }
     this.showPanel = false;
@@ -2154,7 +2733,7 @@ export struct PlayerView {
 
   private pickAudio(index: number): void {
     // 同上：面板刚开的那一下不认
-    if (Date.now() - this.panelOpenedAt < 350) {
+    if (!this.subTapOk(`pickAudio(${index})`)) {
       return;
     }
     if (this.player === undefined) {
@@ -2210,6 +2789,9 @@ export struct PlayerView {
     if (this.player === undefined || this.player === null) {
       return;
     }
+    // 内核就绪 = 可以写属性了：把字幕样式（字号/描边/位置/背景）套一遍。
+    // 这一步必须在 onReady 里做，太早写入会被 mpv 忽略（和上面缓存参数同一个道理）。
+    this.applySubStyle();
     let line: string = '';
     try {
       const lib = this.player.native;
@@ -2237,6 +2819,13 @@ export struct PlayerView {
           }
         }
         line += ' ';
+      }
+      // 起播优先那个开关到底进没进内核（2.6.1.81）：只看 mpv.conf 里的文字不算数，
+      // 老设备可能整份没被读取。这里回读真实值 —— 之前「起播优先」没验过，就是缺这一行。
+      try {
+        line += `cache-pause-initial=${lib.getPropertyString('cache-pause-initial')}`;
+      } catch (e) {
+        line += 'cache-pause-initial=?';
       }
       console.info(`[amane] mpv 生效参数: ${line}`);
     } catch (error) {
@@ -2318,7 +2907,9 @@ export struct PlayerView {
               try {
                 const sid: string = this.xc.getXComponentSurfaceId();
                 p.native.attachSurface(sid);
-                AppLog.mark('surface', `onLoad gen=${gen} attach sid=${sid.substring(0, 6)} pos=${this.pos.toFixed(1)}`);
+                this.attachAt = Date.now();
+                this.preparePip();
+                AppLog.mark('surface', `onLoad gen=${gen} attach sid=${sid.substring(0, 6)} pos=${this.pos.toFixed(1)} sinceOpen=${this.openAt > 0 ? Date.now() - this.openAt : -1}ms`);
                 // 换 surface 后重新定位一帧，逼 mpv 按新 viewport 出画面
                 if (this.pos > 0.5) {
                   AppLog.mark('surface', `resume seek -> ${this.pos.toFixed(1)}`);
@@ -2437,8 +3028,10 @@ export struct PlayerView {
         )
 
       // 控件层：顶部悬浮胶囊 + 底部悬浮面板（view/PlayerChrome，纯 ArkUI）
-      // 竖屏下**永远画**（缩小了也要有播放/进度/全屏），全屏时才跟 showControls 走
-      if (this.viewMode === 'portrait' || this.showControls) {
+      // 竖屏只有**收缩态**（画面被压得很小）才强制画 —— 那时 MiniBar 是唯一入口；
+      // 正常竖屏要跟 showControls 走：点一下隐藏就该干净，不能留一条进度条在那
+      // （用户 2026-11-15 00:16 报的就是这个：隐藏控件后进度条还在）。
+      if (this.showControls || (this.viewMode === 'portrait' && this.shrunken())) {
         PlayerChrome({
           number: this.metaNumber,
           title: this.metaTitle,
@@ -2483,7 +3076,12 @@ export struct PlayerView {
             this.openAnnoInput();
           },
           onPip: () => {
-            this.startPip();
+            // 保留应用内浮窗入口；Home 的系统 PiP 由 setAutoStartEnabled 单独负责。
+            if (PlaySession.handoff !== undefined) {
+              PlaySession.handoff();
+            } else {
+              this.startPip();
+            }
           },
           onToggleFull: () => {
             this.toggleFull();
@@ -2836,34 +3434,24 @@ export struct PlayerView {
             Scroll() {
               if (this.pickerTab === 'version') {
                 Column({ space: 2 }) {
-                  ForEach(this.versions, (v: VerItem) => {
-                    Row({ space: 10 }) {
-                      Column({ space: 3 }) {
-                        Text(v.name)
-                          .fontSize(12)
-                          .fontColor(v.key === this.fileKey ? Theme.ACCENT : Theme.TEXT)
-                          .maxLines(1)
-                          .textOverflow({ overflow: TextOverflow.Ellipsis })
-                          .width('100%')
-                        Text(`${v.definition.length > 0 ? v.definition : '未知清晰度'} · ${Math.round(v.size / 1048576)} MB`)
-                          .fontSize(9)
-                          .fontColor(Theme.TEXT_FAINT)
-                          .width('100%')
-                      }
-                      .alignItems(HorizontalAlign.Start)
-                      .layoutWeight(1)
-                      if (v.key === this.fileKey) {
-                        Text('播放中')
-                          .fontSize(9)
-                          .fontColor(Theme.ACCENT)
-                      }
+                  // 版本：不同画质 / 来源
+                  ForEach(this.versionOnly(), (v: VerItem) => {
+                    this.VerRow(v)
+                  }, (v: VerItem) => `ver-${v.key}`)
+                  // 分集：同一部被切开的 cd1/cd2 —— 与版本分开列，别混成「N 个版本」
+                  if (this.partOnly().length > 0) {
+                    Row() {
+                      Text(`分集 · ${partsHint(this.partOnly().length)}`)
+                        .fontSize(10)
+                        .fontColor(Theme.TEXT_FAINT)
                     }
                     .width('100%')
-                    .padding({ left: 16, right: 16, top: 9, bottom: 9 })
-                    .onClick(() => {
-                      this.pickVersion(v);
-                    })
-                  }, (v: VerItem) => `ver-${v.key}`)
+                    .padding({ left: 16, right: 16, top: 12, bottom: 4 })
+
+                    ForEach(this.partOnly(), (v: VerItem) => {
+                      this.VerRow(v)
+                    }, (v: VerItem) => `part-${v.key}`)
+                  }
                 }
                 .width('100%')
               } else {
@@ -2952,10 +3540,29 @@ export struct PlayerView {
                 .fontColor(Theme.TEXT)
                 .fontWeight(FontWeight.Medium)
               Blank()
+              if (this.panelKind === 'subs') {
+                // 样式面板（2.6.1.55）：改完立刻生效，不打断播放
+                Text('样式')
+                  .fontSize(12)
+                  .fontColor(Theme.ACCENT)
+                  .padding({ left: 8, right: 12 })
+                  .onClick(() => {
+                    if (!this.subTapOk('样式')) {
+                      return;
+                    }
+                    this.showPanel = false;
+                    this.subStyleOpenedAt = Date.now();
+                    this.stylePanelDown = false;
+                    this.subStyleOpen = true;
+                  })
+              }
               Text('关闭')
                 .fontSize(12)
                 .fontColor(Theme.TEXT_FAINT)
                 .onClick(() => {
+                  if (!this.subTapOk('关闭')) {
+                    return;
+                  }
                   this.showPanel = false;
                 })
             }
@@ -3000,6 +3607,11 @@ export struct PlayerView {
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
                   .onClick(() => {
+                    // 外挂字幕这几行以前**没加守卫** —— 面板里没有内嵌轨道时它们就是第一行，
+                    // 抬手一落上去直接 applySub → 面板自己关掉，这才是「闪一下就消失」剩下的那半。
+                    if (!this.subTapOk(`远程字幕 ${item.name}`)) {
+                      return;
+                    }
                     this.applySub(item.id);
                   })
               }, (item: SubtitleItem) => `ext-${item.id}`)
@@ -3008,12 +3620,18 @@ export struct PlayerView {
                   .fontSize(11)
                   .height(30)
                   .onClick(() => {
+                    if (!this.subTapOk('手机导入')) {
+                      return;
+                    }
                     this.importSub();
                   })
                 Button('手动 URL')
                   .fontSize(11)
                   .height(30)
                   .onClick(() => {
+                    if (!this.subTapOk('手动 URL')) {
+                      return;
+                    }
                     this.addSubUrl();
                   })
               }
@@ -3048,6 +3666,12 @@ export struct PlayerView {
             bottom: this.viewMode === 'portrait' ? 8 : 14,
             right: this.viewMode === 'portrait' ? 0 : 14
           })
+          .onTouch((e: TouchEvent) => {
+            // 记录「按下真的落在面板上」：抬手才滑进来的那一次没有 Down（见 panelTapAllowed）
+            if (e.type === TouchType.Down) {
+              this.subPanelDown = true;
+            }
+          })
           .onClick(() => {
             // 吞掉点击：不然会冒泡到下面的遮罩层，面板刚点就关了
           })
@@ -3058,10 +3682,186 @@ export struct PlayerView {
         .backgroundColor('#66000000')
         .onClick(() => {
           // 遮罩同理：面板刚开的那一次点击不能把它关掉
-          if (Date.now() - this.panelOpenedAt < 350) {
+          if (!this.subTapOk('遮罩')) {
             return;
           }
           this.showPanel = false;
+        })
+      }
+
+      // 字幕样式面板（2.6.1.55）：字号 / 描边 / 位置 / 背景。
+      // 每点一下就写进 mpv 并立刻重画 —— 不重开流、不动 surface，播放不中断。
+      if (this.subStyleOpen) {
+        Column() {
+          Blank()
+          Column({ space: 11 }) {
+            Row() {
+              Text('字幕样式')
+                .fontSize(14)
+                .fontColor(Theme.TEXT)
+                .fontWeight(FontWeight.Medium)
+              Blank()
+              Text('完成')
+                .fontSize(12)
+                .fontColor(Theme.ACCENT)
+                .onClick(() => {
+                  if (!this.styleTapOk('完成')) {
+                    return;
+                  }
+                  this.subStyleOpen = false;
+                })
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16, top: 12, bottom: 2 })
+
+            Row({ space: 7 }) {
+              Text('字号')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width(34)
+              Flex({ wrap: FlexWrap.Wrap }) {
+                ForEach(SUB_SIZE_OPTS, (o: SubOpt) => {
+                  Text(o.l)
+                    .fontSize(12)
+                    .fontColor(this.subSizePct === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
+                    .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+                    .backgroundColor(this.subSizePct === o.v ? Theme.ACCENT : Theme.CARD_HI)
+                    .borderRadius(12)
+                    .margin({ right: 7, bottom: 4 })
+                    .onClick(() => {
+                      if (!this.styleTapOk(`字号 ${o.l}`)) {
+                        return;
+                      }
+                      this.subSizePct = o.v;
+                      SubStyle.setSize(o.v);
+                    this.applySubStyle();
+                    })
+                }, (o: SubOpt) => `ss-${o.v}`)
+              }
+              .layoutWeight(1)
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16 })
+
+            Row({ space: 7 }) {
+              Text('描边')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width(34)
+              Flex({ wrap: FlexWrap.Wrap }) {
+                ForEach(SUB_OUTLINE_OPTS, (o: SubOpt) => {
+                  Text(o.l)
+                    .fontSize(12)
+                    .fontColor(this.subOutlineW === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
+                    .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+                    .backgroundColor(this.subOutlineW === o.v ? Theme.ACCENT : Theme.CARD_HI)
+                    .borderRadius(12)
+                    .margin({ right: 7, bottom: 4 })
+                    .onClick(() => {
+                      if (!this.styleTapOk(`描边 ${o.l}`)) {
+                        return;
+                      }
+                      this.subOutlineW = o.v;
+                      SubStyle.setOutline(o.v);
+                    this.applySubStyle();
+                    })
+                }, (o: SubOpt) => `so-${o.v}`)
+              }
+              .layoutWeight(1)
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16 })
+
+            Row({ space: 7 }) {
+              Text('位置')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width(34)
+              Flex({ wrap: FlexWrap.Wrap }) {
+                ForEach(SUB_POS_OPTS, (o: SubOpt) => {
+                  Text(o.l)
+                    .fontSize(12)
+                    .fontColor(this.subPosPct === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
+                    .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+                    .backgroundColor(this.subPosPct === o.v ? Theme.ACCENT : Theme.CARD_HI)
+                    .borderRadius(12)
+                    .margin({ right: 7, bottom: 4 })
+                    .onClick(() => {
+                      if (!this.styleTapOk(`位置 ${o.l}`)) {
+                        return;
+                      }
+                      this.subPosPct = o.v;
+                      SubStyle.setPos(o.v);
+                    this.applySubStyle();
+                    })
+                }, (o: SubOpt) => `sp-${o.v}`)
+              }
+              .layoutWeight(1)
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16 })
+
+            Row({ space: 7 }) {
+              Text('背景')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width(34)
+              Flex({ wrap: FlexWrap.Wrap }) {
+                ForEach(SUB_BG_OPTS, (o: SubOpt) => {
+                  Text(o.l)
+                    .fontSize(12)
+                    .fontColor(this.subBgMode === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
+                    .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+                    .backgroundColor(this.subBgMode === o.v ? Theme.ACCENT : Theme.CARD_HI)
+                    .borderRadius(12)
+                    .margin({ right: 7, bottom: 4 })
+                    .onClick(() => {
+                      if (!this.styleTapOk(`背景 ${o.l}`)) {
+                        return;
+                      }
+                      this.subBgMode = o.v;
+                      SubStyle.setBg(o.v);
+                    this.applySubStyle();
+                    })
+                }, (o: SubOpt) => `sb-${o.v}`)
+              }
+              .layoutWeight(1)
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16 })
+
+            Text('改完立刻生效，不会打断播放')
+              .fontSize(9)
+              .fontColor(Theme.TEXT_FAINT)
+              .width('100%')
+              .padding({ left: 16, right: 16 })
+            Blank().height(10)
+          }
+          .width(this.viewMode === 'portrait' ? '90%' : '52%')
+          .backgroundColor('#66000000')
+          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
+          .border({ width: 0.5, color: '#26FFFFFF' })
+          .borderRadius(22)
+          .shadow({ radius: 26, color: '#73000000', offsetY: 10 })
+          .margin({ bottom: 14, right: this.viewMode === 'portrait' ? 0 : 14 })
+          .onTouch((e: TouchEvent) => {
+            if (e.type === TouchType.Down) {
+              this.stylePanelDown = true;
+            }
+          })
+          .onClick(() => {
+            // 吞掉点击，别冒泡到遮罩
+          })
+        }
+        .width('100%')
+        .height('100%')
+        .alignItems(HorizontalAlign.Center)
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          if (!this.styleTapOk('样式遮罩')) {
+            return;
+          }
+          this.subStyleOpen = false;
         })
       }
 

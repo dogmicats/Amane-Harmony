@@ -2,6 +2,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { httpPut } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { rateColor, rateDesc, rateLabel, RATE_DESCS, RATE_LABELS, StarPick } from '../../common/RateStyle';
+import { Haptics } from '../../common/Haptics';
 
 /** score=0 表示清除评分。详情页与「播放后打分」提示卡共用这一个入口。 */
 export async function rateFilm(mid: number, score: number): Promise<void> {
@@ -36,6 +37,8 @@ export struct RatingStars {
     this.busy = true;
     try {
       await rateFilm(this.metaId, next);
+      // 打分落地一记轻震（2.6.1.18）：星星是纯视觉反馈，加一点触感「确认收下了」
+      Haptics.tap();
       this.onRate(next);
     } catch (err) {
       const e = err as BusinessError;

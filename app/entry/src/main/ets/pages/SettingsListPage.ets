@@ -57,7 +57,7 @@ struct SettingsListPage {
           .onClick(() => {
             router.back();
           })
-        Text('列表页')
+        Text('列表与抽卡')
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
           .fontColor(Theme.TEXT)

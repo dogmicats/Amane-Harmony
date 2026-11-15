@@ -2,6 +2,7 @@ import { router } from '@kit.ArkUI';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
 import { FacetItem, emptyFacet, FacetParams, PrefixParams, facetLabel } from './FacetTypes';
+import { SectionHead } from '../../view/SectionHead';
 
 /** @Prop 的默认值必须是完整字面量：FacetItem 新增字段时只改这里，别散落在组件里。 */
 function emptyItemSeries(): FacetItem {
@@ -156,10 +157,15 @@ export struct FacetTagChips {
   @Builder
   Group(label: string, kind: string, items: FacetItem[]) {
     Column({ space: 6 }) {
-      Text(label)
-        .fontSize(12)
-        .fontColor(Theme.TEXT_FAINT)
-        .width('100%')
+      // 子分组标签（我的标签 / 标签 / 导演）：降一档到 10.5px —— 上面已经有分区标题了，
+      // 子标签如果跟分区标题一样大，又会回到「一片灰字」的老问题。
+      if (label.length > 0) {
+        Text(label)
+          .fontSize(10.5)
+          .fontColor(Theme.TEXT_FAINT)
+          .letterSpacing(0.3)
+          .width('100%')
+      }
       Flex({ wrap: FlexWrap.Wrap }) {
         ForEach(items, (t: FacetItem) => {
           Text(t.name)
@@ -182,11 +188,15 @@ export struct FacetTagChips {
 
   build() {
     Column({ space: 12 }) {
+      // 分区总标题（2.6.1.23）：这块原来只有「标签 / 导演」两个子标签，没有自己的头，
+      // 夹在带竖标的其它块之间会显得「没头没尾」—— 用户点名的三个标题之一。
+      SectionHead({ title: '标签' })
       if (this.userTags.length > 0) {
         this.Group(facetLabel('user_tag'), 'user_tag', this.userTags)
       }
       if (this.tags.length > 0) {
-        this.Group(facetLabel('tag'), 'tag', this.tags)
+        // 子标签名与分区标题重复，留空不画
+        this.Group('', 'tag', this.tags)
       }
       if (this.directors.length > 0) {
         this.Group(facetLabel('director'), 'director', this.directors)
@@ -195,10 +205,7 @@ export struct FacetTagChips {
       // 这两个是「这部片从哪来、还有哪些同编号的」，性质与标签不同，但入口就在这里最顺手。
       if (this.studio.id > 0 || this.prefix.length > 0) {
         Column({ space: 6 }) {
-          Text('出处')
-            .fontSize(12)
-            .fontColor(Theme.TEXT_FAINT)
-            .width('100%')
+          SectionHead({ title: '出处' })
           Flex({ wrap: FlexWrap.Wrap }) {
             if (this.studio.id > 0) {
               Text(`制片厂 · ${this.studio.name}`)
@@ -232,6 +239,8 @@ export struct FacetTagChips {
       }
     }
     .width('100%')
+    // 左对齐（2.6.1.23）：不加这行时 Column 默认居中，分区标题的竖标会跑到屏幕中间
+    .alignItems(HorizontalAlign.Start)
     .margin({ top: 14 })
   }
 }

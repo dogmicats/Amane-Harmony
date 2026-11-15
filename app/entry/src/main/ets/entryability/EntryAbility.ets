@@ -3,6 +3,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { cacheInit } from '../common/PageCache';
+import { imgCacheInit } from '../common/ImgCache';
 
 const DOMAIN: number = 0x0000;
 const TAG: string = 'Amane';
@@ -17,6 +18,9 @@ export default class EntryAbility extends UIAbility {
 
     // 页面级缓存（用户第 9 条）：越早初始化越好，第一个页面就能读到上次的数据
     cacheInit(this.context);
+    // 图片磁盘缓存（2.6.2.1）：索引必须在第一帧之前进内存，不然首屏每张图都当未命中，
+    // 白排一轮下载 —— 这里同步读一个小 JSON，几十 KB，几毫秒。
+    imgCacheInit(this.context);
 
     try {
       // 影院界面只在深色下成立，跟系统设置解耦
@@ -102,9 +106,12 @@ export default class EntryAbility extends UIAbility {
 
   onForeground(): void {
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onForeground');
+    // 页面靠它区分「被别的页盖住」和「整个应用切后台」——后者走小窗/后台播放，不该弹浮窗
+    AppStorage.setOrCreate<boolean>('appBg', false);
   }
 
   onBackground(): void {
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onBackground');
+    AppStorage.setOrCreate<boolean>('appBg', true);
   }
 }

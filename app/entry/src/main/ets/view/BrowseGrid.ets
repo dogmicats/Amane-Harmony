@@ -1,6 +1,6 @@
 import { router } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { httpGet } from '../common/Http';
+import { httpGetCached, cachedBody } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { Personalize } from '../common/Personalize';
@@ -248,10 +248,29 @@ export struct BrowseGrid {
   }
 
   private reload(): void {
-    this.items = [];
-    this.total = 0;
     this.error = '';
-    this.loading = true;
+    // ★ 2.6.2.1：上次那份先铺上 —— 切回媒体库/收藏时不闪骨架屏。
+    //   下面照样拉新的，网络回来再替换；缓存过期也不影响这里（cachedBody 不看 TTL）。
+    let showed: boolean = false;
+    const stale: string | undefined = cachedBody(this.buildUrl(0));
+    if (stale !== undefined) {
+      try {
+        const d: BrowseResult = JSON.parse(stale) as BrowseResult;
+        const list: MediaItem[] = safeItems(d.items);
+        if (list.length > 0) {
+          this.items = list;
+          this.total = d.total === undefined || d.total === null ? list.length : d.total;
+          showed = true;
+        }
+      } catch (err) {
+        showed = false;
+      }
+    }
+    if (!showed) {
+      this.items = [];
+      this.total = 0;
+      this.loading = true;
+    }
     this.load(0, false);
   }
 
@@ -274,7 +293,9 @@ export struct BrowseGrid {
 
   private async load(offset: number, append: boolean): Promise<void> {
     try {
-      const text: string = await httpGet(this.buildUrl(offset), Store.I.token);
+      // 带缓存：命中就立刻返回（同时也把这次结果写进磁盘，下次进来先铺这份）。
+      // TTL 压到 2 分钟 —— 媒体库要看新入库的片，不能像首页那样放 5 分钟。
+      const text: string = await httpGetCached(this.buildUrl(offset), Store.I.token, 120000);
       const result: BrowseResult = JSON.parse(text) as BrowseResult;
       const list: MediaItem[] = safeItems(result.items);
       this.items = append ? this.items.concat(list) : list;
@@ -640,8 +661,8 @@ export struct BrowseGrid {
           .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
             Personalize.zoom(event.scale);
           }))
-          .columnsGap(9)
-          .rowsGap(14)
+            .columnsGap(Theme.G_M)
+            .rowsGap(Theme.G_L)
           .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: TAB_SAFE })
           .width('100%')
           .height('100%')

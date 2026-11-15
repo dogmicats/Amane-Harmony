@@ -12,6 +12,17 @@ import { BottomSheet, ChipGroup, SortSheet, ToolPill } from '../../view/ListShee
 const PAGE_SIZE: number = 30;
 
 /**
+ * 演员列表的**跨重建缓存**（2.6.2.20）。
+ *
+ * 用户 21:50：在「演员」和「标签」之间互切时，页面先出来、再整页转圈重载一次。
+ * 原因是 TabContent 被销毁重建 → `aboutToAppear()` 里的 `reload()` 会清空 items 并置
+ * `loading = true`，于是每一刀都是「空页 + 转圈」。把上次结果留在模块级：
+ * 重建时先铺出来（零等待），再静默换新。
+ */
+let ACT_CACHE: ActorItem[] = [];
+let ACT_TOTAL: number = 0;
+
+/**
  * 公开扩展 actors：底部「演员」Tab。
  *
  * 版式与媒体库对齐（2.4.6.24）：一行标题、一行搜索、一行工具条，
@@ -105,6 +116,14 @@ export struct ActorsTab {
   ];
 
   aboutToAppear(): void {
+    // 切回本 tab（TabContent 重建）：先用上次的列表铺满，**不转圈**，再静默换新
+    if (ACT_CACHE.length > 0) {
+      this.items = ACT_CACHE;
+      this.total = ACT_TOTAL;
+      this.loading = false;
+      this.load(0, false);
+      return;
+    }
     this.reload();
   }
 
@@ -116,6 +135,11 @@ export struct ActorsTab {
   }
 
   onRefresh(): void {
+    // 外部刷新（别处改了资料/收藏）：有内容就静默换，别清空重来
+    if (this.items.length > 0) {
+      this.load(0, false);
+      return;
+    }
     this.reload();
   }
 
@@ -248,6 +272,9 @@ export struct ActorsTab {
   }
 
   private reload(): void {
+    // 条件/筛选真的变了才走这里：缓存一并作废（否则重建时又铺回旧条件的结果）
+    ACT_CACHE = [];
+    ACT_TOTAL = 0;
     this.items = [];
     this.total = 0;
     this.error = '';
@@ -261,6 +288,10 @@ export struct ActorsTab {
       const data: ActorList = safeActorList(JSON.parse(text) as ActorList);
       this.items = append ? this.items.concat(data.items) : data.items;
       this.total = data.total;
+      if (!append) {
+        ACT_CACHE = this.items;
+        ACT_TOTAL = this.total;
+      }
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] actors: ${e.code} ${e.message}`);

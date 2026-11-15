@@ -95,6 +95,172 @@ export class Downloader {
     return `${Downloader.ctx.filesDir}/offline`;
   }
 
+  /**
+   * 一个任务「应该」落在哪儿。命名规则与 `runNow()` 里 `savePath` 完全一致。
+   *
+   * 为什么需要它：`runNow()` 一开始就把 `t.path` 清成 ''，只有下载完成才回填。
+   * 于是「下完但 App 被杀」「暂停后删掉」这类记录 `path` 是空的，
+   * 老代码 `remove()` 只认 `t.path`，删完记录文件留在盘上 —— 用户 2026-11-15 就撞上：
+   * 下载管理显示 0 份，空间管理里离线影片还占 13.08 GB（两个孤儿文件）。
+   */
+  private static computedPath(t: OfflineTask): string {
+    const d: string = Downloader.dir();
+    if (d.length === 0) {
+      return '';
+    }
+    const base: string = t.number !== undefined && t.number.length > 0 ? t.number : `${t.mid}`;
+    const safe: string = `${base}_${t.key}`.replace(/[^\w.-]/g, '_');
+    return `${d}/${safe}.mp4`;
+  }
+
+  private static baseName(p: string): string {
+    if (p.length === 0) {
+      return '';
+    }
+    return p.substring(p.lastIndexOf('/') + 1);
+  }
+
+  /** 按顺序删这些文件，返回释放的字节数。重复路径只删一次（第二次 access 就 false 了）。 */
+  private static unlinkAll(paths: string[]): number {
+    let freed: number = 0;
+    for (let i = 0; i < paths.length; i++) {
+      const p: string = paths[i];
+      if (p.length === 0) {
+        continue;
+      }
+      try {
+        if (!fs.accessSync(p)) {
+          continue;
+        }
+        const st = fs.statSync(p);
+        fs.unlinkSync(p);
+        freed += st.size;
+      } catch (err) {
+        const e = err as BusinessError;
+        console.info(`[amane] offline unlink: ${e.code} ${e.message}`);
+      }
+    }
+    return freed;
+  }
+
+  /**
+   * 沙箱里躺着、但下载列表里已经没有的文件（删除时没删干净留下的孤儿）。
+   * 返回 [字节, 文件数]。下载管理页据此给一个「清理这些文件」的入口 ——
+   * 不然它们只在「空间管理」里以「离线影片」的形式出现，用户永远找不到。
+   */
+  static orphanStats(): number[] {
+    const d: string = Downloader.dir();
+    if (d.length === 0) {
+      return [0, 0];
+    }
+    let names: string[] = [];
+    try {
+      if (!fs.accessSync(d)) {
+        return [0, 0];
+      }
+      names = fs.listFileSync(d);
+    } catch (err) {
+      return [0, 0];
+    }
+    // 列表里还认领着的文件名（path 与按规则算出来的都算）
+    const owned: string[] = [];
+    for (let i = 0; i < Downloader.tasks.length; i++) {
+      const t = Downloader.tasks[i];
+      const a: string = Downloader.baseName(t.path);
+      if (a.length > 0) {
+        owned.push(a);
+      }
+      const b: string = Downloader.baseName(Downloader.computedPath(t));
+      if (b.length > 0) {
+        owned.push(b);
+      }
+    }
+    let total: number = 0;
+    let files: number = 0;
+    for (let j = 0; j < names.length; j++) {
+      const name: string = names[j];
+      let hit: boolean = false;
+      for (let k = 0; k < owned.length; k++) {
+        if (owned[k] === name) {
+          hit = true;
+          break;
+        }
+      }
+      if (hit) {
+        continue;
+      }
+      try {
+        const st = fs.statSync(`${d}/${name}`);
+        if (st.isDirectory()) {
+          continue;
+        }
+        total += st.size;
+        files += 1;
+      } catch (err) {
+        continue;
+      }
+    }
+    return [total, files];
+  }
+
+  /** 删掉孤儿文件，返回释放的字节数。只删「列表里没有」的，正在用的一个都不碰。 */
+  static clearOrphans(): number {
+    const d: string = Downloader.dir();
+    if (d.length === 0) {
+      return 0;
+    }
+    let names: string[] = [];
+    try {
+      if (!fs.accessSync(d)) {
+        return 0;
+      }
+      names = fs.listFileSync(d);
+    } catch (err) {
+      return 0;
+    }
+    const owned: string[] = [];
+    for (let i = 0; i < Downloader.tasks.length; i++) {
+      const t = Downloader.tasks[i];
+      const a: string = Downloader.baseName(t.path);
+      if (a.length > 0) {
+        owned.push(a);
+      }
+      const b: string = Downloader.baseName(Downloader.computedPath(t));
+      if (b.length > 0) {
+        owned.push(b);
+      }
+    }
+    let freed: number = 0;
+    for (let j = 0; j < names.length; j++) {
+      const name: string = names[j];
+      let hit: boolean = false;
+      for (let k = 0; k < owned.length; k++) {
+        if (owned[k] === name) {
+          hit = true;
+          break;
+        }
+      }
+      if (hit) {
+        continue;
+      }
+      const p: string = `${d}/${name}`;
+      try {
+        if (!fs.accessSync(p)) {
+          continue;
+        }
+        const st = fs.statSync(p);
+        if (st.isDirectory()) {
+          continue;
+        }
+        fs.unlinkSync(p);
+        freed += st.size;
+      } catch (err) {
+        continue;
+      }
+    }
+    return freed;
+  }
+
   private static ensureDir(): boolean {
     const d = Downloader.dir();
     if (d.length === 0) {
@@ -813,15 +979,9 @@ export class Downloader {
   /** 删掉缓存（连文件一起）。 */
   static remove(mid: number, key: string): void {
     const t = Downloader.find(mid, key);
-    if (t !== undefined && t.path.length > 0) {
-      try {
-        if (fs.accessSync(t.path)) {
-          fs.unlinkSync(t.path);
-        }
-      } catch (err) {
-        const e = err as BusinessError;
-        console.info(`[amane] offline unlink: ${e.code} ${e.message}`);
-      }
+    if (t !== undefined) {
+      // 只认 t.path 会漏：下载中途 path 被清空过，文件其实按命名规则躺在盘上
+      Downloader.unlinkAll([t.path, Downloader.computedPath(t)]);
     }
     const next: OfflineTask[] = [];
     for (let i = 0; i < Downloader.tasks.length; i++) {
@@ -836,16 +996,9 @@ export class Downloader {
 
   static clearAll(): void {
     for (let i = 0; i < Downloader.tasks.length; i++) {
-      const p = Downloader.tasks[i].path;
-      if (p.length > 0) {
-        try {
-          if (fs.accessSync(p)) {
-            fs.unlinkSync(p);
-          }
-        } catch (err) {
-          // 删不掉就留着，记录先清
-        }
-      }
+      const t = Downloader.tasks[i];
+      // 同 remove()：path 可能为空，按命名规则再算一遍
+      Downloader.unlinkAll([t.path, Downloader.computedPath(t)]);
     }
     Downloader.tasks = [];
     // 字幕表一起清（单个删除时留着，重下同片能直接复用）

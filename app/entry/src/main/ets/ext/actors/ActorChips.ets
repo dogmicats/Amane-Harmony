@@ -4,6 +4,7 @@ import { httpGet } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
 import { BrowseParams } from '../../common/Types';
+import { SectionHead } from '../../view/SectionHead';
 import { ageBandOf, ageBandLabel, ageGenderLabel, PREF_AGE_GENDER } from '../../common/BrowseOptions';
 import {
   ActorLookup, ActorParams, CastMember, CastMemberList, safeCastMembers
@@ -201,12 +202,10 @@ export struct ActorChips {
   build() {
     Column({ space: 8 }) {
       Row({ space: 6 }) {
-        Text('出演')
-          .fontSize(12)
-          .fontColor(Theme.TEXT_FAINT)
-        Text(`${this.members.length > 0 ? this.members.length : this.names.length}`)
-          .fontSize(10)
-          .fontColor(Theme.TEXT_FAINT)
+        SectionHead({
+          title: '出演',
+          count: `${this.members.length > 0 ? this.members.length : this.names.length}`
+        })
         Blank()
         // 年龄只看一个性别：默认女优，点一下换男优；和筛选/排序共用同一份偏好。
         Text(this.ageGender === 'male' ? '♂ 男优' : '♀ 女优')

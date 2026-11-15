@@ -2,6 +2,7 @@ import { MediaItem } from '../common/Types';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { MarkBadges } from './MarkBadges';
+import { ReasonLine } from '../common/Reason';
 
 /**
  * 首页「每日推荐」横幅行。
@@ -18,12 +19,41 @@ export struct BannerRow {
 
   title: string = '';
   subtitle: string = '';
-  items: MediaItem[] = [];
+  /** 2.6.1.32：同 HeroBanner —— 普通成员不会跟着父组件刷新，下拉后每日推荐会停在旧那批。 */
+  @Prop items: MediaItem[] = [];
   /** 行头「推荐理由」入口；空串 = 不显示（设置里关掉推荐理由时）。 */
   whyLabel: string = '';
   onWhy: () => void = () => {};
   onMore: () => void = () => {};
   onTap: (item: MediaItem) => void = () => {};
+  /**
+   * 今天这批片的推荐理由（2.6.1.36）：**每张卡自己的下方**写它那句。
+   *
+   * 用户 19:21：「把每部影片的推荐理由对应写上就好了」—— 理由要和片对得上号，
+   * 所以不能再拿一个汇总块，而是贴在各自的卡片下面（红框那个位置）。
+   * 传数组而不是回调：ArkTS 的自定义组件传函数属性在 ForEach 重建时会踩引用，数组更稳。
+   */
+  @Prop lines: ReasonLine[] = [];
+
+  /** 这部片今天的理由（没有就空串，卡片下方不留白）。 */
+  private reasonOf(id: number): string {
+    for (let i = 0; i < this.lines.length; i++) {
+      if (this.lines[i].id === id) {
+        return this.lines[i].reason;
+      }
+    }
+    return '';
+  }
+
+  /** 有理由时列表要多留一条高度（2 行 11px + 间距）。 */
+  private stripHeight(): number {
+    for (let i = 0; i < this.items.length; i++) {
+      if (this.reasonOf(this.items[i].id).length > 0) {
+        return 44;
+      }
+    }
+    return 0;
+  }
 
   /** 卡片宽度：高度 × 真实比例，限制在 1.25~2.4 之间，避免极端长条。 */
   private widthOf(item: MediaItem): number {
@@ -40,10 +70,19 @@ export struct BannerRow {
     Column() {
       Row() {
         Column() {
-          Text(this.title)
-            .fontSize(17)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(Theme.TEXT)
+          Row({ space: 6 }) {
+            Text(this.title)
+              .fontSize(17)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Theme.TEXT)
+            // 2.6.1.30：和顶部「随手翻到」区分开 —— 这一行是当天固定的那批
+            Text('每天固定')
+              .fontSize(9)
+              .fontColor(Theme.TEXT_FAINT)
+              .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+              .backgroundColor(Theme.CARD_HI)
+              .borderRadius(4)
+          }
           if (this.subtitle.length > 0) {
             Text(this.subtitle)
               .fontSize(11)
@@ -83,7 +122,9 @@ export struct BannerRow {
       List({ space: 12 }) {
         ForEach(this.items, (item: MediaItem) => {
           ListItem() {
-            Stack({ alignContent: Alignment.BottomStart }) {
+            // 卡片 + 它自己那句理由（理由在卡片下方，不压图、不挡标题）
+            Column({ space: 5 }) {
+              Stack({ alignContent: Alignment.BottomStart }) {
               Image(Store.I.img(item.fanart.length > 0 ? item.fanart : item.poster))
                 .width(this.widthOf(item))
                 .height(BannerRow.CARD_H)
@@ -137,15 +178,33 @@ export struct BannerRow {
             .onClick(() => {
               this.onTap(item);
             })
+
+              // 这张片今天的理由：金色一句，最多两行；没有就不占位
+              if (this.reasonOf(item.id).length > 0) {
+                Text(this.reasonOf(item.id))
+                  .fontSize(11)
+                  .fontColor(Theme.GOLD)
+                  .lineHeight(16)
+                  .maxLines(2)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .width(this.widthOf(item))
+                  .padding({ left: 2, right: 2 })
+              }
+            }
+            .alignItems(HorizontalAlign.Start)
           }
         }, (item: MediaItem) => `bn-${item.id}`)
       }
       .listDirection(Axis.Horizontal)
       .scrollBar(BarState.Off)
       .width('100%')
-      .height(BannerRow.CARD_H)
+      .height(BannerRow.CARD_H + this.stripHeight())
       .contentStartOffset(Theme.PAGE_PAD)
       .contentEndOffset(Theme.PAGE_PAD)
+      // 同 MediaRow：触碰落在横向行上就不抢（行自己决定是滚动还是点击）
+      .onTouch((ev: TouchEvent) => {
+        AppStorage.setOrCreate<number>('rowTouchAt', Date.now());
+      })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)

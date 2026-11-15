@@ -6,6 +6,19 @@ import { rateLabel, rateColor } from '../ext/ratings/RatingStars';
 import { MarkBadges } from './MarkBadges';
 
 /**
+ * 首屏错落入场（2.6.1.18）：**模块级**计数器，不需要调用方传 index。
+ *
+ * 一批卡片在同一帧里连续 `aboutToAppear`，按出现顺序每张差 18ms，最多推到 240ms；
+ * 两批之间有 140ms 以上的空档就重置。超过 520ms 才出现的卡片（滚动补进来的）
+ * 直接显示、不播动画 —— 否则一边滑一边有卡片在闪，比没有动画更糟。
+ *
+ * 为什么不用 `ForEach` 的 index：`PosterCard` 被十几个页面复用，
+ * 每处都改签名风险远大于收益，这里自己排一下就够了。
+ */
+let batchSeq: number = 0;
+let batchAt: number = 0;
+
+/**
  * 海报卡：宽 116 固定，右上角评分，底部进度条（有播放进度时）。
  * 普通成员（非 @State）：内容由父组件的 ForEach 负责重建。
  */
@@ -24,6 +37,32 @@ export struct PosterCard {
   /** 第三行显示发行日期（媒体库网格用，信息密度和原来一致）。 */
   showDate: boolean = false;
   onTap: () => void = () => {};
+  /** 入场动画是否已经播过（见文件头的「首屏错落入场」）。 */
+  @State private shown: boolean = false;
+  /** 按下态（缩放反馈）。 */
+  @State private press: boolean = false;
+  @StorageProp('amaneFx') private fx: number = 2;
+
+  aboutToAppear(): void {
+    const now: number = Date.now();
+    if (this.fx <= 0 || now - batchAt > 140) {
+      batchSeq = 0;
+      batchAt = now;
+    }
+    if (this.fx <= 0 || now - batchAt > 520) {
+      this.shown = true;
+      return;
+    }
+    const delay: number = Math.min(240, batchSeq * 18);
+    batchSeq++;
+    if (delay === 0) {
+      this.shown = true;
+      return;
+    }
+    setTimeout(() => {
+      this.shown = true;
+    }, delay);
+  }
 
   private itemMarks(): string[] {
     if (this.item.marks === undefined || this.item.marks === null) {
@@ -78,7 +117,9 @@ export struct PosterCard {
           }
         }
         .width(this.fluid ? '100%' : this.cardWidth)
-        .borderRadius(Theme.RADIUS)
+        .borderRadius(Theme.R_IMG)
+        // 1px 描边：深色底上海报边缘会和背景糊在一起，加一道极淡的白边才有"卡片感"
+        .border({ width: 1, color: Theme.STROKE })
         .clip(true)
 
         // 右上角竖排两行：上行是标记 + 刮削评分，下行是「我的评价」。
@@ -149,6 +190,18 @@ export struct PosterCard {
     }
     .width(this.fluid ? '100%' : this.cardWidth)
     .alignItems(HorizontalAlign.Start)
+    .opacity(this.shown ? 1 : 0)
+    .translate({ y: this.shown ? 0 : 10 })
+    // 按压缩放（2026-11-14）：手指下去缩到 0.97，抬手回弹 —— 比"点完变色"更像实体按键
+    .scale({ x: this.press ? 0.97 : 1, y: this.press ? 0.97 : 1 })
+    .animation({ duration: 140, curve: Curve.EaseOut })
+    .onTouch((e: TouchEvent) => {
+      if (e.type === TouchType.Down) {
+        this.press = true;
+      } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+        this.press = false;
+      }
+    })
     .onClick(() => {
       this.onTap();
     })

@@ -19,6 +19,7 @@ interface PreviewPrefs {
   ok: boolean;
   enabled: boolean;
   warm: boolean;
+  shorts_warm?: boolean;
   budget_mb: number;
   interval: number;
   used_mb: number;
@@ -29,6 +30,7 @@ interface PreviewPrefs {
 @Component
 struct PreviewSettingsPage {
   @State warm: boolean = true;
+  @State shortsWarm: boolean = true;
   @State budget: number = 2048;
   @State usedMb: number = 0;
   @State count: number = 0;
@@ -43,9 +45,13 @@ struct PreviewSettingsPage {
   @State dirWritable: boolean = true;
   @State dirDraft: string = '';
   @State showGuide: boolean = false;
+  /** 负一屏左侧光晕提示（本机偏好 minus_glow，默认开）。 */
+  @State glowHint: boolean = true;
 
   aboutToAppear(): void {
     this.load();
+    // 负一屏光晕开关是纯本机偏好（服务端没有这个概念）
+    this.glowHint = Store.I.prefString('minus_glow', '1') !== '0';
   }
 
   private async load(): Promise<void> {
@@ -54,6 +60,7 @@ struct PreviewSettingsPage {
         `${Store.I.user}/api/user/preview/settings`, Store.I.token);
       const o = JSON.parse(text) as Record<string, Object>;
       this.warm = o.warm !== false;
+      this.shortsWarm = o.shorts_warm !== false;
       this.budget = Number(o.budget_mb) || 0;
       this.usedMb = Number(o.used_mb) || 0;
       this.count = Number(o.count) || 0;
@@ -121,19 +128,12 @@ struct PreviewSettingsPage {
     await this.load();
   }
 
-  @Builder
-  BudgetChip(v: number) {
-    Text(v === 0 ? '不限制' : (v >= 1024 ? `${v / 1024} GB` : `${v} MB`))
-      .fontSize(12)
-      .fontColor(this.budget === v ? '#FFFFFF' : Theme.TEXT_DIM)
-      .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-      .backgroundColor(this.budget === v ? Theme.ACCENT : Theme.CARD_HI)
-      .borderRadius(13)
-      .margin({ right: 8, bottom: 6 })
-      .onClick(() => {
-        this.budget = v;
-        this.save(`{"budget_mb":${v}}`);
-      })
+  /** 上限摘要（只读）。编辑入口在「设置 → 刷一刷」，2026-11-15 收敛成一个地方。 */
+  private budgetText(): string {
+    if (this.budget <= 0) {
+      return '不限制';
+    }
+    return this.budget >= 1024 ? `${this.budget / 1024} GB` : `${this.budget} MB`;
   }
 
   build() {
@@ -231,55 +231,24 @@ struct PreviewSettingsPage {
                 .lineHeight(15)
             }
 
-            Text(this.showGuide ? '收起说明 ▴' : '怎么加映射 / 换盘 ▾')
-              .fontSize(11)
-              .fontColor(Theme.ACCENT)
-              .width('100%')
-              .padding({ top: 2 })
-              .onClick(() => {
-                this.showGuide = !this.showGuide;
-              })
-
-            if (this.showGuide) {
-              Column({ space: 6 }) {
-                Text('1. 在宿主机上先建目录（挑空间大的分区）：')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_DIM)
-                  .width('100%')
-                Text('   mkdir -p /srv/amane-cache')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .width('100%')
-                Text('2. 编辑旁挂服务的 compose 文件，在 volumes 里加一行：')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_DIM)
-                  .width('100%')
-                Text('   - /srv/amane-cache:/cache')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .width('100%')
-                Text('3. 重建容器让它生效：')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_DIM)
-                  .width('100%')
-                Text('   docker compose up -d --force-recreate')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .width('100%')
-                Text('4. 回来把这里的路径填成容器里的那个（/cache），保存。')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_DIM)
-                  .width('100%')
-                Text('注意：路径必须已经挂进容器，否则写了也存不进去。')
-                  .fontSize(10)
-                  .fontColor(Theme.GOLD)
-                  .width('100%')
-              }
-              .width('100%')
-              .padding(10)
-              .backgroundColor(Theme.CARD_HI)
-              .borderRadius(8)
+            // 加挂载的具体命令 2026-11-15 起收进「设置 → 服务器连接 → 部署说明」：
+            // 这类东西属于部署细节，散在功能页里每次都要重讲一遍。
+            Row({ space: 8 }) {
+              Text('怎么加映射 / 换盘')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .layoutWeight(1)
+              Text('部署说明 ›')
+                .fontSize(11)
+                .fontColor(Theme.ACCENT)
+                .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+                .backgroundColor(Theme.accentAlpha(0.12))
+                .borderRadius(8)
+                .onClick(() => {
+                  router.pushUrl({ url: 'pages/SettingsConnectionPage' });
+                })
             }
+            .width('100%')
           }
           .width('100%')
           .padding(14)
@@ -313,26 +282,49 @@ struct PreviewSettingsPage {
           .backgroundColor(Theme.CARD)
           .borderRadius(Theme.RADIUS)
 
-          // 预算
+          // 刷一刷素材的开关已经搬到「设置 → 刷一刷」独立一页（2.6.1.64）：
+          // 用户 22:42 反馈「藏在进度条预览里，不深入找根本想不到」。
+          // 这里只留一句指路，不再重复放开关。
+          Text('刷一刷素材的开关、负一屏提示光晕、以及这条上限的编辑入口，都收在「设置 → 刷一刷」；'
+            + '这一页只显示当前值。')
+            .fontSize(10)
+            .fontColor(Theme.TEXT_FAINT)
+            .width('100%')
+            .lineHeight(15)
+            .padding({ left: 4, right: 4 })
+
+          // 负一屏提示光晕（2.6.1.64）2026-11-15 已搬到「设置 → 刷一刷」：
+          // 它讲的是首页/负一屏的事，和进度条预览没有关系。
+
+          // 预算（两条预生成共用这一份上限：它们写的是同一个缓存目录）
+          // 2026-11-15：上限只在「设置 → 刷一刷」那一个地方改，这里只显示当前值 + 跳过去改。
           Column({ space: 8 }) {
-            Text('占用上限')
-              .fontSize(14)
-              .fontColor(Theme.TEXT)
-              .width('100%')
-            Flex({ wrap: FlexWrap.Wrap }) {
-              this.BudgetChip(0)
-              this.BudgetChip(512)
-              this.BudgetChip(1024)
-              this.BudgetChip(2048)
-              this.BudgetChip(4096)
+            Row() {
+              Text('占用上限')
+                .fontSize(14)
+                .fontColor(Theme.TEXT)
+                .layoutWeight(1)
+              Text(this.budgetText())
+                .fontSize(12)
+                .fontColor(Theme.ACCENT)
             }
             .width('100%')
-            Text('超过上限时会按「最久没看过」的顺序自动删旧的。当前全库 5000 多部，全做约 600MB。')
+            Text('预览图和刷一刷的封面帧是同一批文件，共用一份上限。为了不出现两个地方改同一个值的困惑，'
+              + '编辑入口收在「设置 → 刷一刷」里，这一页只显示当前值。')
               .fontSize(10)
               .fontColor(Theme.TEXT_FAINT)
               .width('100%')
               .lineHeight(15)
             Row({ space: 8 }) {
+              Text('去刷一刷里改')
+                .fontSize(11)
+                .fontColor('#FFFFFF')
+                .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+                .backgroundColor(Theme.ACCENT)
+                .borderRadius(8)
+                .onClick(() => {
+                  router.pushUrl({ url: 'pages/ShortsSettingsPage' });
+                })
               Text('清空预览图')
                 .fontSize(11)
                 .fontColor(Theme.DANGER)
@@ -352,6 +344,11 @@ struct PreviewSettingsPage {
               Blank()
             }
             .width('100%')
+            Text('超过上限时会按「最久没看过」的顺序自动删旧的。当前全库 5000 多部，全做约 600MB。')
+              .fontSize(10)
+              .fontColor(Theme.TEXT_FAINT)
+              .width('100%')
+              .lineHeight(15)
           }
           .width('100%')
           .padding(14)

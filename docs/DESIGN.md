@@ -23,7 +23,7 @@
      （2026-11-13 修正：把长文塞进三列，窄屏会变成细长文字柱，桌面也被最长一列撑出空白）；
    - **文字行**：没图、或截图里有测试数据的（④ 亮点 / ⑤ 就地起播 / ⑥ 弹幕与评价）放**表格外**，
      每块独立成段、段间留空行——塞进表格格子会和上面的图卡挤成「残缺的卡片」（2026-11-11 用户驳回）；
-   - **宽幅图**：最该展示的一条用 `width="100%"` 独占一行（当前是 ⑧ 出演年龄），
+   - **宽幅图**：最该展示的一条可以用 `width="100%"` 独占一行（2.7.0 起没有这一档，全部 460 宽），
      其余 460 宽**也左对齐**，说明紧跟在图下方（不给图加居中包裹，否则图和文字两条基线对不上）。
    **禁止「左图右文」并排**（2026-11-11 用户驳回）：竖屏截图 720×1507 缩到 150 宽仍有 314 高，
    右侧只有两三行字，行高被图撑起来，文字下方空出一大片，第一眼就是「这页没排版」。
@@ -62,15 +62,23 @@
 
 | 文件 | 用途 |
 |---|---|
-| `docs/screenshots/cast-finder.png` | **有趣的功能**（① 共演检索）+ Hero |
+| `docs/screenshots/cast-finder.png` | **有趣的功能**（① 共演检索，2.7.0 起是「3 女 → 105 部」的结果页）+ Hero |
 | `docs/screenshots/gacha.png` | **有趣的功能**（② 抽卡，演员页盲盒是同一入口） |
 | `docs/screenshots/facets.png` | **有趣的功能**（③ 分类体系） |
-| `docs/screenshots/frame-picks.png` | **有趣的功能**（⑦ 截帧，带时间戳与存图操作） |
-| `docs/screenshots/detail-age-crop.png` | **有趣的功能**（⑦ 出演年龄局部：演员行 +「出演 N 岁」徽章，止于版本列表之前） |
+| `docs/screenshots/highlights-crop.png` | **有趣的功能**（④ 亮点：详情页亮点条，带 07:10 / 34:07 时间点） |
+| `docs/screenshots/detail-age-crop.png` | **有趣的功能**（⑦ 出演年龄局部：演员行 +「出演 N 岁」徽章，止于亮点区之前） |
+| `docs/screenshots/prefix.png` | **有趣的功能**（⑧ 元数据价值最大化之番号前缀，GHNU 番号 94 部） |
 | `docs/screenshots/stats-crop.png` | **有趣的功能**（⑩ 观看统计局部：概览卡 + 四个指标 +「数据少」，不含筛选与诊断脚注） |
+| `docs/screenshots/tier-board.png` | **有趣的功能**（⑪ 从夯到拉座次图） |
+| `docs/screenshots/search-alias-crop.png` | **有趣的功能**（⑫ 别名 / 俗称搜索） |
+| `docs/screenshots/shorts-main.png` | **有趣的功能**（⑬ 刷一刷）+ Hero 素材 |
+| `docs/screenshots/liked-list.png` | **有趣的功能**（⑬ 辅助：我的喜爱，点心记录的片段列表） |
+| `docs/screenshots/home-scope.png` | **有趣的功能**（⑭ 首页自己挑：条件面板） |
+| `docs/screenshots/backup.png` | **有趣的功能**（⑮ 备份与恢复：导出 / 选文件 / 导入预览） |
+| `docs/screenshots/cast-sheet.png` · `backup-preview.png` · `settings-home.png` · `cache.png` | 近期补拍备份（共演条件面板、导入预览、设置首页、空间管理），需要佐证时再用 |
 | `docs/screenshots/cast-age-wide.png` | 历史存档（2.6.0 起不再占宽幅主推位） |
-| `docs/screenshots/cast-age-badge.png` | 备用：详情页「出演 22 岁」徽章特写，需要佐证「岁数从演员行来」时作 ⑧ 的第二张图 |
-| `docs/screenshots/prefix.png` | **有趣的功能**（⑨ 系列属性 / 番号前缀，GHNU 番号 94 部） |
+| `docs/screenshots/cast-age-badge.png` | 备用：详情页「出演 22 岁」徽章特写 |
+| `docs/screenshots/frame-picks.png` | 历史存档（2.6.0 的「我的截帧」管理页；2.7.0 起 ④ 改用 `highlights-crop.png`） |
 | `docs/screenshots/home.png` | Hero、完善的基础功能 |
 | `docs/screenshots/library-250.png` | 完善的基础功能（媒体库，2.5.0 统一工具条 + 评分角标） |
 | `docs/screenshots/actors.png` | 完善的基础功能 |

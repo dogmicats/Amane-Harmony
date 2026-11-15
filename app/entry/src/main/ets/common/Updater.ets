@@ -2,7 +2,7 @@ import { request } from '@kit.BasicServicesKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs, hash, picker } from '@kit.CoreFileKit';
-import { httpGet, httpGetFresh } from './Http';
+import { httpGet, httpGetFresh, httpPut } from './Http';
 import { Store } from './Store';
 import { BuildConfig } from './BuildConfig';
 
@@ -141,6 +141,19 @@ export function isNewer(a: string, b: string): boolean {
   return false;
 }
 
+/** 服务端自动升级的状态（宿主机装了 deploy/auto-update.sh 才 supported）。 */
+export interface UpgradeStatus {
+  supported: boolean;
+  enabled: boolean;
+  /** idle / checking / upgrading / done / failed（空串 = 助手还没跑过）。 */
+  state: string;
+  /** 上次结果的人话说明。 */
+  message: string;
+  from: string;
+  to: string;
+  at: string;
+}
+
 function str(o: Record<string, Object>, k: string): string {
   const v = o[k];
   if (v === undefined || v === null) {
@@ -236,6 +249,61 @@ export class Updater {
       const e = err as BusinessError;
       console.info(`[amane] update ping: ${e.code} ${e.message}`);
       return '';
+    }
+  }
+
+  /**
+   * 服务端自动升级的状态。
+   *
+   * 现实分工：真正干活的是宿主机上的 `deploy/auto-update.sh`（它有 docker 权限），
+   * App 只能「开关 / 请求 / 看结果」。所以 `supported=false` 表示这台机器没装助手，
+   * 页面就该退回原来的手动步骤，不能假装能一键升。
+   */
+  static async upgradeStatus(): Promise<UpgradeStatus> {
+    const out: UpgradeStatus = {
+      supported: false, enabled: false, state: '', message: '',
+      from: '', to: '', at: ''
+    };
+    try {
+      const raw: string = await httpGet(`${Store.I.user}/api/user/upgrade/status`, Store.I.token);
+      const o = JSON.parse(raw) as Record<string, Object>;
+      out.supported = `${o['supported']}` === 'true';
+      out.enabled = `${o['enabled']}` === 'true';
+      out.state = str(o, 'state');
+      out.message = str(o, 'message');
+      out.from = str(o, 'from');
+      out.to = str(o, 'to');
+      out.at = str(o, 'at');
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] upgrade status: ${e.code} ${e.message}`);
+    }
+    return out;
+  }
+
+  /** 开 / 关自动升级；返回是否写成功。 */
+  static async setUpgradeAuto(on: boolean): Promise<boolean> {
+    try {
+      await httpPut(`${Store.I.user}/api/user/upgrade/auto`, Store.I.token,
+        JSON.stringify({ enabled: on }));
+      return true;
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] upgrade auto: ${e.code} ${e.message}`);
+      return false;
+    }
+  }
+
+  /** 「现在升级」：只投一个请求，定时器 ≤1 分钟内动手。 */
+  static async requestUpgrade(version: string): Promise<boolean> {
+    try {
+      await httpPut(`${Store.I.user}/api/user/upgrade/request`, Store.I.token,
+        JSON.stringify({ version: version }));
+      return true;
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] upgrade request: ${e.code} ${e.message}`);
+      return false;
     }
   }
 

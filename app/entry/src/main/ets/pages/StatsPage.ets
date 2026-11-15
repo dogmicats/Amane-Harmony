@@ -3,6 +3,8 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet, httpPost } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { SectionHead } from '../view/SectionHead';
+import { CalDay, HeatCalendar } from '../view/HeatCalendar';
 
 /**
  * 观看统计（2.5.3 · 报表 v1）。
@@ -44,6 +46,24 @@ const TOP_LIMIT: number = 10;
 const MIN_STATS_VER_FILTER: number = 2;
 
 /** 跳演员作品页的参数（与 `SearchPage` 里那份同形，别跨页 import）。 */
+/** 观影日历（2.6.1.25）：一天一格，只有看过的日子才回来。 */
+interface CalendarData {
+  days: CalDay[];
+  from: string;
+  to: string;
+  window: number;
+  active_days: number;
+  best: CalDay | null;
+  max_streak: number;
+}
+
+interface CalendarRes {
+  ok: boolean;
+  confidence: string;
+  reason?: string;
+  data: CalendarData;
+}
+
 interface ActorNav {
   id: number;
   name: string;
@@ -659,12 +679,21 @@ struct StatsPage {
   /** 预览用的几张缩略图（按档从高到低取）。 */
   @State tierThumbs: string[] = [];
 
+  // ---- 2.6.1.25 观影日历（365 格） --------------------------------------
+  @State calSt: string = ST_LOADING;
+  @State calDays: CalDay[] = [];
+  @State calFrom: string = '';
+  @State calActive: number = 0;
+  @State calBestText: string = '';
+  @State calStreak: number = 0;
+
   aboutToAppear(): void {
     this.reload();
   }
 
   private reload(): void {
     this.loadOverview();
+    this.loadCalendar();
     this.loadTrend();
     this.loadWhen();
     this.loadHeat(this.heatMid);
@@ -755,6 +784,34 @@ struct StatsPage {
       const e = err as BusinessError;
       console.error(`[amane] stats/overview: ${e.code} ${e.message}`);
       this.ovSt = ST_OFF;
+    }
+  }
+
+  private async loadCalendar(): Promise<void> {
+    this.calSt = ST_LOADING;
+    try {
+      // 日历固定看「最近 371 天」，**不跟上面的时间范围筛选联动**：
+      // 一个热力图只有铺满一年才看得出季节性的习惯；跟着 7 天/30 天筛选走就变成几格了。
+      // 口径（真实/测试）还是要跟，否则两种数据混在一张图上。
+      const qs: string = this.srvFlags ? `?days=371&scope=${this.scopeKey}` : '?days=371';
+      const text: string = await httpGet(
+        `${Store.I.user}/api/user/stats/calendar${qs}`, Store.I.token);
+      const res: CalendarRes = JSON.parse(text) as CalendarRes;
+      const data: CalendarData = res.data;
+      this.calDays = data.days === undefined || data.days === null ? [] : data.days;
+      this.calFrom = typeof data.from === 'string' ? data.from : '';
+      this.calActive = num(data.active_days);
+      this.calStreak = num(data.max_streak);
+      if (data.best === null || data.best === undefined) {
+        this.calBestText = '';
+      } else {
+        this.calBestText = `${data.best.d} · ${fmtDur(data.best.s)}`;
+      }
+      this.calSt = res.ok ? ST_OK : ST_EMPTY;
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] calendar: ${e.code}`);
+      this.calSt = ST_OFF;
     }
   }
 
@@ -1822,6 +1879,113 @@ struct StatsPage {
    * 在「真实」与「模拟」之间切，否则验收时看到的数字和真实情况永远是两回事。
    * 老服务端（口径版本 <2）没有这两个参数，整条隐藏 —— 给了控件却不起作用更糟。
    */
+  /**
+   * 观影日历（2.6.1.25）：一年铺成 53 列 × 7 行，一天一格。
+   *
+   * 为什么放在最上面：这一块回答的是「我这一年是什么样」，比「7 天内看了几部」
+   * 更接近用户打开统计页时想看的东西。下面的数字块是它的注脚。
+   */
+  @Builder
+  CalendarBlock() {
+    Column({ space: 10 }) {
+      Row({ space: 8 }) {
+        SectionHead({ title: '观影日历' })
+        Blank()
+        Text('最近一年')
+          .fontSize(9)
+          .fontColor(Theme.TEXT_FAINT)
+      }
+      .width('100%')
+
+      if (this.calSt === ST_LOADING) {
+        Column()
+          .width('100%')
+          .height(92)
+          .backgroundColor(Theme.CARD_HI)
+          .borderRadius(8)
+      } else if (this.calSt === ST_OFF) {
+        Text('这台服务端还没有日历接口（需要 1.4.52 以上）')
+          .fontSize(10)
+          .fontColor(Theme.TEXT_FAINT)
+          .width('100%')
+      } else if (this.calSt === ST_EMPTY || this.calActive <= 0) {
+        Text('这一年还没有观看记录')
+          .fontSize(10)
+          .fontColor(Theme.TEXT_FAINT)
+          .width('100%')
+      } else {
+        HeatCalendar({ days: this.calDays, from: this.calFrom, cols: 53 })
+
+        // 图例：四档 + 说明，让「深色 = 看得久」不需要猜
+        Row({ space: 5 }) {
+          Text('少')
+            .fontSize(8)
+            .fontColor(Theme.TEXT_FAINT)
+          this.LegendDot(0.22)
+          this.LegendDot(0.42)
+          this.LegendDot(0.65)
+          this.LegendDot(0.92)
+          Text('多')
+            .fontSize(8)
+            .fontColor(Theme.TEXT_FAINT)
+          Blank()
+          Text(`${this.calActive} 天有动静`)
+            .fontSize(9)
+            .fontColor(Theme.TEXT_DIM)
+        }
+        .width('100%')
+
+        Row({ space: 6 }) {
+          if (this.calStreak > 1) {
+            Text(`最长连续 ${this.calStreak} 天`)
+              .fontSize(9)
+              .fontColor(Theme.TEXT_DIM)
+          }
+          if (this.calBestText.length > 0) {
+            Text(`最投入的一天 ${this.calBestText}`)
+              .fontSize(9)
+              .fontColor(Theme.TEXT_FAINT)
+              .layoutWeight(1)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          } else {
+            Blank()
+          }
+        }
+        .width('100%')
+      }
+
+      Row({ space: 6 }) {
+        Text('看这一年的年报')
+          .fontSize(10)
+          .fontColor(Theme.ACCENT)
+        Text('›')
+          .fontSize(11)
+          .fontColor(Theme.ACCENT)
+        Blank()
+      }
+      .width('100%')
+      .padding({ top: 8 })
+      .border({ width: { top: 0.5 }, color: '#14FFFFFF' })
+      .onClick(() => {
+        router.pushUrl({ url: 'pages/YearReportPage' });
+      })
+    }
+    .width('100%')
+    .padding(12)
+    .backgroundColor(Theme.CARD)
+    .borderRadius(14)
+  }
+
+  @Builder
+  LegendDot(alpha: number) {
+    Column()
+      .width(9)
+      .height(9)
+      .borderRadius(2.5)
+      .backgroundColor(Theme.alphaOf(Theme.ACCENT, alpha))
+  }
+
   @Builder
   FilterBar() {
     if (this.srvFlags) {
@@ -3172,6 +3336,7 @@ struct StatsPage {
           }
 
           this.FilterBar()
+          this.CalendarBlock()
           this.OverviewBlock()
           this.TrendBlock()
           this.WhenBlock()

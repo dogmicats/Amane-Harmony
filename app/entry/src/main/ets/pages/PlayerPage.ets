@@ -11,6 +11,9 @@ import { common } from '@kit.AbilityKit';
 import { SubtitleClient, SubtitleItem, LocalCandidate, OnlineSubtitle, OwnedSubtitle,
   SubtitleChoice } from '../common/Subtitles';
 import { PlayerPrefs, PlayerTuning } from '../common/PlayerPrefs';
+import { BackgroundPlay } from '../common/BackgroundPlay';
+import { PipHub } from '../common/PipHub';
+import { BackAudio } from '../common/BackAudio';
 import { PlayerChrome } from '../view/PlayerChrome';
 
 const SPEEDS: number[] = [0.75, 1.0, 1.25, 1.5, 2.0];
@@ -29,10 +32,14 @@ struct PlayerPage {
   private metaNumber: string = '';
   private metaTitle: string = '';
   private fileKey: string = '';
+  /** 切后台继续出声（设置项，默认开，2.6.1.16）。 */
+  private bgPlay: boolean = true;
   private fileName: string = '';
   private startPos: number = 0;
   private tickId: number = -1;
   private saveId: number = -1;
+  /** 屏灭巡检（2.6.1.37）：后台期间每 600ms 看一眼屏幕，锁屏就停播。 */
+  private bgWatch: number = -1;
   private lastSavedPos: number = 0;
   private completed: boolean = false;
   private subTracks: SubtitleTrack[] = [];
@@ -134,6 +141,8 @@ struct PlayerPage {
       this.fileKey = params.fileKey === undefined || params.fileKey === null ? '' : params.fileKey;
       this.fileName = params.fileName === undefined || params.fileName === null ? '' : params.fileName;
     }
+    // 后台出声默认关（2026-11-13 21:14 用户定），要用户主动去播放设置里开
+    this.bgPlay = Store.I.prefString('player_bg_play', '0') !== '0';
     try {
       // configDir 让 mpv 读沙箱里的 mpv.conf（缓存 / demuxer / gpu 等参数都在那儿调）；
       // hwdec 走构造参数，因为配置文件里的 hwdec 会被它覆盖。
@@ -174,6 +183,7 @@ struct PlayerPage {
   }
 
   aboutToDisappear(): void {
+    this.clearScreenWatch();
     if (this.tickId >= 0) {
       clearInterval(this.tickId);
       this.tickId = -1;
@@ -184,6 +194,8 @@ struct PlayerPage {
     }
     this.saveProgress(true);
     this.surfaceReady = false;
+    // 离开播放页：别再占后台长时任务
+    BackgroundPlay.stop(getContext(this) as common.UIAbilityContext);
     try {
       if (this.player !== undefined) {
         this.player.destroy();
@@ -203,6 +215,30 @@ struct PlayerPage {
       win.setWindowLayoutFullScreen(true);
       win.setWindowSystemBarEnable([]);
       win.getWindowProperties();
+      // 切后台继续出声（2.6.1.16 / 2.6.1.37）：回到前台就撤掉长时任务
+      win.on('windowVisibilityChange', (visible: boolean) => {
+        const ctx = getContext(this) as common.UIAbilityContext;
+        if (!visible) {
+          // 锁屏 / 息屏 = 退出（用户 19:27 定），不申请长时任务
+          if (BackAudio.screenOff()) {
+            if (this.playing) {
+              this.togglePlay();
+            }
+            BackgroundPlay.stop(ctx);
+            return;
+          }
+          // 自动小窗待命时不要抢音频（它自己持声）；见 PipHub.autoArmed 的注释。
+          if (!PipHub.autoArmed && this.bgPlay && this.playing) {
+            BackgroundPlay.start(ctx);
+            this.watchScreenOff();
+          } else if (this.playing) {
+            this.watchScreenOff();
+          }
+        } else {
+          this.clearScreenWatch();
+          BackgroundPlay.stop(ctx);
+        }
+      });
       // 窗口到手时可能已经在播（playing 先变、win 后到），补一次常亮申请
       this.applyKeepScreenOn();
     }).catch((error: BusinessError) => {
@@ -266,7 +302,15 @@ struct PlayerPage {
       if (st === undefined || st === null) {
         return;
       }
-      this.pos = st.position;
+      // 2.6.1.43：同 PlayerView —— seek 后 1.5 秒内不让轮询覆盖本地位置，
+      // 否则滑块会被 mpv 尚未更新的 position 拉回原处（表现为「跳转成功但滑块弹回开头」）。
+      const nowMs: number = Date.now();
+      if (nowMs - this.lastSeekAt > 1500) {
+        this.pos = st.position;
+      } else if (Math.abs(st.position - this.pos) < 1.5) {
+        this.lastSeekAt = 0;
+        this.pos = st.position;
+      }
       this.duration = st.duration;
       this.playing = st.playing;
       this.buffering = st.buffering;
@@ -352,6 +396,31 @@ struct PlayerPage {
     });
   }
 
+  /**
+   * 后台屏灭巡检（2.6.1.37）：锁屏/息屏就停播并撤长时任务。
+   * 与 PlayerView 同口径，只是这里没有小窗形态。
+   */
+  private watchScreenOff(): void {
+    this.clearScreenWatch();
+    this.bgWatch = setInterval(() => {
+      if (!BackAudio.screenOff()) {
+        return;
+      }
+      if (this.playing) {
+        this.togglePlay();
+      }
+      BackgroundPlay.stop(getContext(this) as common.UIAbilityContext);
+      this.clearScreenWatch();
+    }, 600);
+  }
+
+  private clearScreenWatch(): void {
+    if (this.bgWatch >= 0) {
+      clearInterval(this.bgWatch);
+      this.bgWatch = -1;
+    }
+  }
+
   private togglePlay(): void {
     if (this.player === undefined) {
       return;
@@ -359,6 +428,13 @@ struct PlayerPage {
     try {
       this.player.playOrPause();
       this.playing = !this.playing;
+      // 会话只在这两个能力需要时建（默认都关，见 PlayerView 同处注释）
+      if (this.bgPlay || PipHub.autoArmed) {
+        BackAudio.setPlaying(this.playing);
+        if (this.playing) {
+          BackAudio.ensure(getContext(this) as common.UIAbilityContext, '');
+        }
+      }
     } catch (error) {
       const e = error as BusinessError;
       console.error(`[amane] play/pause: ${e.code} ${e.message}`);

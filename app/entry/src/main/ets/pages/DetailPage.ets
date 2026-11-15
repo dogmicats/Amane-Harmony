@@ -4,7 +4,7 @@ import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
 import { fileIo } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
-import { cachedBody, dropPageCache, httpDelete, httpGet, httpPost, httpPut } from '../common/Http';
+import { cachedBody, dropPageCache, httpDelete, httpGet, httpPost, httpPut, httpWarmStream } from '../common/Http';
 import { cachePut } from '../common/PageCache';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
@@ -25,12 +25,28 @@ import { CollectionSheet } from '../ext/collections/CollectionSheet';
 import { CastSheet } from '../ext/cast/CastSheet';
 import { Downloader, OfflineTask, NEED_WIFI } from '../common/Downloader';
 import { Reason, ReasonLine } from '../common/Reason';
+import { inPartGroup, partGroupKeys, partNoOf, partsHint } from '../common/Parts';
 import { RatingStars, rateColor, rateLabel } from '../ext/ratings/RatingStars';
 import { StillsWall } from '../view/StillsWall';
 import { PosterCard } from '../view/PosterCard';
 import { SubtitleBlock } from '../view/SubtitleBlock';
+import { PlayHandoff, PlaySession } from '../common/PlaySession';
+import { FloatBox } from '../common/FloatBox';
+import { GlowOrb, ParticleField, markScroll } from '../view/Fx';
+import { SkeletonBlock } from '../view/Skeleton';
+import { SectionHead } from '../view/SectionHead';
+import { ArtColor } from '../common/ArtColor';
+import { Haptics } from '../common/Haptics';
+
 import { CommentSheet, commentPreview } from '../view/CommentSheet';
 import { PlayerView } from '../view/PlayerView';
+
+/** `/api/user/stream-choice` 的回包（2.6.1.14）。 */
+interface StreamChoiceResult {
+  item_id: number;
+  file_key: string;
+  updated_at: string;
+}
 
 /** 剧照查看器入参（pages/ImageViewerPage）。 */
 interface StillParams {
@@ -48,6 +64,12 @@ function emptyDetail(): ItemDetail {
   };
   return d;
 }
+
+/**
+ * 详情页预热节流（2.6.1.84）：`metaId → 上次预热时刻`。
+ * 模块级，页面来回进出不会重置；同一部片 10 分钟内只热一次。
+ */
+const WARM_AT: Map<number, number> = new Map();
 
 @Entry
 @Component
@@ -78,6 +100,8 @@ export struct DetailPage {
   @State pExitSig: number = 0;
   /** 带 autoplay 参数进来：详情就绪后自动开播。 */
   private pendingAuto: boolean = false;
+  /** 沉浸光效强度（0 关 / 1 轻 / 2 强），见 `view/Fx.ets`。 */
+  @StorageProp('amaneFx') fx: number = 2;
   /** 「从横屏转回竖屏」时高亮评分区（第 3 条：不弹窗）。 */
   @State rateHint: boolean = false;
   @State facets: ItemFacets = emptyItemFacets();
@@ -85,6 +109,11 @@ export struct DetailPage {
   @State subChosenId: string = '';
   @State streams: StreamItem[] = [];
   @State showVersions: boolean = false;
+  /**
+   * 上次选的可播版本（服务端记的 file_key，2.6.1.14）。
+   * 多版本片子再点播放就用它，不再每次都弹「选择版本」让人重挑一遍。
+   */
+  @State defaultKey: string = '';
   @State versionsLoading: boolean = false;
   @State loading: boolean = true;
   @State fav: boolean = false;
@@ -121,6 +150,10 @@ export struct DetailPage {
   // 盲盒转场：从中心的小图放大铺满，等详情就绪后再从中心扩散淡出
   @State heroOn: boolean = false;
   @State heroUrl: string = '';
+  /** 一片一色（2.6.1.18）：这张海报的主色 / 第二色。空串 = 没取到，各处退回主题色。 */
+  @State tint: string = '';
+  @State tint2: string = '';
+  private tintTried: boolean = false;
   @State heroScale: number = 0.3;
   @State heroFade: number = 1;
   /** 相似影片：详情主体先出，这块异步补；拉不到就整块不渲染。 */
@@ -146,6 +179,16 @@ export struct DetailPage {
   private startAt: number = -1;
 
   aboutToAppear(): void {
+    // 播放器点「画中画」时由它发起交接，落地在这里（停内嵌 + 开浮窗）
+    PlaySession.handoff = () => {
+      this.handoffToFloat();
+    };
+    // 浮窗点「回详情页」时由它回调这里（2.6.1.59 真机修）：
+    // 这时候本页**往往还在栈里**（浮窗只是盖在它上面），`router.back` 等于原地不动，
+    // 所以不能再靠路由回来 —— 由页面直接把画面接回去。
+    PlaySession.opener = (h: PlayHandoff) => {
+      this.takeOverFromFloat(h);
+    };
     // 离线缓存要先拿到沙箱路径才能建目录；只在离线页初始化会出现「从没进过离线页就下不了」（2.5.7 修）
     try {
       Downloader.init(getContext(this) as common.UIAbilityContext);
@@ -183,10 +226,75 @@ export struct DetailPage {
       this.pName = params.fileName === undefined || params.fileName === null ? '' : params.fileName;
     }
     this.load();
+    // 2.6.1.84：顺手把播放首块热起来 —— 用户从详情页点「播放」时就不用再等网盘回源
+    this.warmStream();
+  }
+
+  /**
+   * 预热播放首块（2.6.1.84）。
+   *
+   * 实测：网盘片第一次播放，服务端取首块要 1.8~4.9 秒（CD2 冷区），客户端只能干等；
+   * 而缓存命中后是 0.02 秒。详情页本来就是「用户要停一下才点播放」的地方 ——
+   * 在这里发一个 1 字节请求把服务端的块任务拉起来，等于把那几秒提前花掉。
+   *
+   * 节流：同一部片 10 分钟只预热一次（Map 在模块级，页面来回进出不重复触发）。
+   */
+  private warmStream(): void {
+    if (this.metaId <= 0 || !Store.I.ready) {
+      return;
+    }
+    const now: number = Date.now();
+    const at: number | undefined = WARM_AT.get(this.metaId);
+    if (at !== undefined && now - at < 600000) {
+      return;
+    }
+    WARM_AT.set(this.metaId, now);
+    const url: string = `${Store.I.user}/api/user/play/${Store.I.playbackSource}/${this.metaId}` +
+      `?token=${encodeURIComponent(Store.I.token)}`;
+    // 先让详情本身的数据请求跑完，再抢带宽
+    setTimeout(() => {
+      httpWarmStream(url).catch(() => {
+        // 预热失败不影响任何东西
+      });
+    }, 700);
   }
 
   aboutToDisappear(): void {
     this.stopDl();
+    // 页面没了就别再留回调：浮窗那边会退化成 router（新开一页详情）
+    if (PlaySession.opener !== undefined) {
+      PlaySession.opener = undefined;
+    }
+  }
+
+  /**
+   * 浮窗「回详情页」：把画面接回页内播放器（2.6.1.59 真机修）。
+   *
+   * 之前这条路走的是 `router.back({url:'pages/DetailPage'})`，但浮窗只是**盖在**
+   * 详情页上的 Overlay，本页从没离开栈 —— back 等于原地不动，于是画面留在浮窗里、
+   * 页内播放器停在 `playerOn=false`，表现就是「详情页停着、小窗还在放」。
+   */
+  private takeOverFromFloat(h: PlayHandoff): void {
+    if (h.mid > 0 && h.mid !== this.metaId) {
+      // 浮窗里放的是**另一部片**：不在本页接手，新开一页详情，让那边的 onPageShow 收尾
+      try {
+        router.pushUrl({
+          url: 'pages/DetailPage',
+          params: { 'id': h.mid, 'fileKey': h.fileKey, 'position': h.pos } as Record<string, Object>
+        });
+      } catch (err) {
+        console.error(`[amane] float push other: ${JSON.stringify(err)}`);
+      }
+      return;
+    }
+    if (FloatBox.isOpen) {
+      FloatBox.close(this.getUIContext());
+    }
+    // 用页面自己的起播链路（亮点条也是它）：`startAt` 只消费一次，
+    // 直接设 pPos + playerOn 会让播放器挂在「反复 seek 到 0」的死循环里（真机 22:42 抓到）。
+    this.pKey = h.fileKey;
+    this.pName = h.fileName;
+    this.playAt(h.pos, h.fileKey, h.fileName);
   }
 
   /**
@@ -427,6 +535,103 @@ export struct DetailPage {
     return id > 0 ? `库 ${id}` : '';
   }
 
+  /** 可播版本（streams）里的分段组键，口径与文件列表一致。 */
+  private streamPartKeys(): string[] {
+    const names: string[] = [];
+    for (let i = 0; i < this.streams.length; i++) {
+      names.push(this.streams[i].name);
+    }
+    return partGroupKeys(names);
+  }
+
+  private versionStreams(): StreamItem[] {
+    const keys: string[] = this.streamPartKeys();
+    const out: StreamItem[] = [];
+    for (let i = 0; i < this.streams.length; i++) {
+      if (!inPartGroup(this.streams[i].name, keys)) {
+        out.push(this.streams[i]);
+      }
+    }
+    return out;
+  }
+
+  private partStreams(): StreamItem[] {
+    const keys: string[] = this.streamPartKeys();
+    const out: StreamItem[] = [];
+    for (let i = 0; i < this.streams.length; i++) {
+      if (inPartGroup(this.streams[i].name, keys)) {
+        out.push(this.streams[i]);
+      }
+    }
+    out.sort((a: StreamItem, b: StreamItem) => partNoOf(a.name) - partNoOf(b.name));
+    return out;
+  }
+
+  /** 分段组键（见 `common/Parts.ets`）：同目录同前缀、至少两段才算一组分段。 */
+  private filePartKeys(): string[] {
+    const paths: string[] = [];
+    for (let i = 0; i < this.detail.files.length; i++) {
+      paths.push(this.detail.files[i].path);
+    }
+    return partGroupKeys(paths);
+  }
+
+  /**
+   * 文件区拆两块（2026-11-13 用户反馈：多版本与分集堆在一起）。
+   *
+   * **版本** = 同一部的不同画质 / 来源（4K、破解、有码）；
+   * **分集** = 同一部被切开的 cd1/cd2/cd3（碟片容量所限），它们不是版本。
+   */
+  private versionFiles(): MediaFile[] {
+    const keys: string[] = this.filePartKeys();
+    const out: MediaFile[] = [];
+    for (let i = 0; i < this.detail.files.length; i++) {
+      if (!inPartGroup(this.detail.files[i].path, keys)) {
+        out.push(this.detail.files[i]);
+      }
+    }
+    return out;
+  }
+
+  private partFiles(): MediaFile[] {
+    const keys: string[] = this.filePartKeys();
+    const out: MediaFile[] = [];
+    for (let i = 0; i < this.detail.files.length; i++) {
+      if (inPartGroup(this.detail.files[i].path, keys)) {
+        out.push(this.detail.files[i]);
+      }
+    }
+    // 按段号排：cd1 必须在 cd2 前面（入库顺序不保证）
+    out.sort((a: MediaFile, b: MediaFile) => partNoOf(a.path) - partNoOf(b.path));
+    return out;
+  }
+
+  /** 文件区标题：分段不再算进「版本」里；全是分段时不写「版本（0）」。 */
+  private filesTitle(): string {
+    const v: number = this.versionFiles().length;
+    const p: number = this.partFiles().length;
+    if (p === 0) {
+      return v > 1 ? `版本（${v}）· 点一行播这个文件` : `文件（${v}）`;
+    }
+    if (v === 0) {
+      return `分集（${p} 段）· 点一行播这个文件`;
+    }
+    return `版本（${v}）· 分集 ${p} 段`;
+  }
+
+  /** 一行文件（含右滑删除扩展的包裹）：版本区与分集区共用。 */
+  @Builder
+  FileEntry(file: MediaFile) {
+    // 没有删除扩展时点击落在这一层，行为与以前一致
+    Column() {
+      this.FileRow(file)
+    }
+    .width('100%')
+    .onClick(() => {
+      this.playFile(`f${file.id}`, this.fileName(file.path));
+    })
+  }
+
   /** 一行文件：文件名 + 清晰度 / 所在库 / 体积，点一下直接播这个版本。 */
   @Builder
   FileRow(file: MediaFile) {
@@ -472,6 +677,55 @@ export struct DetailPage {
     .borderRadius(6)
   }
 
+  /**
+   * 一片一色（2.6.1.18）：取当前这部片海报的主色。
+   *
+   * 只用竖版海报（比剧照小、下载快）；取不到就保持空串，所有调用点都走
+   * `tintColor()` 兜底到 `Theme.ACCENT` —— 所以「没取到」和「没这功能」长得一模一样，
+   * 老服务端 / 断网 / 黑白色海报都不会露出半截怪色。
+   *
+   * 先同步读缓存（上次算过的色），首帧就能上色；没有再异步算一次。
+   * 不 await：取色慢不该拖住详情主体。
+   */
+  private loadTint(): void {
+    if (this.tintTried) {
+      return;
+    }
+    const raw: string = this.detail.poster.length > 0 ? this.detail.poster : this.detail.fanart;
+    if (raw.length === 0) {
+      // 2.6.1.28 修：原来这里先把 tintTried 置 true 再判空 —— 详情数据还没到时
+      // 这一次机会就被白白用掉了，之后永远不再取色（表现就是「每部片都是主题色」）。
+      return;
+    }
+    this.tintTried = true;
+    const url: string = Store.I.img(raw);
+    const cached: string = ArtColor.cached(url);
+    if (cached.length > 0) {
+      this.applyTint(cached);
+      return;
+    }
+    ArtColor.of(url, Store.I.token).then((accent: string) => {
+      if (accent.length > 0) {
+        this.applyTint(accent);
+      } else {
+        // 取不到就留空（退回主题色），但留一条 error 日志：真机上排查靠它
+        console.error(`[amane] detail tint empty: ${url}`);
+      }
+    }).catch((err: BusinessError) => {
+      console.error(`[amane] detail tint: ${err.code} ${err.message}`);
+    });
+  }
+
+  private applyTint(accent: string): void {
+    this.tint = accent;
+    this.tint2 = ArtColor.second(accent);
+  }
+
+  /** 当前页的环境色：取不到就用主题强调色，调用处不必写三元。 */
+  private tintColor(): string {
+    return this.tint.length > 0 ? this.tint : Theme.ACCENT;
+  }
+
   /** 封面地址：刮削海报 → 我截的关键帧（R25）→ 空。 */
   private coverUrl(): string {
     if (this.detail.poster.length > 0) {
@@ -489,10 +743,64 @@ export struct DetailPage {
   }
 
   /**
+   * 把当前播放交接给应用内浮窗（点「画中画」按钮 / 离开页面都走这里）。
+   *
+   * 交接顺序很关键：先开浮窗（那边起播要几百毫秒），再停内嵌 ——
+   * 反过来的话中间会有一段完全没声音的真空。
+   * 浮窗没挂上（极少见）就保持内嵌继续播，绝不把用户搞成「没画面也没声」。
+   * `compact = false`：浮窗默认还是小窗，但允许双击切成宽条。
+   *
+   * 返回是否真的交接成功。
+   */
+  private handoffToFloat(): boolean {
+    if (FloatBox.isOpen) {
+      // 已经在浮窗里了（比如刚点过画中画）：只需把页内的停掉
+      if (this.playerOn) {
+        this.playerOn = false;
+      }
+      return true;
+    }
+    const s: PlayHandoff = PlaySession.snapshot();
+    if (s.mid <= 0) {
+      return false;
+    }
+    const ok: boolean = FloatBox.open(this.getUIContext(), s, false);
+    if (ok) {
+      this.playerOn = false;
+    }
+    return ok;
+  }
+
+  /**
+   * 离开这一页：**不自动弹小窗**（2026-11-13 21:12 用户口径）。
+   *
+   * 「自动小窗」只留一个入口 —— 用户按 Home 回桌面时由系统画中画接管
+   * （`PlayerView` 里 `setAutoStartEnabled`）。只是退出详情页、翻回列表时不该
+   * 凭空多出一个浮窗；想要浮窗就点播放器上的「画中画」按钮，那是明确意图。
+   *
+   * 这里以前会自动 `handoffToFloat()`，所以「返回列表」也会留下一个小窗。
+   * 现在什么都不做：页面销毁时页内播放器自己停，声音跟着停，不留浮层。
+   */
+  onPageHide(): void {
+    // 故意留空：见上方注释。
+  }
+
+  /**
    * 从播放页返回（Emby 模式）：不弹窗，只把「我的评分」那块点亮一下
    * （用户上一轮第 3 条：提示改成高亮，别用弹窗打断）。
    */
   onPageShow(): void {
+    // 带着浮窗回到这一页：把画面接回页面内，别让小窗和页面同时出声
+    if (FloatBox.isOpen) {
+      const s: PlayHandoff | undefined = PlaySession.active;
+      FloatBox.close(this.getUIContext());
+      if (s !== undefined && s.mid === this.metaId) {
+        this.pKey = s.fileKey;
+        this.pName = s.fileName;
+        this.pPos = s.pos;
+        this.playerOn = true;
+      }
+    }
     if (this.playedHere && !this.promptShown && this.myRating === 0 && this.detail.id > 0) {
       this.promptShown = true;
       this.rateHint = true;
@@ -561,6 +869,7 @@ export struct DetailPage {
       const text: string = await httpGet(url, Store.I.token);
       this.applyDetail(safeDetail(JSON.parse(text) as ItemDetail));
       cachePut(url, text, 1800000);
+      this.loadStreamChoice();
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] detail: ${e.code} ${e.message}`);
@@ -571,6 +880,8 @@ export struct DetailPage {
     this.loading = false;
     this.heroLoaded = true;
     this.tryReveal();
+    // 一片一色：详情主体已经能显示，取色在后台跑（取到才变色，取不到就是主题色）
+    this.loadTint();
     // 从观看记录 / 弹幕 / 截帧点进来的「直接开播」：详情就绪后再起播，
     // 这样页面一渲染就是「顶部已经在放」，切回竖屏也还有详情可看（第 8 条）。
     if (this.pendingAuto && this.detail.id > 0) {
@@ -835,14 +1146,21 @@ export struct DetailPage {
 
   /** 有进度可续（且没看完）时，顶部按钮才有「继续 / 从头」两个选项。 */
   private resumable(): boolean {
-    return this.detail.position > 5 && !this.detail.finished;
+    // 2.6.1.34：播完的片也要能续播 —— 用户 19:24「应该记住每一次退出播放的位置，
+    // 不管他是否已经播放完毕」。位置一直在记，原来被 `!finished` 挡掉了。
+    return this.detail.position > 5;
   }
 
   private play(fromStart: boolean): void {
     // 从头播 = 位置 0；否则让 playFile 按进度自己决定
     this.startAt = fromStart ? 0 : -1;
-    // 一个条目挂多个版本时先让用户选；只有一个文件就直接播
+    // 一个条目挂多个版本时：记过默认版本就直接播它（2.6.1.14），
+    // 没记过才让用户挑；想换版本走下面「N 个版本」那个入口。
     if (this.detail.files.length > 1) {
+      if (this.defaultKey.length > 0 && this.hasFile(this.defaultKey)) {
+        this.playFile(this.defaultKey, this.fileNameOf(this.defaultKey));
+        return;
+      }
       this.openVersions();
       return;
     }
@@ -862,6 +1180,69 @@ export struct DetailPage {
   private playAt(t: number, fileKey: string, fileName: string): void {
     this.startAt = Math.max(0, t);
     this.playFile(fileKey, fileName);
+  }
+
+  /** 这个 file_key 还在这部片的文件列表里吗（记过的那一版可能已被删/换库）。 */
+  private hasFile(key: string): boolean {
+    if (key.length < 2) {
+      return false;
+    }
+    for (let i = 0; i < this.detail.files.length; i++) {
+      if (`f${this.detail.files[i].id}` === key) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** file_key → 文件名（播放页标题要显示，取路径最后一段）。 */
+  private fileNameOf(key: string): string {
+    for (let i = 0; i < this.detail.files.length; i++) {
+      const f: MediaFile = this.detail.files[i];
+      if (`f${f.id}` === key) {
+        const slash: number = f.path.lastIndexOf('/');
+        return slash >= 0 ? f.path.substring(slash + 1) : f.path;
+      }
+    }
+    return '';
+  }
+
+  /**
+   * 读回「这部片上次播的是哪个文件」（2.6.1.14）。
+   *
+   * 只在文件列表里还有这一版时才采用 —— 用户可能换过库或删过文件，
+   * 这时要回到「让他挑」而不是播一个不存在的文件。
+   */
+  private async loadStreamChoice(): Promise<void> {
+    if (this.metaId <= 0) {
+      return;
+    }
+    try {
+      const text: string = await httpGet(
+        `${Store.I.user}/api/user/stream-choice?item_id=${this.metaId}`, Store.I.token);
+      const data = JSON.parse(text) as StreamChoiceResult;
+      const key: string = data.file_key === undefined || data.file_key === null ? '' : data.file_key;
+      this.defaultKey = this.hasFile(key) ? key : '';
+    } catch (err) {
+      const e = err as BusinessError;
+      // 老服务端没有这个端点：静默，按老逻辑弹选择
+      console.info(`[amane] stream choice: ${e.code}`);
+    }
+  }
+
+  /** 记下这次选的版本，下次直接用它。 */
+  private async rememberStream(key: string): Promise<void> {
+    if (key.length === 0) {
+      return;
+    }
+    this.defaultKey = key;
+    try {
+      await httpPut(`${Store.I.user}/api/user/stream-choice`, Store.I.token,
+        JSON.stringify({ item_id: this.metaId, file_key: key }));
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] remember stream: ${e.code}`);
+    }
   }
 
   private openCast(): void {
@@ -1060,9 +1441,9 @@ export struct DetailPage {
   }
 
   private playFile(fileKey: string, fileName: string): void {
-    const start: number = this.startAt >= 0
-      ? this.startAt
-      : (this.detail.finished ? 0 : this.detail.position);
+    // 2.6.1.34：播完的片不再强制从头 —— 退出在哪就从哪起（哪怕在末尾），
+    // 想重看走「从头」那个按钮。
+    const start: number = this.startAt >= 0 ? this.startAt : this.detail.position;
     this.startAt = -1;
     this.showVersions = false;
     this.playedHere = true;
@@ -1177,6 +1558,8 @@ export struct DetailPage {
     try {
       const on: boolean = await Store.I.toggleFav(this.detail.id);
       this.fav = on;
+      // 触感（2.6.1.18）：收藏成功一记轻震，和 toast 一起构成「确实收下了」的双重确认
+      Haptics.tap();
       // 收藏是有明确结果的操作，给一下确认感（播放器里不加）
       this.toast = on ? '已加入收藏' : '已取消收藏';
       setTimeout(() => {
@@ -1200,6 +1583,15 @@ export struct DetailPage {
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
         Row({ space: 6 }) {
+          // 上次选的那一版标出来，下次点播放就是它（2.6.1.14）
+          if (s.key === this.defaultKey) {
+            Text('默认')
+              .fontSize(9)
+              .fontColor('#FFFFFF')
+              .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+              .backgroundColor(Theme.ACCENT)
+              .borderRadius(4)
+          }
           if (s.definition.length > 0) {
             Text(s.definition)
               .fontSize(9)
@@ -1246,7 +1638,7 @@ export struct DetailPage {
       }
       .height(30)
       .padding({ left: 9, right: 9 })
-      .borderRadius(15)
+      .borderRadius(Theme.R_PILL)
       .backgroundColor(Theme.CARD_HI)
       .border({
         width: 1,
@@ -1262,7 +1654,7 @@ export struct DetailPage {
         .width(30)
         .height(30)
         .textAlign(TextAlign.Center)
-        .borderRadius(15)
+        .borderRadius(Theme.R_PILL)
         .backgroundColor(Theme.ACCENT)
     }
     .width('100%')
@@ -1270,6 +1662,7 @@ export struct DetailPage {
     .backgroundColor(Theme.CARD)
     .borderRadius(10)
     .onClick(() => {
+      this.rememberStream(s.key);
       this.playFile(s.key, s.name);
     })
   }
@@ -1346,9 +1739,25 @@ export struct DetailPage {
         } else {
           Scroll() {
             Column({ space: 8 }) {
-              ForEach(this.streams, (s: StreamItem) => {
+              // 版本：不同画质 / 来源
+              ForEach(this.versionStreams(), (s: StreamItem) => {
                 this.VersionRow(s)
               }, (s: StreamItem) => `ver-${s.key}`)
+
+              // 分集：同一部被切开的 cd1/cd2 —— 与版本分开列，别混成「N 个版本」
+              if (this.partStreams().length > 0) {
+                Row() {
+                  Text(`分集 · ${partsHint(this.partStreams().length)}`)
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_FAINT)
+                }
+                .width('100%')
+                .padding({ top: 6 })
+
+                ForEach(this.partStreams(), (s: StreamItem) => {
+                  this.VersionRow(s)
+                }, (s: StreamItem) => `part-${s.key}`)
+              }
             }
             .width('100%')
           }
@@ -1516,7 +1925,8 @@ export struct DetailPage {
       .width('88%')
       .padding(18)
       .backgroundColor(Theme.BG_RAISED)
-      .borderRadius(16)
+      .borderRadius(Theme.R_CARD)
+      .border({ width: 1, color: Theme.STROKE })
       .alignItems(HorizontalAlign.Start)
       .onClick(() => {
         // 吞掉点击，避免穿透到遮罩
@@ -1617,11 +2027,16 @@ export struct DetailPage {
    * 不常驻、不占卡片版面 —— 没上推荐位（或开关关掉）时整块不渲染。
    * 注意：@Builder 的传值参数不随 @State 刷新，所以这里直接读 getter，
    * 并在 if 里显式触碰 this.todayReason，保证状态变化能触发重绘。
+   *
+   * 2.6.1.18：从「标签/演员之后」提到**主按钮行正下方** —— 用户从每日推荐点进来，
+   * 第一眼就该知道「为什么今天推这部」，而不是滑到一半才看见。
+   * 同时把主句从金色改成正文色：金色留给「✦ 今日推荐理由」这个标签，
+   * 一句话读起来才不刺眼（原来整句金 + 11px 补充句挤在一起，字全糊成一片）。
    */
   @Builder
   ReasonCard() {
     if (this.todayReason !== undefined && this.reasonMain().length > 0) {
-      Column({ space: 7 }) {
+      Column({ space: 8 }) {
         Row({ space: 6 }) {
           Text('✦ 今日推荐理由')
             .fontSize(11)
@@ -1635,25 +2050,32 @@ export struct DetailPage {
         .width('100%')
 
         Text(this.reasonMain())
-          .fontSize(13)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
           .fontColor(Theme.GOLD)
           .width('100%')
-          .lineHeight(19)
+          .lineHeight(23)
+          .padding({ left: 9 })
+          .border({
+            width: { left: 2 },
+            color: { left: Theme.GOLD }
+          })
 
         if (this.reasonExtra().length > 0) {
           Text(this.reasonExtra())
             .fontSize(11)
             .fontColor(Theme.TEXT_DIM)
             .width('100%')
+            .lineHeight(17)
         }
       }
       .alignItems(HorizontalAlign.Start)
       .width('100%')
-      .padding(12)
+      .padding({ left: 14, right: 14, top: 12, bottom: 12 })
       .backgroundColor(Theme.CARD)
       .borderRadius(12)
       .border({ width: 0.5, color: '#26FFFFFF' })
-      .margin({ top: 14 })
+      .margin({ top: 12 })
     }
   }
 
@@ -1703,7 +2125,7 @@ export struct DetailPage {
                 Column({ space: 6 }) {
                   Text(this.detail.number)
                     .fontSize(12)
-                    .fontColor(Theme.ACCENT)
+                    .fontColor(this.tintColor())
                     .fontWeight(FontWeight.Medium)
                   Text(this.detail.title.length > 0 ? this.detail.title : this.detail.number)
                     .fontSize(17)
@@ -1845,42 +2267,40 @@ export struct DetailPage {
                   this.downloadAny();
                 })
 
+                // 公开扩展 watch_later：稍后再看（2.6.1.22 从细横条升成主按钮）。
+                // 它原来在按钮下面当一条 46vp 高的横条 —— 一屏里最容易被忽略的位置，
+                // 而它恰恰是「现在不想看、但别忘」这种最常见的动作，所以和「还行」换位。
+                if (BuildConfig.ENABLE_WATCHLATER) {
+                  Column({ space: 1 }) {
+                    Text(this.watchLater ? '◉' : '◷')
+                      .fontSize(15)
+                      .fontColor(this.watchLater ? Theme.ACCENT : Theme.TEXT)
+                    Text(this.watchLater ? '已记录' : '稍后再看')
+                      .fontSize(9)
+                      .fontColor(this.watchLater ? Theme.ACCENT : Theme.TEXT_FAINT)
+                  }
+                  .width(58)
+                  .height(42)
+                  .justifyContent(FlexAlign.Center)
+                  .backgroundColor(this.watchLater ? Theme.ACCENT_SOFT : Theme.CARD)
+                  .borderRadius(21)
+                  .onClick(() => {
+                    this.toggleWatchLater();
+                  })
+                }
               }
               .width('100%')
               .margin({ top: 16 })
 
-              // 公开扩展 watch_later：稍后再看。细条放在主操作行下面，
-              // 不跟「播放 / 收藏 / 还行」抢横向空间。
-              if (BuildConfig.ENABLE_WATCHLATER) {
-                Row({ space: 6 }) {
-                  Text('⏱')
-                    .fontSize(13)
-                    .fontColor(this.watchLater ? Theme.ACCENT : Theme.TEXT_DIM)
-                  Text(this.watchLater ? '已加入稍后再看' : '稍后再看')
-                    .fontSize(12)
-                    .fontColor(this.watchLater ? Theme.ACCENT : Theme.TEXT_DIM)
-                  Blank()
-                  Text(this.watchLater ? '点一下移出' : '先记下来，回头在观看记录里找')
-                    .fontSize(10)
-                    .fontColor(Theme.TEXT_FAINT)
-                }
-                .width('100%')
-                .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-                .backgroundColor(this.watchLater ? Theme.ACCENT_SOFT : Theme.CARD)
-                .borderRadius(12)
-                .margin({ top: 10 })
-                .onClick(() => {
-                  this.toggleWatchLater();
-                })
-              }
+              // 今日推荐理由：紧跟主按钮 —— 从推荐位进来的人第一眼就看到「为什么是它」
+              this.ReasonCard()
+
 
               // 公开扩展 ratings：我的评分。和头部那个上游站点评分隔开，两套数据互不覆盖。
               if (BuildConfig.ENABLE_RATINGS) {
                 Column({ space: 6 }) {
                   Row() {
-                    Text('我的评分')
-                      .fontSize(12)
-                      .fontColor(Theme.TEXT_FAINT)
+                    SectionHead({ title: '我的评分' })
                     Blank()
                     if (this.myRating > 0) {
                       Text(`${this.myRating} 星 · ${rateLabel(this.myRating)}`)
@@ -1916,6 +2336,24 @@ export struct DetailPage {
                   color: this.rateHint ? '#66FFC53D' : '#00000000'
                 })
                 .margin({ top: 16 })
+              }
+
+              // 公开扩展 actors：演员名变成可点 chip，直接进演员页；
+              // 关掉 ENABLE_ACTORS 时退回原来的纯文本，核心不残留扩展行为。
+              if (this.detail.actors.length > 0) {
+                if (BuildConfig.ENABLE_ACTORS) {
+                  ActorChips({ metaId: this.metaId, names: this.detail.actors })
+                } else {
+                  Column({ space: 6 }) {
+                    SectionHead({ title: '出演' })
+                    Text(this.detail.actors.join(' / '))
+                      .fontSize(13)
+                      .fontColor(Theme.TEXT)
+                      .width('100%')
+                  }
+                  .alignItems(HorizontalAlign.Start)
+                  .margin({ top: 14 })
+                }
               }
 
               // 公开扩展 highlights：影片亮点（片子里随机位置的抽帧缩略图，点图从该处起播）。
@@ -1967,37 +2405,10 @@ export struct DetailPage {
 
               // 本片字幕的入口已经挪到标题区右侧（评分/标记那一行），这里不再重复放。
 
-              // 公开扩展 actors：演员名变成可点 chip，直接进演员页；
-              // 关掉 ENABLE_ACTORS 时退回原来的纯文本，核心不残留扩展行为。
-              if (this.detail.actors.length > 0) {
-                if (BuildConfig.ENABLE_ACTORS) {
-                  ActorChips({ metaId: this.metaId, names: this.detail.actors })
-                } else {
-                  Column({ space: 6 }) {
-                    Text('出演')
-                      .fontSize(12)
-                      .fontColor(Theme.TEXT_FAINT)
-                      .width('100%')
-                    Text(this.detail.actors.join(' / '))
-                      .fontSize(13)
-                      .fontColor(Theme.TEXT)
-                      .width('100%')
-                  }
-                  .alignItems(HorizontalAlign.Start)
-                  .margin({ top: 14 })
-                }
-              }
-
-              // 今日推荐理由：这部片当天上了推荐位才显示（2.5.7.21）
-              this.ReasonCard()
-
               // 简介
               if (this.detail.plot.length > 0) {
                 Column({ space: 6 }) {
-                  Text('简介')
-                    .fontSize(12)
-                    .fontColor(Theme.TEXT_FAINT)
-                    .width('100%')
+                  SectionHead({ title: '简介' })
                   Text(this.detail.plot)
                     .fontSize(12)
                     .fontColor(Theme.TEXT_DIM)
@@ -2016,43 +2427,11 @@ export struct DetailPage {
                 .margin({ top: 14 })
               }
 
-              // 文件：排在剧照前面 —— 瀑布流一铺就是好几屏，把「选版本直接播」顶到墙底下太难受
-              if (this.detail.files.length > 0) {
-                Column({ space: 8 }) {
-                  Row({ space: 8 }) {
-                    Text(this.detail.files.length > 1
-                      ? `版本（${this.detail.files.length}）· 点一行播这个文件`
-                      : `文件（${this.detail.files.length}）`)
-                      .fontSize(12)
-                      .fontColor(Theme.TEXT_FAINT)
-                    Blank()
-                  }
-                  .width('100%')
-
-                  ForEach(this.detail.files, (file: MediaFile) => {
-                    Column() {
-                      this.FileRow(file)
-                    }
-                    .width('100%')
-                    .onClick(() => {
-                      this.playFile(`f${file.id}`, this.fileName(file.path));
-                    })
-                  }, (file: MediaFile) => `file-${file.id}`)
-                }
-                .alignItems(HorizontalAlign.Start)
-                .margin({ top: 16 })
-              }
-
               // 剧照：两列瀑布流，横竖版各按原比例占位（不再一刀切成 16:9），点开进全屏查看器
               if (this.allStills().length > 0) {
                 Column({ space: 10 }) {
                   Row({ space: 8 }) {
-                    Text('剧照')
-                      .fontSize(12)
-                      .fontColor(Theme.TEXT_FAINT)
-                    Text(`${this.allStills().length}`)
-                      .fontSize(10)
-                      .fontColor(Theme.TEXT_FAINT)
+                    SectionHead({ title: '剧照', count: `${this.allStills().length}` })
                     if (this.myStillCount() > 0) {
                       Text(`其中我截的 ${this.myStillCount()}`)
                         .fontSize(9)
@@ -2085,55 +2464,10 @@ export struct DetailPage {
                 .margin({ top: 16 })
               }
 
-              // 相似影片：同系列 / 同演员 / 共同标签，服务端打分排序（同厂牌只加分不单独入选）
-              if (this.similar.length > 0) {
-                Column({ space: 10 }) {
-                  Row({ space: 8 }) {
-                    Text('相似影片')
-                      .fontSize(12)
-                      .fontColor(Theme.TEXT_FAINT)
-                    Text(`${this.similar.length}`)
-                      .fontSize(10)
-                      .fontColor(Theme.TEXT_FAINT)
-                    Blank()
-                    Text('往右滑 ›')
-                      .fontSize(10)
-                      .fontColor(Theme.TEXT_DIM)
-                  }
-                  .width('100%')
-
-                  Scroll() {
-                    Row({ space: 10 }) {
-                      ForEach(this.similar, (it: MediaItem) => {
-                        PosterCard({
-                          item: it,
-                          cardWidth: 104,
-                          showTitle: true,
-                          onTap: () => {
-                            const params: DetailParams = { id: it.id };
-                            router.pushUrl({ url: 'pages/DetailPage', params: params });
-                          }
-                        })
-                      }, (it: MediaItem) => `sim-${it.id}`)
-                    }
-                  }
-                  .scrollable(ScrollDirection.Horizontal)
-                  .scrollBar(BarState.Off)
-                  .width('100%')
-                }
-                .alignItems(HorizontalAlign.Start)
-                .margin({ top: 16 })
-              }
-
               // 评价（0 条时也显示标题行：要能从这里写第一条）
               Column({ space: 8 }) {
                   Row({ space: 6 }) {
-                    Text('评价')
-                      .fontSize(12)
-                      .fontColor(Theme.TEXT_FAINT)
-                    Text(`${this.detail.comments.length} 条`)
-                      .fontSize(10)
-                      .fontColor(Theme.TEXT_FAINT)
+                    SectionHead({ title: '评价', count: `${this.detail.comments.length} 条` })
                     Blank()
                     // 管理入口：所有评价的增删改都在那一页集中做
                     Text('管理')
@@ -2225,6 +2559,77 @@ export struct DetailPage {
                 .width('100%')
                 .margin({ top: 16 })
 
+              // 文件管理（2.6.1.22 从「简介之前」挪到评价下方）：
+              // 选版本直接播的入口在顶部主按钮和播放键上已经有了，这一段主要是**管理**
+              // （看清有几个版本/分集、右滑删掉失效资源），属于「看完再收拾」的动作，
+              // 放在内容（简介/剧照/评价）之后更顺手，也不会把剧照墙顶到屏幕外。
+              if (this.detail.files.length > 0) {
+                Column({ space: 8 }) {
+                  Row({ space: 8 }) {
+                    SectionHead({ title: this.filesTitle() })
+                    Blank()
+                  }
+                  .width('100%')
+
+                  // 版本：不同画质 / 来源（4K、破解、有码）
+                  ForEach(this.versionFiles(), (file: MediaFile) => {
+                    this.FileEntry(file)
+                  }, (file: MediaFile) => `ver-${file.id}`)
+
+                  // 分集：同一部被切开的 cd1/cd2 —— 单独一段，不再混进「版本」数里
+                  if (this.partFiles().length > 0) {
+                    Row() {
+                      Text(`分集 · ${partsHint(this.partFiles().length)}`)
+                        .fontSize(11)
+                        .fontColor(Theme.TEXT_FAINT)
+                    }
+                    .width('100%')
+                    .padding({ top: 8 })
+
+                    ForEach(this.partFiles(), (file: MediaFile) => {
+                      this.FileEntry(file)
+                    }, (file: MediaFile) => `part-${file.id}`)
+                  }
+                }
+                .alignItems(HorizontalAlign.Start)
+                .margin({ top: 16 })
+              }
+
+              // 相似影片：同系列 / 同演员 / 共同标签，服务端打分排序（同厂牌只加分不单独入选）
+              if (this.similar.length > 0) {
+                Column({ space: 10 }) {
+                  Row({ space: 8 }) {
+                    SectionHead({ title: '相似影片', count: `${this.similar.length}` })
+                    Blank()
+                    Text('往右滑 ›')
+                      .fontSize(10)
+                      .fontColor(Theme.TEXT_DIM)
+                  }
+                  .width('100%')
+
+                  Scroll() {
+                    Row({ space: 10 }) {
+                      ForEach(this.similar, (it: MediaItem) => {
+                        PosterCard({
+                          item: it,
+                          cardWidth: 104,
+                          showTitle: true,
+                          onTap: () => {
+                            const params: DetailParams = { id: it.id };
+                            router.pushUrl({ url: 'pages/DetailPage', params: params });
+                          }
+                        })
+                      }, (it: MediaItem) => `sim-${it.id}`)
+                    }
+                  }
+                  .scrollable(ScrollDirection.Horizontal)
+                  .scrollBar(BarState.Off)
+                  .width('100%')
+                }
+                .alignItems(HorizontalAlign.Start)
+                .margin({ top: 16 })
+              }
+
               Blank().height(30)
             }
             .width('100%')
@@ -2237,6 +2642,11 @@ export struct DetailPage {
         .height('100%')
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
+        // 滚动时暂停浮尘（2.6.1.18 光效预算）：详情页这块 Canvas 盖在整张封面上，
+        // 一边合成列表一边重绘最费电，停手 420ms 自动恢复。
+        .onScroll((x: number, y: number) => {
+          markScroll();
+        })
   }
 
   /**
@@ -2257,18 +2667,45 @@ export struct DetailPage {
         .height('100%')
         .linearGradient({
           angle: 180,
-          colors: [['#00000000', 0.45], ['#8C0B0B0F', 1.0]]
+          // 把海报主色薄薄地铺在底部：整张图会从「通用深色压边」变成「这部片自己的色调」
+          // 2.6.1.28：0.16 → 0.34 —— 0.16 在暗色头图上几乎看不出来，等于没上色。
+          colors: [['#00000000', 0.40], [Theme.alphaOf(this.tintColor(), 0.34), 0.74], ['#8C0B0B0F', 1.0]]
         })
         .hitTestBehavior(HitTestMode.None)
 
+      // 播放按钮背后的一团柔光：像放映机打在幕布上的光斑，颜色跟着这张海报走。
+      // 放在按钮之前，所以它永远不会盖住 ▶ 图标本身。
+      if (this.fx >= 1) {
+        GlowOrb({
+          color: this.tintColor(),
+          diameter: this.fx >= 2 ? 210 : 168,
+          alpha: this.fx >= 2 ? 0.30 : 0.18,
+          breath: true,
+          period: 3000
+        })
+      }
+
       Column({ space: 7 }) {
         Stack({ alignContent: Alignment.Center }) {
+          // 亮剧照上「大团柔光」会被画面吃掉，所以真正的可读信号做成两层硬边：
+          // 一圈强调色描边（任何底上都看得见）+ 按钮本体的外发光（暗画面上会散开）。
+          if (this.fx >= 1) {
+            Column()
+              .width(this.fx >= 2 ? 74 : 64)
+              .height(this.fx >= 2 ? 74 : 64)
+              .borderRadius(this.fx >= 2 ? 37 : 32)
+              .border({ width: 1, color: Theme.alphaOf(this.tintColor(), this.fx >= 2 ? 0.58 : 0.34) })
+          }
           Column()
             .width(54)
             .height(54)
             .borderRadius(27)
             .backgroundColor('#73000000')
-            .border({ width: 0.8, color: '#4DFFFFFF' })
+            // 2.6.1.28：描边 0.72 → 0.95、外发光 0.80 → 0.90，让「一片一色」真的看得见
+            .border({ width: 1, color: this.fx >= 1 ? Theme.alphaOf(this.tintColor(), 0.95) : '#4DFFFFFF' })
+            .shadow(this.fx >= 1
+              ? { radius: this.fx >= 2 ? 30 : 20, color: Theme.alphaOf(this.tintColor(), this.fx >= 2 ? 0.90 : 0.55) }
+              : { radius: 0, color: '#00000000' })
           Image($r('app.media.ic_play'))
             .width(22)
             .height(22)
@@ -2281,6 +2718,11 @@ export struct DetailPage {
           .fontColor('#F2FFFFFF')
       }
       .hitTestBehavior(HitTestMode.None)
+
+      // 封面上的浮尘：比首页大图更淡更少（这里下面压着按钮和片名，粒子一多就脏）
+      if (this.fx >= 2) {
+        ParticleField({ count: 12, color: '#FFFFFF', alpha: 0.22, drift: 0.8 })
+      }
     }
     .width('100%')
     .aspectRatio(16 / 9)
@@ -2293,15 +2735,38 @@ export struct DetailPage {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.loading) {
+        // 骨架屏（2.6.1.18）：先把「一张大图 + 封面 + 标题两行 + 一排按钮」的位置占出来。
+        // 数据到了只是把灰块换成实内容，整屏不会从转圈直接跳成满屏信息。
         Column() {
-          LoadingProgress()
-            .width(30)
-            .height(30)
-            .color(Theme.ACCENT)
+          SkeletonBlock({ w: '100%', h: 208, radius: 0 })
+          Column({ space: 10 }) {
+            Row({ space: 14 }) {
+              SkeletonBlock({ w: '104', h: 148, radius: 10 })
+              Column({ space: 9 }) {
+                SkeletonBlock({ w: '28%', h: 12 })
+                SkeletonBlock({ w: '92%', h: 16, lag: 70 })
+                SkeletonBlock({ w: '68%', h: 12, lag: 120 })
+                SkeletonBlock({ w: '44%', h: 11, lag: 170 })
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Top)
+
+            Row({ space: 10 }) {
+              SkeletonBlock({ w: '46%', h: 38, radius: 19, lag: 60 })
+              SkeletonBlock({ w: '28%', h: 38, radius: 19, lag: 140 })
+            }
+            .width('100%')
+            .margin({ top: 6 })
+          }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+          .alignItems(HorizontalAlign.Start)
         }
         .width('100%')
         .height('100%')
-        .justifyContent(FlexAlign.Center)
       } else {
         // 私有扩展「右滑删除」现在挂在每个文件行上（见 FileRow），页面本身不再包一层
         this.Body()
@@ -2511,11 +2976,19 @@ export struct DetailPage {
   }
 
   private playLabel(): string {
-    const n: number = this.detail.files.length;
     if (this.resumable()) {
       return '继续播放';
     }
-    return n > 1 ? `播放 · ${n} 个版本` : '播放';
+    // 2.6.1.16：分段不算版本 —— 只有 cd1/cd2 的片子别再写「2 个版本」
+    const v: number = this.versionFiles().length;
+    const p: number = this.partFiles().length;
+    if (v === 0 && p > 0) {
+      return `播放 · 分集 ${p} 段`;
+    }
+    if (v > 1) {
+      return `播放 · ${v} 个版本`;
+    }
+    return '播放';
   }
 
   private fileName(path: string): string {

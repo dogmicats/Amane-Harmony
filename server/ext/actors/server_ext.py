@@ -780,6 +780,17 @@ def _cast_filter(query: dict) -> dict:
 
     where = ["EXISTS (SELECT 1 FROM media_files f WHERE f.metadata_id = m.id)"]
     params: list = []
+    # 2.6.1.78（用户 23:51）：「在某个指定媒体库搜共演」。
+    # 原来 cast_find 只要求「这部片有文件」，不分库，所以「库里 A 有、库 B 没有」的片
+    # 一起混在结果里，做不出「只看这个库的共演」。
+    # 加在这里（而不是 cast_find 自己拼 SQL）是因为 `_cast_filter` 是**唯一来源**：
+    # stills 扩展的 `scope=cast`（抽卡墙）走的也是它，改一处两边一起生效，
+    # 不会出现「列表按库筛了、抽卡却还是全库」这种两套逻辑。
+    lib = _int(_one(query, "library_id", "0"), 0, 0, 10 ** 9)
+    if lib > 0:
+        where.append("EXISTS (SELECT 1 FROM media_files f2 "
+                     "WHERE f2.metadata_id = m.id AND f2.library_id = ?)")
+        params.append(lib)
     if actor_ids:
         ph = ",".join("?" * len(actor_ids))
         where.append(
@@ -897,6 +908,7 @@ def _cast_filter(query: dict) -> dict:
             "cast_min": cmin, "cast_max": cmax,
             "female_n": female_n, "male_n": male_n,
             "director_id": director_ids, "exclude_director_id": skip_dirs,
+            "library_id": lib,
         },
     }
 

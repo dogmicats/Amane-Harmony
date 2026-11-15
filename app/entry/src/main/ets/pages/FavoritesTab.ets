@@ -1,6 +1,6 @@
 import { router } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { httpGet } from '../common/Http';
+import { httpGet, httpGetCached, cachedBody } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { Personalize } from '../common/Personalize';
@@ -112,23 +112,52 @@ export struct FavoritesTab {
     return ENTITY_SEGS.indexOf(this.seg) >= 0;
   }
 
+  /**
+   * 收藏页某一页的地址。
+   *
+   * 抽出来是为了「首屏缓存」和「真正请求」用**同一个** URL —— 缓存 key 就是 URL，
+   * 两处拼法差一个参数对，缓存就永远命不中（以前容易被后续改动悄悄弄坏）。
+   */
+  private urlOf(ck: string, page: number): string {
+    let url: string = `${Store.I.user}/api/user/browse?collection=${ck}` +
+      `&sort=${this.sortKey}&order=desc&limit=120&offset=${page * 120}`;
+    if (this.fMyRating.length > 0) {
+      url += `&myrating=${this.fMyRating}`;
+    }
+    if (this.keyword.length > 0) {
+      url += `&q=${encodeURIComponent(this.keyword)}`;
+    }
+    return url;
+  }
+
   private async load(): Promise<void> {
     this.loading = this.items.length === 0;
     // 全部收藏也要走 browse（collection=any）：收藏页要有「我的评分」筛选与排序，
     // 而 /api/user/favorites 只按收藏时间倒序、不支持任何条件。
     const ck: string = this.collectionKey.length === 0 ? 'any' : this.collectionKey;
+    const firstUrl: string = this.urlOf(ck, 0);
+    // ★ 2.6.2.1：上次那份先铺上，别让「切回收藏」先空一屏。
+    if (this.items.length === 0) {
+      const stale: string | undefined = cachedBody(firstUrl);
+      if (stale !== undefined) {
+        try {
+          const d: BrowseResult = JSON.parse(stale) as BrowseResult;
+          const part: MediaItem[] = safeItems(d.items);
+          if (part.length > 0) {
+            this.items = part;
+            this.loading = false;
+          }
+        } catch (err) {
+          // 缓存坏了就当没有，下面照常请求
+        }
+      }
+    }
     try {
       const all: MediaItem[] = [];
       for (let page = 0; page < 5; page++) {
-        let url: string = `${Store.I.user}/api/user/browse?collection=${ck}` +
-          `&sort=${this.sortKey}&order=desc&limit=120&offset=${page * 120}`;
-        if (this.fMyRating.length > 0) {
-          url += `&myrating=${this.fMyRating}`;
-        }
-        if (this.keyword.length > 0) {
-          url += `&q=${encodeURIComponent(this.keyword)}`;
-        }
-        const text: string = await httpGet(url, Store.I.token);
+        const url: string = this.urlOf(ck, page);
+        // TTL 2 分钟：收藏页要能看到刚收藏/取消的片子，又不能每次都从零拉五页
+        const text: string = await httpGetCached(url, Store.I.token, 120000);
         const data: BrowseResult = JSON.parse(text) as BrowseResult;
         const part: MediaItem[] = safeItems(data.items);
         for (let i = 0; i < part.length; i++) {
@@ -190,8 +219,8 @@ export struct FavoritesTab {
         .padding({ left: 4, right: 4 })
         .backgroundColor('#1FFFFFFF')
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-        .border({ width: 1, color: '#26FFFFFF' })
-        .borderRadius(15)
+        .border({ width: 1, color: Theme.STROKE_HI })
+        .borderRadius(Theme.R_PILL)
       }
     }
     .width('100%')
@@ -246,8 +275,8 @@ export struct FavoritesTab {
     .height(42)
     .backgroundColor('#1FFFFFFF')
     .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-    .border({ width: 1, color: '#26FFFFFF' })
-    .borderRadius(16)
+    .border({ width: 1, color: Theme.STROKE_HI })
+    .borderRadius(Theme.R_PILL)
   }
 
   /**
@@ -406,7 +435,8 @@ export struct FavoritesTab {
                   .width('100%')
                   .aspectRatio(0.704)
                   .objectFit(ImageFit.Cover)
-                  .borderRadius(10)
+                  .borderRadius(Theme.R_IMG)
+                  .border({ width: 1, color: Theme.STROKE })
                   .backgroundColor(Theme.CARD)
                 Row({ space: 3 }) {
                   if (item.marks !== undefined && item.marks !== null && item.marks.length > 0) {

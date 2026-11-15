@@ -1543,6 +1543,33 @@ export class Reason {
   }
 
   /**
+   * 当天已保存的整批理由（2.6.1.32）。
+   *
+   * 为什么不给「理由页」直接再调一次 `build()`：`build` 里会 `saveSeen()` 写「上次翻到」，
+   * 再跑一遍等于把首页刚生成的那次记成"上一次"，同一天同一批的文案会跟着变 —— 用户看到的
+   * 就是"退回来看，句子换了"。所以这里只读快照，跨天 / 开关关掉一律返回空。
+   */
+  static today(): ReasonLine[] {
+    if (!Reason.enabled()) {
+      return [];
+    }
+    const raw: string = Store.I.prefString(PREF_PACK, '');
+    if (raw.length === 0) {
+      return [];
+    }
+    try {
+      const data: SavedPack = JSON.parse(raw) as SavedPack;
+      if (data === undefined || data === null || data.day !== ymdStr(new Date())) {
+        return [];
+      }
+      return data.lines === undefined || data.lines === null ? [] : data.lines;
+    } catch (err) {
+      console.info('[amane] reason today parse failed');
+      return [];
+    }
+  }
+
+  /**
    * 这部片今天上了推荐位才有理由。跨天、开关关掉、老快照一律返回 undefined。
    * 详情页在 load() 里调它，所以从收藏 / 搜索 / 演员页进来也能看到。
    */

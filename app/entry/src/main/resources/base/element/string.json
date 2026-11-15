@@ -15,6 +15,18 @@
     {
       "name": "permission_gravity_reason",
       "value": "判断你是否转动了手机，好转交横竖屏控制"
+    },
+    {
+      "name": "card_desc",
+      "value": "今日推荐与继续观看"
+    },
+    {
+      "name": "EntryFormAbility_label",
+      "value": "Amane 卡片"
+    },
+    {
+      "name": "EntryFormAbility_desc",
+      "value": "在桌面看今天推什么"
     }
   ]
 }

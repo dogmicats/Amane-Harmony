@@ -16,6 +16,17 @@ import {
 const PAGE_SIZE: number = 40;
 
 /**
+ * 标签/系列列表的**跨重建缓存**（2.6.2.20）。
+ *
+ * 用户 21:50：在「演员」和「标签」之间互切时，页面先出来、再整页转圈重载一次。
+ * TabContent 重建 → `aboutToAppear()` 里的 `reload()` 会清空 items 并置 `loading = true`，
+ * 于是每一刀都是「空页 + 转圈」。这里按 `kind` 各留一份上次结果：
+ * 重建时先铺出来（零等待），再静默换新。
+ */
+let FAC_CACHE: Map<string, FacetItem[]> = new Map<string, FacetItem[]>();
+let FAC_TOTAL: Map<string, number> = new Map<string, number>();
+
+/**
  * 公开扩展 facets：底部「标签」Tab —— 分类浏览入口。
  *
  * 为什么要单独一页：影片详情里的标签以前只是死文本，媒体库只能按库翻，
@@ -93,6 +104,16 @@ export struct FacetsTab {
   }
 
   aboutToAppear(): void {
+    // 切回本 tab（TabContent 重建）：先铺上次的列表，**不转圈**，再静默换新
+    const cached: FacetItem[] | undefined = FAC_CACHE.get(this.kind);
+    if (cached !== undefined && cached.length > 0) {
+      this.items = cached;
+      const t: number | undefined = FAC_TOTAL.get(this.kind);
+      this.total = t === undefined ? cached.length : t;
+      this.loading = false;
+      this.load(0, false);
+      return;
+    }
     this.reload();
   }
 
@@ -104,6 +125,11 @@ export struct FacetsTab {
   }
 
   onRefresh(): void {
+    // 外部刷新：有内容就静默换，别清空重来
+    if (this.items.length > 0) {
+      this.load(0, false);
+      return;
+    }
     this.reload();
   }
 
@@ -195,6 +221,9 @@ export struct FacetsTab {
   }
 
   private reload(): void {
+    // 筛选/排序真的变了才走这里：缓存一并作废（否则重建时又铺回旧条件的结果）
+    FAC_CACHE.delete(this.kind);
+    FAC_TOTAL.delete(this.kind);
     this.items = [];
     this.total = 0;
     this.error = '';
@@ -210,6 +239,10 @@ export struct FacetsTab {
       this.total = data.total;
       this.seed = data.seed;
       this.hiddenCount = data.hiddenCount;
+      if (!append) {
+        FAC_CACHE.set(this.kind, this.items);
+        FAC_TOTAL.set(this.kind, this.total);
+      }
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] facets: ${e.code} ${e.message}`);

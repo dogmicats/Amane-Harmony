@@ -10,6 +10,22 @@ import { Theme } from '../common/Theme';
 import { BuildConfig } from '../common/BuildConfig';
 
 /**
+ * 从一条地址里取「scheme://host」（2026-11-15）：给「本机实例 :本地端口」换端口用。
+ * 只换端口、不换机器 —— 所以必须先把主机名摘干净（去掉端口、路径、尾部斜杠）。
+ * 解析不出来返回空串，调用方不要瞎拼地址。
+ */
+function hostOf(raw: string): string {
+  const s: string = raw.trim();
+  if (s.length === 0) {
+    return '';
+  }
+  const https: boolean = s.indexOf('https://') === 0;
+  const rest: string = https ? s.substring(8) : (s.indexOf('http://') === 0 ? s.substring(7) : s);
+  const host: string = rest.split('/')[0].split(':')[0];
+  return host.length > 0 ? `${https ? 'https://' : 'http://'}${host}` : '';
+}
+
+/**
  * 设置页小胶囊：必须是 @Component（@Builder 传值不重建，点了看不出选中）。
  */
 @Component
@@ -36,6 +52,15 @@ struct SettingChip {
 struct SettingsConnectionPage {
   @State draftAmane: string = Store.I.lanAmane;
   @State draftUser: string = Store.I.lanUser;
+  /**
+   * 本机开发实例（本地端口）的开关状态（2026-11-15）。
+   *
+   * 但每次手改地址太烦，人就爱抄近路（昨天就有一个会话为了测红点，把验收环境
+   *
+   * 只**换端口**、主机沿用你当前填的那条 —— 开发实例跑在哪台机器上由你决定，
+   * 不写死任何机器 IP（写死就会跟着发布版一起出去）。
+   */
+  @State devActive: boolean = Store.I.prefString('dev_local_active', '0') === '1';
   @State draftWan: string = Store.I.wanAmane;
   @State draftWanUser: string = Store.I.wanUser;
   /**
@@ -48,6 +73,8 @@ struct SettingsConnectionPage {
   @State draftMode: string = Store.I.mode;
   @State testResult: string = '';
   @State testing: boolean = false;
+  /** 部署说明默认折叠（Docker 命令这类东西平时用不到）。 */
+  @State deployOpen: boolean = false;
   @State crashText: string = '';
   /** 抽卡模式：改了立刻生效并落盘，不跟「保存并重连」绑在一起（那个会跳回首页）。 */
   @State draftGachaCount: number = Store.I.gachaCount;
@@ -155,6 +182,54 @@ struct SettingsConnectionPage {
       })
   }
 
+  /** 本机开发实例的 chip：一下切到 本地端口，再一下切回原来那条地址。 */
+  @Builder
+  DevChip() {
+    Text(this.devActive ? '本机实例 :本地端口 ✓' : '本机实例 :本地端口')
+      .fontSize(11)
+      .fontColor(this.devActive ? '#FFFFFF' : Theme.TEXT_DIM)
+      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+      .backgroundColor(this.devActive ? Theme.ACCENT : Theme.CARD_HI)
+      .borderRadius(12)
+      .onClick(() => {
+        if (this.devActive) {
+          // 切回原地址：切走时记在偏好里，重启 App 也还记得
+          const back: string = Store.I.prefString('dev_local_before', '');
+          this.draftUser = back.length > 0 ? back : DEFAULT_USER;
+          Store.I.prefSetString('dev_local_active', '0');
+          this.devActive = false;
+          return;
+        }
+        Store.I.prefSetString('dev_local_before', this.draftUser);
+        const host: string = hostOf(this.draftUser);
+        if (host.length === 0) {
+          return;
+        }
+        this.draftUser = `${host}:本地端口`;
+        Store.I.prefSetString('dev_local_active', '1');
+        this.devActive = true;
+      })
+  }
+
+  /**
+   * 本机实例一行：chip + 一句人话。
+   * 主机沿用上面那条地址 —— 开发实例通常就跑在你自己的电脑上，IP 换了把它改一下即可，
+   * 不动端口。
+   */
+  @Builder
+  DevRow() {
+    Row({ space: 8 }) {
+      this.DevChip()
+      Text('切到本机开发实例（端口 本地端口），主机沿用上面这条；改完点下面「保存并重连」')
+        .fontSize(10)
+        .fontColor(Theme.TEXT_FAINT)
+        .layoutWeight(1)
+        .lineHeight(14)
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+  }
+
   /** 按当前选择算出「外网用户数据地址」；空串 = 跟随外网地址（走隧道默认分流）。 */
   private wanUserBase(): string {
     const domain: string = normalizeBase(this.draftWan, 'https');
@@ -254,6 +329,11 @@ struct SettingsConnectionPage {
           this.Field('用户数据服务地址（收藏/历史）', this.draftUser, DEFAULT_USER, (v: string) => {
             this.draftUser = v;
           })
+
+          // 本机开发实例（本地端口）：只有自用通道才有这个 chip —— 发布版没有本机实例这回事
+          if (BuildConfig.CHANNEL === 'self') {
+            this.DevRow()
+          }
 
           Text('外网')
             .fontSize(12)
@@ -371,7 +451,67 @@ struct SettingsConnectionPage {
               this.draftToken = DEFAULT_TOKEN;
             })
 
-          Text('播放器设置已经独立成页（我的 → 播放器）')
+          // ── 部署说明（2026-11-15：Docker 命令、容器路径这类东西集中在这里，默认折叠）──
+          Row() {
+            Text(this.deployOpen ? '▾ 部署说明（服务器侧）' : '▸ 部署说明（服务器侧）')
+              .fontSize(12)
+              .fontColor(Theme.TEXT_DIM)
+              .layoutWeight(1)
+          }
+          .width('100%')
+          .padding({ top: 14, bottom: 6 })
+          .onClick(() => {
+            this.deployOpen = !this.deployOpen;
+          })
+
+          if (this.deployOpen) {
+            Column({ space: 6 }) {
+              Text('给容器加一个挂载（例如把预览/打分缓存放大的盘）')
+                .fontSize(11)
+                .fontColor(Theme.TEXT)
+                .width('100%')
+              Text('1. 宿主机先建目录（挑空间大的卷）：')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_DIM)
+                .width('100%')
+              Text('     mkdir -p <宿主机目录>')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+              Text('2. 在 amane-user 的 compose 里给 volumes 加一行（左边宿主机、右边容器内）：')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_DIM)
+                .width('100%')
+              Text('     - <宿主机目录>:/cache')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+              Text('3. 重建容器让映射生效：')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_DIM)
+                .width('100%')
+              Text('     docker compose up -d --force-recreate')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+              Text('4. 回到「进度条预览」把缓存路径填成容器内那个目录（例如 /cache）再保存。')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_DIM)
+                .width('100%')
+              Text('注意：路径必须已经挂进容器，否则写了也存不进去 —— 界面上会直接报红。')
+                .fontSize(10)
+                .fontColor(Theme.GOLD)
+                .width('100%')
+                .lineHeight(15)
+            }
+            .width('100%')
+            .padding(12)
+            .backgroundColor(Theme.CARD)
+            .borderRadius(12)
+            .alignItems(HorizontalAlign.Start)
+          }
+
+          Text('播放设置已经独立成页（设置 → 播放 → 播放设置）')
             .fontSize(10)
             .fontColor(Theme.TEXT_FAINT)
             .width('100%')

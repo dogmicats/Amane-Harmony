@@ -5,6 +5,7 @@ import { httpDelete, httpGet, httpPut, probe } from './Http';
 import { Downloader } from './Downloader';
 import { ClientConfig, ItemDetail, LibraryInfo } from './Types';
 import { BuildConfig } from './BuildConfig';
+import { imgCacheUrl } from './ImgCache';
 
 const PREF_NAME: string = 'amane_pref';
 const KEY_LAN_AMANE: string = 'amane_base';
@@ -370,7 +371,12 @@ export class Store {
     }
   }
 
-  /** 图片地址：资源走 amane（带图片 token），外链走本服务的代理。 */  img(raw: string): string {
+  /**
+   * 只拼图片 URL，**不碰缓存**（2.6.2.1）。
+   *
+   * 给 `ImgCache` 的预取用 —— 那边不能 import Store，否则和 `img()` 绕成循环依赖。
+   */
+  imgPlain(raw: string): string {
     if (raw.length === 0) {
       return '';
     }
@@ -387,5 +393,15 @@ export class Store {
       return `${this.amane}${raw}${sep}token=${this.imageToken}`;
     }
     return raw;
+  }
+
+  /**
+   * 图片地址：拼完再过**图片磁盘缓存**（2.6.2.1）。
+   *
+   * 命中返回 `file://` 本地路径（同步，几乎零成本）；未命中返回原 URL，并后台存一份，
+   * 下次进 App 这张图就不用再下载了。全 App 只有这一个入口，改一处就全覆盖。
+   */
+  img(raw: string): string {
+    return imgCacheUrl(this.imgPlain(raw));
   }
 }

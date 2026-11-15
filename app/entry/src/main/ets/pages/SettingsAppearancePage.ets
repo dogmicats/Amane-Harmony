@@ -2,6 +2,7 @@ import { router } from '@kit.ArkUI';
 import { Theme, THEME_PALETTES, ThemePalette } from '../common/Theme';
 import { Personalize, COLS_MIN, COLS_MAX, STILL_MIN, STILL_MAX } from '../common/Personalize';
 import { Store } from '../common/Store';
+import { Haptics } from '../common/Haptics';
 
 /**
  * 外观（2.5.2）：主题色 + 海报列数 + 瀑布流列数。
@@ -229,6 +230,40 @@ struct ThemePreview {
   }
 }
 
+/**
+ * 光效强度选择：三块等宽小卡，选中填强调色。
+ * 独立组件是为了选中态能立刻重绘（同本文件其它 `@Prop` 组件的理由）。
+ */
+@Component
+struct FxChip {
+  @Prop label: string = '';
+  @Prop sub: string = '';
+  @Prop picked: boolean = false;
+  @Prop accent: string = Theme.ACCENT;
+  @Prop onAccent: string = '#FFFFFF';
+  onPick: () => void = () => {};
+
+  build() {
+    Column({ space: 3 }) {
+      Text(this.label)
+        .fontSize(12)
+        .fontWeight(this.picked ? FontWeight.Medium : FontWeight.Normal)
+        .fontColor(this.picked ? this.onAccent : Theme.TEXT)
+      Text(this.sub)
+        .fontSize(9)
+        .fontColor(this.picked ? this.onAccent : Theme.TEXT_FAINT)
+        .opacity(this.picked ? 0.82 : 1)
+    }
+    .layoutWeight(1)
+    .padding({ top: 9, bottom: 9 })
+    .borderRadius(11)
+    .backgroundColor(this.picked ? this.accent : Theme.CARD_HI)
+    .onClick(() => {
+      this.onPick();
+    })
+  }
+}
+
 @Entry
 @Component
 struct SettingsAppearancePage {
@@ -242,6 +277,10 @@ struct SettingsAppearancePage {
   @StorageProp('amaneThemeEpoch') @Watch('onEpoch') themeEpoch: number = 0;
   @StorageProp('amaneCols') posterCols: number = 3;
   @StorageProp('amaneStillCols') stillCols: number = 2;
+  /** 沉浸光效强度（0 关 / 1 轻 / 2 强）。 */
+  @StorageProp('amaneFx') fx: number = 2;
+  /** 触感反馈开关（1 开 / 0 关，2.6.1.18）。 */
+  @StorageProp('amaneHaptic') haptic: number = 1;
 
   aboutToAppear(): void {
     this.pal = Theme.paletteOf(Theme.paletteKey);
@@ -282,11 +321,11 @@ struct SettingsAppearancePage {
           router.back();
         })
       Column({ space: 2 }) {
-        Text('外观')
+        Text('外观与布局')
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
           .fontColor(Theme.TEXT)
-        Text('主题色与列数，只存这台设备')
+        Text('主题色、列数、光效与触感，只存这台设备')
           .fontSize(11)
           .fontColor(Theme.TEXT_FAINT)
       }
@@ -424,6 +463,99 @@ struct SettingsAppearancePage {
             .borderRadius(14)
           }
           .width('100%')
+
+          Column({ space: 10 }) {
+            Row() {
+              Text('沉浸光效')
+                .fontSize(11)
+                .fontColor(Theme.TEXT_FAINT)
+                .letterSpacing(1)
+              Blank()
+              Text(Personalize.fxName(this.fx))
+                .fontSize(10)
+                .fontColor(this.pal.accent)
+            }
+            .width('100%')
+
+            Column({ space: 10 }) {
+              Row({ space: 8 }) {
+                FxChip({
+                  label: '关',
+                  sub: '最省电',
+                  picked: this.fx <= 0,
+                  accent: this.pal.accent,
+                  onAccent: this.pal.onAccent,
+                  onPick: () => {
+                    Personalize.setFx(0);
+                  }
+                })
+                FxChip({
+                  label: '轻',
+                  sub: '只留光晕',
+                  picked: this.fx === 1,
+                  accent: this.pal.accent,
+                  onAccent: this.pal.onAccent,
+                  onPick: () => {
+                    Personalize.setFx(1);
+                  }
+                })
+                FxChip({
+                  label: '强',
+                  sub: '光晕 + 粒子',
+                  picked: this.fx >= 2,
+                  accent: this.pal.accent,
+                  onAccent: this.pal.onAccent,
+                  onPick: () => {
+                    Personalize.setFx(2);
+                  }
+                })
+              }
+              .width('100%')
+
+              Text('首页大图的柔光、详情封面播放键的光斑、启动时的浮尘，以及底栏选中那一盏灯。光效只画在图上，不压文字；关掉后所有页面都不画，最省电。')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+            }
+            .width('100%')
+            .padding(14)
+            .backgroundColor(Theme.CARD)
+            .borderRadius(14)
+          }
+          .width('100%')
+
+          // 触感反馈（2.6.1.18）：和光效分开一套开关 —— 有人愿意要光但不要震
+          Column({ space: 10 }) {
+            Row() {
+              Text('触感反馈')
+                .fontSize(11)
+                .fontColor(Theme.TEXT_FAINT)
+                .letterSpacing(1)
+              Blank()
+              Text(this.haptic === 1 ? '开' : '关')
+                .fontSize(10)
+                .fontColor(this.pal.accent)
+            }
+            .width('100%')
+
+            Row({ space: 10 }) {
+              Toggle({ type: ToggleType.Switch, isOn: this.haptic === 1 })
+                .selectedColor(this.pal.accent)
+                .onChange((on: boolean) => {
+                  Haptics.setOn(on);
+                })
+              Text('收藏、删除确认、拖拽落位时轻轻一震。模拟器没有马达，看不到效果不代表没生效。')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .layoutWeight(1)
+            }
+            .width('100%')
+          }
+          .width('100%')
+          .padding(14)
+          .backgroundColor(Theme.CARD)
+          .borderRadius(14)
+          .margin({ top: 12 })
         }
         .width('100%')
         .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })

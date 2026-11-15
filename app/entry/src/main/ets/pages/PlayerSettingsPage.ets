@@ -4,8 +4,8 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { Theme } from '../common/Theme';
 import { Store } from '../common/Store';
+import { SubStyle, SUB_SIZE_OPTS, SUB_OUTLINE_OPTS, SUB_POS_OPTS, SUB_BG_OPTS, SubOpt } from '../common/SubStyle';
 import { httpGet, httpPost } from '../common/Http';
-import { cacheClear, cacheSizeKb } from '../common/PageCache';
 import {
   PlayerPrefs, PlayerTuning, PresetOption, PRESETS, confText, presetTuning
 } from '../common/PlayerPrefs';
@@ -37,14 +37,18 @@ struct PlayerSettingsPage {
   @State hrSeek: boolean = false;
   @State extra: string = '';
   @State advanced: boolean = false;
+  /** 播放性能区默认折叠（2026-11-15）：预设/解码/缓冲这些是调参，不该占第一屏。 */
+  @State perfOpen: boolean = false;
   @State note: string = '';
   @State confPreview: string = '';
   /** 交互项（不进 mpv.conf，存 Store 偏好）。 */
   @State seekStep: number = 10;
   /** 重力自动切换：关了播放页永远横屏全屏。 */
   @State autorotate: boolean = true;
-  /** 返回桌面自动画中画（默认关）。 */
+  /** 回桌面自动出系统小窗（默认关，2026-11-13 21:14 用户定）。 */
   @State pipAuto: boolean = false;
+  /** 后台出声（回桌面后只留声音，默认关）。 */
+  @State bgPlay: boolean = false;
   /** 长按加速到多少倍（默认 3）。 */
   @State tempSpeed: number = 3;
   /** 从列表/剧照/弹幕跳进播放页时的默认形态：portrait | landscape。 */
@@ -53,6 +57,8 @@ struct PlayerSettingsPage {
   @State openMode: string = 'bili';
   /** 本地磁盘缓存上限 MiB（0 = 关）。 */
   @State diskMiB: number = 0;
+  /** 起播优先（2.6.1.57）：不等缓冲攒满就出画面。 */
+  @State startFast: boolean = true;
   @State cacheNote: string = '';
   /** 弹幕样式（B 站式飞行）。 */
   @State danmuOn: boolean = true;
@@ -60,11 +66,17 @@ struct PlayerSettingsPage {
   @State danmuSpeed: number = 90;
   @State danmuTracks: number = 6;
   @State danmuAlpha: number = 0.9;
+  /** 字幕样式（2.6.1.55）：真值在偏好里，这里只做选中态。 */
+  @State subSizePct: number = 100;
+  @State subOutlineW: number = 3;
+  @State subPosPct: number = 100;
+  @State subBgMode: number = 0;
   /** 服务端播放缓存占用（「1.2 GB / 4 GB · 320 块」）。 */
   @State cacheStat: string = '';
-  /** 页面级数据缓存占用（KB）。 */
-  @State pageCacheKb: number = 0;
-  @State pageNote: string = '';
+  /** 网盘片那份缓存的额度（MB，用户可调；0 = 关闭）。 */
+  @State remoteMb: number = 4096;
+  /** 本地片那份（固定小额度，只显示不给改）。 */
+  @State localStat: string = '';
 
   aboutToAppear(): void {
     const ctx = getContext(this) as common.UIAbilityContext;
@@ -72,7 +84,9 @@ struct PlayerSettingsPage {
     const step: number = Number(Store.I.prefString('player_seek_step', '10'));
     this.seekStep = step >= 5 && step <= 60 ? Math.trunc(step) : 10;
     this.autorotate = Store.I.prefString('player_autorotate', '1') !== '0';
+    // 这两个开关默认关（2026-11-13 21:14 用户定），播放器读取口径必须一致。
     this.pipAuto = Store.I.prefString('player_pip_auto', '0') === '1';
+    this.bgPlay = Store.I.prefString('player_bg_play', '0') === '1';
     const ts: number = Number(Store.I.prefString('player_temp_speed', '3'));
     this.tempSpeed = ts >= 1.5 && ts <= 5 ? ts : 3;
     this.jumpMode = Store.I.prefString('player_jump_mode', 'portrait');
@@ -83,8 +97,42 @@ struct PlayerSettingsPage {
     this.danmuSpeed = Number(Store.I.prefString('danmu_speed', '90')) || 90;
     this.danmuTracks = Number(Store.I.prefString('danmu_tracks', '6')) || 6;
     this.danmuAlpha = Number(Store.I.prefString('danmu_alpha', '0.9')) || 0.9;
+    // 字幕样式：和播放页那个面板共用同一套偏好
+    this.subSizePct = SubStyle.size();
+    this.subOutlineW = SubStyle.outline();
+    this.subPosPct = SubStyle.pos();
+    this.subBgMode = SubStyle.bg();
     this.loadCacheStat();
-    this.pageCacheKb = cacheSizeKb();
+  }
+
+  /** 一行提示（2 秒自动消失），给开关联动这类「改了另一个」的反馈用。 */
+  private flash(msg: string): void {
+    this.note = msg;
+    setTimeout(() => {
+      this.note = '';
+    }, 2200);
+  }
+
+  /**
+   * 回桌面后的三种状态（2026-11-15）。
+   *
+   * 原来「后台播放」和「回桌面出小窗」是两个 Switch，互斥靠「开一个自动关另一个」实现，
+   * 用户看到的是「我开了一个，另一个自己关了」。现在表达成一个单选项，但**底下还是这两个偏好键**：
+   *   off = 都关（默认） / bg = player_bg_play=1 / pip = player_pip_auto=1
+   * 键名、默认值、互斥规则一个都没变，老配置读出来自然落到对应档。
+   */
+  private deskMode(): string {
+    if (this.pipAuto) {
+      return 'pip';
+    }
+    return this.bgPlay ? 'bg' : 'off';
+  }
+
+  private pickDesk(mode: string): void {
+    this.bgPlay = mode === 'bg';
+    this.pipAuto = mode === 'pip';
+    Store.I.prefSetString('player_bg_play', this.bgPlay ? '1' : '0');
+    Store.I.prefSetString('player_pip_auto', this.pipAuto ? '1' : '0');
   }
 
   private fill(t: PlayerTuning): void {
@@ -96,6 +144,8 @@ struct PlayerSettingsPage {
     this.backMiB = t.backMiB;
     this.hrSeek = t.hrSeek;
     this.extra = t.extra;
+    this.diskMiB = t.diskMiB;
+    this.startFast = t.startFast;
     this.refreshPreview();
   }
 
@@ -109,7 +159,8 @@ struct PlayerSettingsPage {
       backMiB: this.backMiB,
       hrSeek: this.hrSeek,
       extra: this.extra,
-      diskMiB: this.diskMiB
+      diskMiB: this.diskMiB,
+      startFast: this.startFast
     };
     return t;
   }
@@ -442,6 +493,124 @@ struct PlayerSettingsPage {
     .borderRadius(Theme.RADIUS)
   }
 
+  /**
+   * 字幕样式（2.6.1.55）：字号 / 描边 / 位置 / 背景。
+   *
+   * 和播放页里那个「字幕 · 样式」面板共用同一套偏好（`SubStyle`），两处改都算数。
+   * 播放中想边看边调，用播放页那个面板 —— 那边点一下立刻写进 mpv；
+   * 这里改完回到播放页也会生效（进播放器时按偏好套一遍）。
+   */
+  @Builder
+  SubtitleStyleSection() {
+    Column({ space: 10 }) {
+      Row({ space: 7 }) {
+        Text('字号')
+          .fontSize(10)
+          .fontColor(Theme.TEXT_FAINT)
+          .width(34)
+        Flex({ wrap: FlexWrap.Wrap }) {
+          ForEach(SUB_SIZE_OPTS, (o: SubOpt) => {
+            Text(o.l)
+              .fontSize(12)
+              .fontColor(this.subSizePct === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
+              .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+              .backgroundColor(this.subSizePct === o.v ? Theme.ACCENT : Theme.CARD_HI)
+              .borderRadius(12)
+              .margin({ right: 7, bottom: 4 })
+              .onClick(() => {
+                this.subSizePct = o.v;
+                SubStyle.setSize(o.v);
+              })
+          }, (o: SubOpt) => `ss-${o.v}`)
+        }
+        .layoutWeight(1)
+      }
+      .width('100%')
+
+      Row({ space: 7 }) {
+        Text('描边')
+          .fontSize(10)
+          .fontColor(Theme.TEXT_FAINT)
+          .width(34)
+        Flex({ wrap: FlexWrap.Wrap }) {
+          ForEach(SUB_OUTLINE_OPTS, (o: SubOpt) => {
+            Text(o.l)
+              .fontSize(12)
+              .fontColor(this.subOutlineW === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
+              .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+              .backgroundColor(this.subOutlineW === o.v ? Theme.ACCENT : Theme.CARD_HI)
+              .borderRadius(12)
+              .margin({ right: 7, bottom: 4 })
+              .onClick(() => {
+                this.subOutlineW = o.v;
+                SubStyle.setOutline(o.v);
+              })
+          }, (o: SubOpt) => `so-${o.v}`)
+        }
+        .layoutWeight(1)
+      }
+      .width('100%')
+
+      Row({ space: 7 }) {
+        Text('位置')
+          .fontSize(10)
+          .fontColor(Theme.TEXT_FAINT)
+          .width(34)
+        Flex({ wrap: FlexWrap.Wrap }) {
+          ForEach(SUB_POS_OPTS, (o: SubOpt) => {
+            Text(o.l)
+              .fontSize(12)
+              .fontColor(this.subPosPct === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
+              .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+              .backgroundColor(this.subPosPct === o.v ? Theme.ACCENT : Theme.CARD_HI)
+              .borderRadius(12)
+              .margin({ right: 7, bottom: 4 })
+              .onClick(() => {
+                this.subPosPct = o.v;
+                SubStyle.setPos(o.v);
+              })
+          }, (o: SubOpt) => `sp-${o.v}`)
+        }
+        .layoutWeight(1)
+      }
+      .width('100%')
+
+      Row({ space: 7 }) {
+        Text('背景')
+          .fontSize(10)
+          .fontColor(Theme.TEXT_FAINT)
+          .width(34)
+        Flex({ wrap: FlexWrap.Wrap }) {
+          ForEach(SUB_BG_OPTS, (o: SubOpt) => {
+            Text(o.l)
+              .fontSize(12)
+              .fontColor(this.subBgMode === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
+              .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+              .backgroundColor(this.subBgMode === o.v ? Theme.ACCENT : Theme.CARD_HI)
+              .borderRadius(12)
+              .margin({ right: 7, bottom: 4 })
+              .onClick(() => {
+                this.subBgMode = o.v;
+                SubStyle.setBg(o.v);
+              })
+          }, (o: SubOpt) => `sb-${o.v}`)
+        }
+        .layoutWeight(1)
+      }
+      .width('100%')
+
+      Text('播放中也能调：播放页 → 字幕面板 → 右上角「样式」，改完立刻生效')
+        .fontSize(10)
+        .fontColor(Theme.TEXT_FAINT)
+        .lineHeight(14)
+        .width('100%')
+    }
+    .width('100%')
+    .padding(14)
+    .backgroundColor(Theme.CARD)
+    .borderRadius(Theme.RADIUS)
+  }
+
   /** 长按加速倍速：整块画面长按 420ms 触发。 */
   @Builder
   TempSpeedRow() {
@@ -589,11 +758,34 @@ struct PlayerSettingsPage {
           .fontColor(Theme.ACCENT)
       }
       .width('100%')
-      Text('看过的片段会缓存在服务端磁盘上，第二次打开同一部片直接读缓存，不再回源网盘')
+      Text('看过的片段缓存到服务端磁盘，第二次打开同一部片直接读缓存。'
+        + '只有把网盘挂成媒体库时才需要分配空间（网盘片要重新拉索引，8~27 秒）。'
+        + '上限与清理统一在「存储与数据 → 空间管理」里改：网盘片可调，本地片固定 128 MB。')
         .fontSize(10)
         .fontColor(Theme.TEXT_FAINT)
         .width('100%')
         .lineHeight(14)
+      if (this.localStat.length > 0) {
+        Text(this.localStat)
+          .fontSize(10)
+          .fontColor(Theme.TEXT_FAINT)
+          .width('100%')
+          .lineHeight(14)
+      }
+
+      // 网盘片上限只读显示：**调节入口只留「空间管理」一处**（2026-11-15 合并且去重）。
+      // 两个页面同时能改同一个数字，用户改完不知道哪个生效，也容易一边改了另一边看不出变化。
+      Row() {
+        Text('网盘片缓存上限')
+          .fontSize(12)
+          .fontColor(Theme.TEXT_DIM)
+          .layoutWeight(1)
+        Text(this.remoteMb > 0 ? (this.remoteMb >= 1024 ? `${Math.round(this.remoteMb / 1024)} GB` : `${this.remoteMb} MB`) : '关闭')
+          .fontSize(11)
+          .fontColor(Theme.TEXT_FAINT)
+      }
+      .width('100%')
+      .margin({ top: 2 })
 
       Row({ space: 8 }) {
         Text('刷新')
@@ -605,14 +797,16 @@ struct PlayerSettingsPage {
           .onClick(() => {
             this.loadCacheStat();
           })
-        Text('清理缓存')
+        // 2026-11-15：上限与清理只留「空间管理」一个入口（那边能分开看网盘片 / 本地片），
+        // 这里只读 + 跳转，避免同一个数字两处改让人困惑。
+        Text('去空间管理调整 ›')
           .fontSize(11)
-          .fontColor(Theme.DANGER)
+          .fontColor(Theme.ACCENT)
           .padding({ left: 10, right: 10, top: 5, bottom: 5 })
           .backgroundColor(Theme.CARD_HI)
           .borderRadius(8)
           .onClick(() => {
-            this.clearDiskCache();
+            router.pushUrl({ url: 'pages/CachePage' });
           })
         if (this.cacheNote.length > 0) {
           Text(this.cacheNote)
@@ -670,17 +864,29 @@ struct PlayerSettingsPage {
   private loadCacheStat(): void {
     httpGet(`${Store.I.user}/api/user/playcache`, Store.I.token).then((text: string) => {
       const obj = JSON.parse(text) as Record<string, Object>;
-      const used: number = Number(obj.used_mb) || 0;
-      const budget: number = Number(obj.budget_mb) || 0;
+      const used: number = Number(obj.remote_used_mb) || 0;
+      const budget: number = Number(obj.remote_budget_mb) || 0;
       const files: number = Number(obj.files) || 0;
+      const locUsed: number = Number(obj.local_used_mb) || 0;
+      const locMb: number = Number(obj.local_budget_mb) || 0;
+      this.remoteMb = budget;
+      const fmt = (mb: number, digits: boolean): string => {
+        if (mb >= 1024) {
+          return digits ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb / 1024)} GB`;
+        }
+        return `${Math.round(mb)} MB`;
+      };
       if (budget <= 0) {
-        this.cacheStat = '服务端未开启';
+        this.cacheStat = '已关闭（不缓存网盘片）';
       } else {
-        this.cacheStat = `已用 ${used >= 1024 ? (used / 1024).toFixed(1) + ' GB' : used.toFixed(0) + ' MB'} / ${budget >= 1024 ? (budget / 1024).toFixed(0) + ' GB' : budget + ' MB'}`;
+        this.cacheStat = `${fmt(used, true)} / ${fmt(budget, false)}`;
         if (files > 0) {
           this.cacheStat = `${this.cacheStat} · ${files} 块`;
         }
       }
+      this.localStat = locMb > 0
+        ? `本地片：${fmt(locUsed, true)} / ${fmt(locMb, false)}（固定额度）`
+        : '本地片：未启用';
     }).catch((err: BusinessError) => {
       console.error(`[amane] playcache: ${err.code} ${err.message}`);
       this.cacheStat = '读取失败';
@@ -694,60 +900,10 @@ struct PlayerSettingsPage {
    * 和服务端「播放缓存」是两件事：
    *  - 播放缓存 = 视频数据块，解决「起播慢」；
    *  - 页面缓存 = 页面数据（JSON），解决「每次进页面都要等一下才出内容」。
+   *
+   * 2026-11-15：页面缓存的「看占用 + 清理」搬到「设置 → 存储与数据 → 空间管理」（那一页的
+   * 「页面数据」卡片就是这件事，还带条数）。这里不再重复放，避免同一份数据两个清理入口。
    */
-  @Builder
-  PageCacheRow() {
-    Column({ space: 8 }) {
-      Row() {
-        Text('页面缓存')
-          .fontSize(14)
-          .fontColor(Theme.TEXT)
-          .layoutWeight(1)
-        Text(this.pageCacheKb > 0 ? `${this.pageCacheKb} KB` : '空')
-          .fontSize(11)
-          .fontColor(Theme.ACCENT)
-      }
-      .width('100%')
-      Text('详情页、首页这些数据在本机存一份：第二次进来先把上次的内容铺上去，网络在后台刷新')
-        .fontSize(10)
-        .fontColor(Theme.TEXT_FAINT)
-        .width('100%')
-        .lineHeight(14)
-      Row({ space: 8 }) {
-        Text('刷新')
-          .fontSize(11)
-          .fontColor(Theme.TEXT_DIM)
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-          .backgroundColor(Theme.CARD_HI)
-          .borderRadius(8)
-          .onClick(() => {
-            this.pageCacheKb = cacheSizeKb();
-          })
-        Text('清理')
-          .fontSize(11)
-          .fontColor(Theme.DANGER)
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-          .backgroundColor(Theme.CARD_HI)
-          .borderRadius(8)
-          .onClick(() => {
-            const n: number = cacheClear();
-            this.pageCacheKb = 0;
-            this.pageNote = n > 0 ? `已清理 ${n} 份` : '本来就是空的';
-          })
-        if (this.pageNote.length > 0) {
-          Text(this.pageNote)
-            .fontSize(10)
-            .fontColor(Theme.ACCENT)
-        }
-        Blank()
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .padding(14)
-    .backgroundColor(Theme.CARD)
-    .borderRadius(Theme.RADIUS)
-  }
 
   private clearDiskCache(): void {
     try {
@@ -766,7 +922,7 @@ struct PlayerSettingsPage {
     httpPost(`${Store.I.user}/api/user/playcache/clear`, Store.I.token, '{}')
       .then((text: string) => {
         const obj = JSON.parse(text) as Record<string, Object>;
-        const removed: number = Number(obj.removed) || 0;
+        const removed: number = (Number(obj.remote_removed) || 0) + (Number(obj.local_removed) || 0);
         this.cacheNote = `已清理服务端 ${removed} 个缓存块`;
         this.loadCacheStat();
       })
@@ -776,10 +932,6 @@ struct PlayerSettingsPage {
       });
   }
 
-  /**
-   * 档位行：读 this.pickValue(kind)，不靠参数传值。
-   * @Builder 按值传参不会随状态刷新，必须让 builder 内部直接读 state。
-   */
   @Builder
   ChipRow(kind: string, title: string, desc: string) {
     Column({ space: 8 }) {
@@ -834,7 +986,7 @@ struct PlayerSettingsPage {
           .onClick(() => {
             router.back();
           })
-        Text('播放器')
+        Text('播放设置')
           .fontSize(17)
           .fontWeight(FontWeight.Medium)
           .fontColor(Theme.TEXT)
@@ -851,37 +1003,9 @@ struct PlayerSettingsPage {
 
       Scroll() {
         Column({ space: 12 }) {
-          this.SectionTitle('预设', '一套数值对应一种网络环境，选完还能在下面单项微调')
+          // ── 播放习惯（2026-11-15 重排：先放「怎么播」，性能参数收进下面的折叠区）──
+          this.SectionTitle('播放习惯', '下面这些改完立即生效，不用点保存')
 
-          Row({ space: 8 }) {
-            ForEach(PRESETS, (p: PresetOption) => {
-              Column({ space: 3 }) {
-                Text(p.label)
-                  .fontSize(13)
-                  .fontColor(this.preset === p.key ? '#FFFFFF' : Theme.TEXT)
-                  .fontWeight(this.preset === p.key ? FontWeight.Medium : FontWeight.Normal)
-                Text(p.desc)
-                  .fontSize(9)
-                  .fontColor(this.preset === p.key ? '#E6FFFFFF' : Theme.TEXT_FAINT)
-                  .maxLines(2)
-                  .textAlign(TextAlign.Center)
-                  .lineHeight(12)
-              }
-              .layoutWeight(1)
-              .padding({ left: 8, right: 8, top: 10, bottom: 10 })
-              .backgroundColor(this.preset === p.key ? Theme.ACCENT : Theme.CARD)
-              .borderRadius(12)
-              .onClick(() => {
-                this.pickPreset(p.key);
-              })
-            }, (p: PresetOption) => `preset-${p.key}`)
-          }
-          .width('100%')
-
-          this.SectionTitle('播放', '')
-
-          this.SeekStepRow()
-          this.TempSpeedRow()
           this.OpenModeRow()
           this.JumpModeRow()
 
@@ -913,38 +1037,162 @@ struct PlayerSettingsPage {
           .backgroundColor(Theme.CARD)
           .borderRadius(Theme.RADIUS)
 
-          // 返回桌面自动画中画（R18）：默认关，避免一按 home 就冒小窗
-          Row({ space: 12 }) {
-            Column({ space: 2 }) {
-              Text('返回桌面自动画中画')
+          this.SeekStepRow()
+          this.TempSpeedRow()
+
+          // ── 返回桌面后（2026-11-15）：两个互斥开关合成一个单选项 ──
+          // 偏好键与默认值一个都没变：都不选 = 关闭；player_bg_play=1 = 仅声音；player_pip_auto=1 = 画中画。
+          // 原来两个 Switch 各自带「开一个自动关另一个」，用户开了一个另一个突然关掉，看着像 bug。
+          this.SectionTitle('返回桌面后', '按 home 或切到别的应用时怎么办；选完立即生效')
+
+          Column({ space: 10 }) {
+            Row() {
+              Text('按 home 回桌面后')
                 .fontSize(14)
                 .fontColor(Theme.TEXT)
-              Text('开了之后按 home / 切到别的应用，播放会自动缩成小窗')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .lineHeight(14)
+                .layoutWeight(1)
+              Text(this.deskMode() === 'off' ? '关闭' : (this.deskMode() === 'bg' ? '仅声音' : '画中画'))
+                .fontSize(12)
+                .fontColor(Theme.ACCENT)
             }
-            .alignItems(HorizontalAlign.Start)
-            .layoutWeight(1)
-            Toggle({ type: ToggleType.Switch, isOn: this.pipAuto })
-              .selectedColor(Theme.ACCENT)
-              .onChange((v: boolean) => {
-                this.pipAuto = v;
-                Store.I.prefSetString('player_pip_auto', v ? '1' : '0');
-              })
+            .width('100%')
+
+            Flex({ wrap: FlexWrap.Wrap }) {
+              Text('关闭')
+                .fontSize(12)
+                .fontColor(this.deskMode() === 'off' ? '#FFFFFF' : Theme.TEXT_DIM)
+                .padding({ left: 14, right: 14, top: 7, bottom: 7 })
+                .backgroundColor(this.deskMode() === 'off' ? Theme.ACCENT : Theme.CARD_HI)
+                .borderRadius(13)
+                .margin({ right: 8, bottom: 4 })
+                .onClick(() => {
+                  this.pickDesk('off');
+                })
+              Text('只留声音')
+                .fontSize(12)
+                .fontColor(this.deskMode() === 'bg' ? '#FFFFFF' : Theme.TEXT_DIM)
+                .padding({ left: 14, right: 14, top: 7, bottom: 7 })
+                .backgroundColor(this.deskMode() === 'bg' ? Theme.ACCENT : Theme.CARD_HI)
+                .borderRadius(13)
+                .margin({ right: 8, bottom: 4 })
+                .onClick(() => {
+                  this.pickDesk('bg');
+                })
+              Text('缩成小窗')
+                .fontSize(12)
+                .fontColor(this.deskMode() === 'pip' ? '#FFFFFF' : Theme.TEXT_DIM)
+                .padding({ left: 14, right: 14, top: 7, bottom: 7 })
+                .backgroundColor(this.deskMode() === 'pip' ? Theme.ACCENT : Theme.CARD_HI)
+                .borderRadius(13)
+                .margin({ right: 8, bottom: 4 })
+                .onClick(() => {
+                  this.pickDesk('pip');
+                })
+            }
+            .width('100%')
+
+            Text(this.deskMode() === 'off'
+              ? '回到桌面就停：声音和画面都不留（默认）。'
+              : (this.deskMode() === 'bg'
+                ? '回到桌面后画面没了、声音继续，不出现小窗。'
+                : '回到桌面后自动缩成桌面小窗，画面和声音都跟着走。'))
+              .fontSize(10)
+              .fontColor(Theme.TEXT_FAINT)
+              .width('100%')
+              .lineHeight(15)
           }
           .width('100%')
           .padding(14)
           .backgroundColor(Theme.CARD)
           .borderRadius(Theme.RADIUS)
+          .alignItems(HorizontalAlign.Start)
 
-          this.SectionTitle('弹幕', '播放时从右往左飞过画面的那层字')
+          // 应用内小窗（2.6.2.1）改成**只在播放器上点「画中画」时出现**（2026-11-13 21:12
+          // 用户口径：退出详情页不自动弹；回桌面走系统画中画）。原来那两个开关
+          // （「离开详情页继续小窗」与「回桌面出小窗」）已在 2026-11-15 合成上面那个单选项。
+
+          this.SectionTitle('弹幕', '播放时从右往左飞过画面的那层字；改完立即生效')
           this.DanmuSection()
 
-          this.SwitchRow('硬件解码', '关了走软解。码率高、硬解花屏或卡住时再关', this.hwdec,
-            (v: boolean) => {
-              this.hwdec = v;
-            })
+          this.SectionTitle('字幕样式', '字号、描边、位置、背景；改完立刻生效，不用重播')
+          this.SubtitleStyleSection()
+
+          // ── 播放性能（2026-11-15：默认折叠）──
+          // 这些是「调参」，日常不用碰；收起来后第一屏只剩播放习惯、回桌面行为、字幕弹幕。
+          Row() {
+            Text(this.perfOpen ? '▾ 播放性能' : '▸ 播放性能')
+              .fontSize(12)
+              .fontColor(Theme.TEXT_DIM)
+              .layoutWeight(1)
+            Text(this.presetLabel())
+              .fontSize(10)
+              .fontColor(Theme.TEXT_FAINT)
+          }
+          .width('100%')
+          .padding({ top: 12, bottom: 6 })
+          .onClick(() => {
+            this.perfOpen = !this.perfOpen;
+          })
+
+          if (this.perfOpen) {
+            this.SectionTitle('预设', '一套数值对应一种网络环境，选完还能在下面单项微调')
+
+            Row({ space: 8 }) {
+              ForEach(PRESETS, (p: PresetOption) => {
+                Column({ space: 3 }) {
+                  Text(p.label)
+                    .fontSize(13)
+                    .fontColor(this.preset === p.key ? '#FFFFFF' : Theme.TEXT)
+                    .fontWeight(this.preset === p.key ? FontWeight.Medium : FontWeight.Normal)
+                  Text(p.desc)
+                    .fontSize(9)
+                    .fontColor(this.preset === p.key ? '#E6FFFFFF' : Theme.TEXT_FAINT)
+                    .maxLines(2)
+                    .textAlign(TextAlign.Center)
+                    .lineHeight(12)
+                }
+                .layoutWeight(1)
+                .padding({ left: 8, right: 8, top: 10, bottom: 10 })
+                .backgroundColor(this.preset === p.key ? Theme.ACCENT : Theme.CARD)
+                .borderRadius(12)
+                .onClick(() => {
+                  this.pickPreset(p.key);
+                })
+              }, (p: PresetOption) => `preset-${p.key}`)
+            }
+            .width('100%')
+
+            // 起播优先（2.6.1.57）：网页播放器那种「拿到第一帧就播」的观感
+            Row({ space: 12 }) {
+              Column({ space: 2 }) {
+                Text('起播优先')
+                  .fontSize(14)
+                  .fontColor(Theme.TEXT)
+                Text('不等缓冲攒满就出画面，点开即播、拖进度也更快；' +
+                  '代价是网络很慢时画面上来会先顿一下')
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .lineHeight(14)
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+              Toggle({ type: ToggleType.Switch, isOn: this.startFast })
+                .selectedColor(Theme.ACCENT)
+                .onChange((v: boolean) => {
+                  this.startFast = v;
+                  this.refreshPreview();
+                  this.save();
+                })
+            }
+            .width('100%')
+            .padding(14)
+            .backgroundColor(Theme.CARD)
+            .borderRadius(Theme.RADIUS)
+
+            this.SwitchRow('硬件解码', '关了走软解。码率高、硬解花屏或卡住时再关', this.hwdec,
+              (v: boolean) => {
+                this.hwdec = v;
+              })
 
           this.SwitchRow('精确跳转', '关：拖到最近关键帧，起播最快（默认）。开：落在准确时间点，但要多解码一段',
             this.hrSeek, (v: boolean) => {
@@ -955,7 +1203,6 @@ struct PlayerSettingsPage {
           this.SectionTitle('缓冲', '拖动进度条后要等多久恢复，主要看前两项')
 
           this.DiskCacheRow()
-          this.PageCacheRow()
 
           this.ChipRow('pauseWait', '恢复前缓冲', '拖动后先攒这么多秒再播。这是「拖动完卡一下」的主因，调大更抗抖但更慢')
           this.ChipRow('readahead', '预读时长', '往后预读多少秒。网盘源建议 20~30')
@@ -984,6 +1231,7 @@ struct PlayerSettingsPage {
           }
           .width('100%')
           .margin({ top: 4 })
+          }
 
           if (this.note.length > 0) {
             Text(this.note)
@@ -1038,7 +1286,7 @@ struct PlayerSettingsPage {
               .borderRadius(10)
           }
 
-          Text('参数改动在下次进入播放页时生效；播放中不会热更新。')
+          Text('播放习惯 / 返回桌面后 / 字幕与弹幕：改完立即生效。播放性能与高级参数：点「保存」后，下次进播放页生效。')
             .fontSize(10)
             .fontColor(Theme.TEXT_FAINT)
             .width('100%')
@@ -1057,3 +1305,4 @@ struct PlayerSettingsPage {
     .backgroundColor(Theme.BG)
   }
 }
+

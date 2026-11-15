@@ -114,6 +114,34 @@ export function dropPageCache(): void {
   }
 }
 
+/**
+ * 预热播放流：只发一个 1 字节的 Range 请求，拿到东西就丢。
+ *
+ * 为什么要它（2.6.1.84）：网盘片「首次打开」慢的不是客户端，是服务端要去 CD2 冷区取
+ * 第一个 4MiB 块（实测 1.8~4.9 秒；缓存命中后 0.02 秒）。在**详情页**就发一下，等服务端
+ * 把首块拉起来，用户再点「播放」时块已经在盘上 —— 首帧就从 2~6 秒掉到 1 秒内。
+ *
+ * 服务端按块缓存，1 字节和 4MiB 请求触发的是同一个块任务，所以这个请求本身几乎零成本。
+ * 失败一律静默：预热不成功最多回到「没预热」的状态，不能影响任何正常路径。
+ */
+export async function httpWarmStream(url: string): Promise<void> {
+  const request = http.createHttp();
+  try {
+    await request.request(url, {
+      method: http.RequestMethod.GET,
+      header: { 'Range': 'bytes=0-0' },
+      connectTimeout: 6000,
+      readTimeout: 12000,
+      usingCache: false,
+      expectDataType: http.HttpDataType.STRING
+    });
+  } catch (err) {
+    // 预热失败无所谓
+  } finally {
+    request.destroy();
+  }
+}
+
 export async function httpPost(url: string, token: string, body: string,
   timeoutMs: number = 25000): Promise<string> {
   return call(url, http.RequestMethod.POST, token, body, timeoutMs);

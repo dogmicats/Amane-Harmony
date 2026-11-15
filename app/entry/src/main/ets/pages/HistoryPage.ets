@@ -376,7 +376,10 @@ struct HistoryPage {
           }
           .width('100%')
           .layoutWeight(1)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+          // 2.6.1.40：这里原来是 `Theme.BOTTOM_SAFE`(108) —— 那是给**底部悬浮胶囊栏**
+          // 预留的高度。本页是独立路由页（从「我的 → 观看记录」进来），根本没有那条栏，
+          // 于是列表底部空出一大块（用户 19:31「下面留了一个黑边」）。留 24 就够。
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 24 })
           .scrollBar(BarState.Off)
         }
       }
@@ -418,7 +421,9 @@ struct HistoryPage {
       }
     }
     .width('100%')
-    .height('100%')
+    // 2.6.1.40：**不写死 height** —— 固定高度会让 expandSafeArea 失效（布局已定，画不出去），
+    // 于是底部 98px 的系统手势条区域一直露窗口纯黑。交给 Page 撑满后再向下延伸绘制。
     .backgroundColor(Theme.BG)
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
   }
 }

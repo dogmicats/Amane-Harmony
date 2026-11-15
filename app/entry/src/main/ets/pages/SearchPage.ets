@@ -1545,6 +1545,20 @@ struct SearchPage {
     .layoutWeight(1)
   }
 
+  /**
+   * 统一转场（2.6.1.18）：二级页统一 200ms 淡入。
+   *
+   * 在这之前全工程只有详情页有 `pageTransition`，其余二级页是硬切 ——
+   * 「同一个 App 里有的页面滑、有的页面闪」是最容易被察觉的廉价感来源。
+   * 详情页有自己的盲盒缩放转场，不套用这一套。
+   */
+  pageTransition(): void {
+    PageTransitionEnter({ type: RouteType.None, duration: 200, curve: Curve.EaseOut })
+      .opacity(0)
+    PageTransitionExit({ type: RouteType.None, duration: 160, curve: Curve.EaseIn })
+      .opacity(0)
+  }
+
   build() {
     // Stack 只为把排序 / 筛选抽屉压在内容之上（与媒体库、收藏同一形态）。
     Stack({ alignContent: Alignment.Bottom }) {

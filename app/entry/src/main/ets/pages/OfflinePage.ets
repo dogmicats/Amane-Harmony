@@ -33,6 +33,9 @@ struct OfflinePage {
   @State onWifi: boolean = true;
   @State runN: number = 0;
   @State waitN: number = 0;
+  /** 盘上有、列表里没有的残留文件（删除没删干净留下的）。0 = 没有。 */
+  @State orphanBytes: number = 0;
+  @State orphanFiles: number = 0;
   private stopWatch: () => void = () => {};
 
   aboutToAppear(): void {
@@ -70,6 +73,40 @@ struct OfflinePage {
     this.runN = Downloader.runningCount();
     this.waitN = Downloader.waitingCount();
     this.warn = Downloader.overSoftLimit();
+    const o: number[] = Downloader.orphanStats();
+    this.orphanBytes = o[0];
+    this.orphanFiles = o[1];
+  }
+
+  /**
+   * 清理「盘上有、列表里没有」的文件。
+   *
+   * 为什么会有：老版本的删除只认任务里记的 path，而下过一半/下完但 App 被杀的任务 path 是空的，
+   * 于是记录删了、文件留着。用户 2026-11-15 实测：下载管理显示 0 份，空间管理里离线影片仍占 13.08 GB。
+   */
+  private confirmOrphans(): void {
+    AlertDialog.show({
+      title: '清理这些残留文件？',
+      message: `盘上有 ${this.orphanFiles} 个文件（${this.mb(this.orphanBytes)}）不在下载列表里，` +
+        '是以前删除没删干净留下的。清掉只动这些，正在列表里的离线影片不受影响。',
+      primaryButton: {
+        value: '清理',
+        fontColor: Theme.DANGER,
+        action: () => {
+          const freed: number = Downloader.clearOrphans();
+          promptAction.showToast({
+            message: freed > 0 ? `已释放 ${this.mb(freed)}` : '没找到可清理的文件',
+            duration: 1800
+          });
+          this.refresh();
+        }
+      },
+      secondaryButton: {
+        value: '算了',
+        action: () => {
+        }
+      }
+    });
   }
 
   private async probeNet(): Promise<void> {
@@ -231,7 +268,7 @@ struct OfflinePage {
           router.back();
         })
       Column({ space: 2 }) {
-        Text('离线缓存')
+        Text('下载管理')
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
           .fontColor(Theme.TEXT)
@@ -388,6 +425,33 @@ struct OfflinePage {
     .borderRadius(12)
   }
 
+  /** 盘上有、列表里没有的残留文件提示条（只在真的存在时出现）。 */
+  @Builder
+  OrphanBar() {
+    Row({ space: 8 }) {
+      Text(`${this.orphanFiles} 个文件不在列表里`)
+        .fontSize(12)
+        .fontColor(Theme.TEXT)
+      Text(this.mb(this.orphanBytes))
+        .fontSize(10)
+        .fontColor(Theme.TEXT_DIM)
+        .layoutWeight(1)
+      Text('清理')
+        .fontSize(11)
+        .fontColor('#FFFFFF')
+        .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+        .backgroundColor(Theme.ACCENT)
+        .borderRadius(9)
+        .onClick(() => {
+          this.confirmOrphans();
+        })
+    }
+    .width('100%')
+    .padding(11)
+    .backgroundColor(Theme.CARD)
+    .borderRadius(12)
+  }
+
   @Builder
   TaskRow(t: OfflineTask) {
     Column({ space: 7 }) {
@@ -491,6 +555,9 @@ struct OfflinePage {
           }
           this.UsageBar()
           this.SettingsCard()
+          if (this.orphanFiles > 0) {
+            this.OrphanBar()
+          }
 
           if (this.tasks.length === 0) {
             Column({ space: 8 }) {
