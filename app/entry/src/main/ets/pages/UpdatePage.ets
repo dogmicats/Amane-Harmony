@@ -1,7 +1,7 @@
 import { promptAction, router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
-import { Updater, CheckResult, UpgradeStatus } from '../common/Updater';
+import { Updater, ApplyResult, CheckResult, UpgradeStatus } from '../common/Updater';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { BuildConfig } from '../common/BuildConfig';
@@ -96,13 +96,23 @@ struct UpdatePage {
   @State fellBack: boolean = false;
   @State attempts: string = '';
   @State hint: string = '';
-  /** 服务端自动升级：宿主机装了 deploy/auto-update.sh 才有 supported。 */
+  /** 服务端升级状态。两条路：容器内就地升级（can_apply）/ 宿主机助手（supported）。 */
   @State upSupported: boolean = false;
+  /** 能点「升级服务器」（服务端 /app 是可写卷）。 */
+  @State upCanApply: boolean = false;
+  /** 升级是否持久（/app 不是挂载点 = 重建容器会回退）。 */
+  @State upPersistent: boolean = false;
+  /** 不能就地升级的原因（人话）。 */
+  @State upReason: string = '';
+  /** 服务端当前版本（就地升级时显示「当前 → 目标」）。 */
+  @State upCurrent: string = '';
   @State upEnabled: boolean = false;
   @State upState: string = '';
   @State upMessage: string = '';
   @State upAt: string = '';
   @State upBusy: boolean = false;
+  /** 就地升级轮询定时器（-1 = 没在轮询）。 */
+  private upPollId: number = -1;
 
   aboutToAppear(): void {
     try {
@@ -116,14 +126,94 @@ struct UpdatePage {
     this.loadUpgrade();
   }
 
-  /** 读一次自动升级状态：没装助手时什么也不显示，退回手动步骤。 */
+  /** 读一次服务端升级状态：不能就地升时退回手动步骤（并说明原因）。 */
   private async loadUpgrade(): Promise<void> {
     const s: UpgradeStatus = await Updater.upgradeStatus();
     this.upSupported = s.supported;
+    this.upCanApply = s.canApply;
+    this.upPersistent = s.persistent;
+    this.upReason = s.reason;
+    this.upCurrent = s.current.length > 0 ? s.current : this.serverNow;
     this.upEnabled = s.enabled;
     this.upState = s.state;
     this.upMessage = s.message;
     this.upAt = s.at;
+    // 上次没走完（状态停在中间态）：接着盯，别让用户以为卡死
+    if (s.state === 'downloading' || s.state === 'verifying' ||
+      s.state === 'switching' || s.state === 'restarting') {
+      this.startPolling();
+    }
+  }
+
+  /** 容器内升级：点一下就把「下载→校验→切换→重启」交给服务端，客户端只负责盯状态。 */
+  private async applyInplace(): Promise<void> {
+    if (this.upBusy) {
+      return;
+    }
+    const target: string = this.serverLatest.length > 0 ? this.serverLatest : '';
+    if (target.length === 0) {
+      promptAction.showToast({ message: '清单里没有目标版本号', duration: 2000 });
+      return;
+    }
+    this.upBusy = true;
+    this.upState = 'downloading';
+    this.upMessage = `正在升级到 ${target}…`;
+    const r: ApplyResult = await Updater.applyUpgrade(target, '');
+    if (!r.ok) {
+      this.upState = 'failed';
+      this.upMessage = r.msg;
+      promptAction.showToast({ message: r.msg, duration: 3000 });
+      this.upBusy = false;
+      return;
+    }
+    this.upBusy = false;
+    promptAction.showToast({ message: '已受理，正在后台升级', duration: 2000 });
+    this.startPolling();
+  }
+
+  /** 轮询升级状态：服务端换完代码会退出重启，期间请求会失败 —— 那是正常的，不要报错。 */
+  private startPolling(): void {
+    if (this.upPollId >= 0) {
+      return;
+    }
+    let ticks: number = 0;
+    this.upPollId = setInterval(() => {
+      ticks += 1;
+      if (ticks > 60) {
+        this.stopPolling();
+        this.upState = 'failed';
+        this.upMessage = '等了 2 分钟还没结果，去看服务器日志';
+        return;
+      }
+      Updater.upgradeStatus().then((s: UpgradeStatus) => {
+        if (!s.current && s.state.length === 0) {
+          // 重启中：接口打不通
+          this.upState = 'restarting';
+          this.upMessage = '服务正在重启，稍等…';
+          return;
+        }
+        this.upState = s.state;
+        this.upMessage = s.message;
+        this.upCurrent = s.current.length > 0 ? s.current : this.upCurrent;
+        if (s.state === 'done' || s.state === 'failed' || s.state.length === 0) {
+          this.stopPolling();
+          this.upBusy = false;
+          if (s.state === 'done') {
+            promptAction.showToast({ message: `服务端已升到 ${s.current}`, duration: 3000 });
+          }
+        }
+      }).catch(() => {
+        this.upState = 'restarting';
+        this.upMessage = '服务正在重启，稍等…';
+      });
+    }, 2000);
+  }
+
+  private stopPolling(): void {
+    if (this.upPollId >= 0) {
+      clearInterval(this.upPollId);
+      this.upPollId = -1;
+    }
   }
 
   /** 开关：写服务端，成功后本地同步；失败就弹一句，不改状态。 */
@@ -159,21 +249,38 @@ struct UpdatePage {
     this.upBusy = false;
   }
 
-  /** 自动升级那一行的人话状态。 */
+  /** 服务端升级那一行的人话状态（两条路共用）。 */
   private upgradeLine(): string {
+    if (this.upState === 'downloading') {
+      return '正在下载新版本…';
+    }
+    if (this.upState === 'verifying') {
+      return '校验并解包…';
+    }
+    if (this.upState === 'switching') {
+      return '正在替换服务端代码…';
+    }
+    if (this.upState === 'restarting') {
+      return '服务正在重启，稍等十几秒…';
+    }
     if (this.upState === 'upgrading') {
       return '正在升级，别关这台机器…';
     }
     if (this.upState === 'done') {
-      return `上次已自动升到 ${this.upMessage.replace('已升级到 ', '')}（${this.upAt}）`;
+      return `上次已升到 ${this.upMessage.replace('已升级到 ', '')}（${this.upAt}）`;
     }
     if (this.upState === 'failed') {
       return `上次没升成：${this.upMessage}`;
     }
+    if (this.serverUpdatable) {
+      return this.upCanApply
+        ? '有新版本，点一下就升（服务端自己换代码并重启）'
+        : '有新版本，按下面的步骤手工升';
+    }
     if (this.upEnabled) {
       return '开着：每 10 分钟检查一次，有新版自动升（同大版本内）';
     }
-    return '关着：需要我点一下才升';
+    return this.upCanApply ? '已是最新' : '目前是最新';
   }
 
   private apply(r: CheckResult): void {
@@ -572,7 +679,70 @@ struct UpdatePage {
   @Builder
   ServerCard() {
     Column({ space: 8 }) {
-      if (this.upSupported) {
+      if (this.upCanApply) {
+        // 容器内半自动升级：服务端自己换 /app 再重启，App 只点一下 + 盯状态
+        Row({ space: 8 }) {
+          Column({ space: 3 }) {
+            Text('服务端升级')
+              .fontSize(12)
+              .fontColor(Theme.TEXT)
+            Text(this.upgradeLine())
+              .fontSize(9)
+              .fontColor(this.upState === 'failed' ? Theme.GOLD : Theme.TEXT_DIM)
+              .lineHeight(14)
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          Text(this.serverUpdatable ? `${this.upCurrent} → ${this.serverLatest}` : this.upCurrent)
+            .fontSize(10)
+            .fontColor(this.serverUpdatable ? Theme.ACCENT : Theme.TEXT_FAINT)
+        }
+        .width('100%')
+
+        if (!this.upPersistent) {
+          Text('提示：这台的代码目录不是单独挂载的卷，升级后重建容器会回退到镜像版本。')
+            .fontSize(9)
+            .fontColor(Theme.TEXT_FAINT)
+            .width('100%')
+            .lineHeight(14)
+        }
+
+        Row({ space: 8 }) {
+          Text(this.upBusy || this.upState === 'downloading' || this.upState === 'restarting'
+            ? '升级中…'
+            : (this.serverUpdatable ? '升级服务器' : '已是最新'))
+            .fontSize(11)
+            .fontColor(this.serverUpdatable ? '#0B0B14' : Theme.TEXT_DIM)
+            .textAlign(TextAlign.Center)
+            .padding({ left: 12, right: 12, top: 7, bottom: 7 })
+            .backgroundColor(this.serverUpdatable ? Theme.ACCENT : Theme.CARD)
+            .borderRadius(9)
+            .onClick(() => {
+              if (this.serverUpdatable) {
+                this.applyInplace();
+              }
+            })
+          Text('看手动步骤')
+            .fontSize(10)
+            .fontColor(Theme.ACCENT)
+            .padding({ left: 8, right: 8, top: 5, bottom: 5 })
+            .backgroundColor(Theme.CARD)
+            .borderRadius(8)
+            .onClick(() => {
+              this.howtoOpen = !this.howtoOpen;
+            })
+        }
+        .width('100%')
+
+        if (this.howtoOpen) {
+          Text(this.serverHowto)
+            .fontSize(9)
+            .fontColor(Theme.TEXT_FAINT)
+            .width('100%')
+            .lineHeight(15)
+            .copyOption(CopyOptions.LocalDevice)
+        }
+      } else if (this.upSupported) {
         // 机器上装了 auto-update.sh：能自动升，就别再让人读步骤了
         Row({ space: 8 }) {
           Column({ space: 3 }) {
@@ -664,9 +834,16 @@ struct UpdatePage {
             .lineHeight(17)
             .copyOption(CopyOptions.LocalDevice)
 
-          Text('为什么这里不能一键升：服务端跑在 NAS 的容器里，换版本要落到宿主机的文件与容器上。' +
-            '把「能换服务端代码」做成 App 里的一个按钮，等于谁拿到这把钥匙都能在你机器上跑东西；' +
-            '而且升挂了 App 自己也连不上，没法自救。所以这一步留在你能看到输出的地方做。')
+          if (this.upReason.length > 0) {
+            // 这台机器不支持一键升（例如 /app 是只读挂载）：先把原因说清楚，别让人以为按钮坏了
+            Text(`为什么这里不能一键升：${this.upReason}`)
+              .fontSize(9)
+              .fontColor(Theme.GOLD)
+              .width('100%')
+              .lineHeight(14)
+          }
+          Text('服务端跑在容器里，换版本要落到它自己的代码目录上。' +
+            '如果那个目录不是可写的卷（只读挂载，或代码烤在镜像里），就只能按上面的步骤手工升。')
             .fontSize(9)
             .fontColor(Theme.TEXT_FAINT)
             .width('100%')

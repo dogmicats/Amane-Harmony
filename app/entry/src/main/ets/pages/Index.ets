@@ -30,6 +30,8 @@ struct Index {
   @StorageLink('minusDx') minusDx: number = 0;
   @StorageLink('minusCmd') @Watch('onMinusCmd') minusCmd: string = '';
   @State minusOpen: boolean = false;
+  /** 最近一次「吸附打开」的时间：跟着那一下 Up 别把它判成收合（见 trackMinus ②）。 */
+  private minusOpenedAt: number = 0;
   @State minusW: number = 390;
   /** 负一屏内部左滑退出的采样（**屏幕坐标**）。 */
   private mX0: number = -1;
@@ -524,13 +526,20 @@ struct Index {
     this.mX0 = -1;
     this.mTracked = false;
     if (!tracked) {
-      // 没采到起点。两种情况要分开：
+      // 没采到起点。三种情况要分开：
       //   ① 这一层**还没打开**（正被手指拉出来的那一下）—— Up 可能落到刚挂载的叠层上，
       //      此时 minusDx 只是"拉到一半"，按位置判会把它**当场收回去**，
       //      表现就是"右滑没反应/时好时坏"（2026-11-14 22:00 实测）。这种一律不参与判定，
       //      交给 HomeTab 在那一下 Up 里决定开/弹回。
-      //   ② 已经打开（多指或被内层吃掉 Down）：按露出比例兜底，别让这一划白划。
+      //   ② **刚被 open 吸附上**（2026-11-15 复现）：HomeTab 用「滑过 30% 就开」判定，
+      //      这里用「露出 60% 才留」判定 —— 一次 30%~60% 的滑动会先 open、再被这句判成 close，
+      //      负一屏当场缩回去（真机日志：open 到 teardown 只隔 183ms）。open 之后 500ms 内的
+      //      这一下 Up 属于"开屏那一划本身"，不参与收合判定，让吸附动画走完。
+      //   ③ 已经打开（多指或被内层吃掉 Down）：按露出比例兜底，别让这一划白划。
       if (!this.minusOpen) {
+        return;
+      }
+      if (Date.now() - this.minusOpenedAt < 500) {
         return;
       }
       AppStorage.setOrCreate<string>('minusCmd',
@@ -550,6 +559,7 @@ struct Index {
     }
     if (cmd === 'open') {
       this.minusOpen = true;
+      this.minusOpenedAt = Date.now();
       // 叠层吸附打开 = 用户已经在看负一屏，这时才锁竖屏（拖动途中不切）
       this.applyOrientation(true);
       animateTo({ duration: 240, curve: Curve.FastOutSlowIn }, () => {

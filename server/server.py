@@ -1198,13 +1198,49 @@ def main() -> None:
     _bootstrap_name_pinyin()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     server.daemon_threads = True
+    # 起得来才算这次「换代码」成功：清掉 boot 标记，下次重启不再当成崩溃
+    try:
+        from core import upgrader as _U
+        _U.boot_ok()
+    except Exception:  # noqa: BLE001
+        pass
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
 
 
+def _prefer_data_app() -> None:
+    """启动前决定用哪份代码：`<DATA_DIR>/app`（升级后的）还是镜像里的。
+
+    为什么不用挂卷（用户 2026-11-15 21:12 指出「还得改 compose 太麻烦」）：
+    升级写进 `<DATA_DIR>/app` —— 那是**每个部署本来就有的数据卷**，
+    所以老用户什么都不用改，而 `docker compose up -d` 重建容器也不会把升级冲掉。
+
+    两条保护：
+    1. 版本取新的那一份（镜像更新后不会被旧的 `/data/app` 盖回去）；
+    2. 上次换了代码但没起起来（`.pending` 还在）→ 记一次失败，连续两次就回滚到 `app.prev`。
+    """
+    data = os.environ.get("DATA_DIR", "/data")
+    cand = os.path.join(data, "app")
+    entry = os.path.join(cand, "server.py")
+    if not os.path.isfile(entry):
+        return
+    try:
+        from core import upgrader as _U
+        if _U.boot_guard(cand) == "rollback":
+            return
+        if not _U.candidate_is_newer(cand):
+            log(f"跳过 {cand}：不比镜像里的 {VERSION} 新")
+            return
+        os.chdir(cand)
+        sys.path.insert(0, cand)
+        log(f"改用数据卷里的代码：{cand}")
+        os.execv(sys.executable, [sys.executable, entry] + sys.argv[1:])
+    except Exception as exc:  # noqa: BLE001
+        log(f"WARN 切换到 {cand} 失败，继续用镜像代码：{exc}")
 
 
 if __name__ == "__main__":
+    _prefer_data_app()
     main()

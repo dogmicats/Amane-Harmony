@@ -2,7 +2,7 @@ import { request } from '@kit.BasicServicesKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs, hash, picker } from '@kit.CoreFileKit';
-import { httpGet, httpGetFresh, httpPut } from './Http';
+import { httpGet, httpGetFresh, httpPost, httpPut } from './Http';
 import { Store } from './Store';
 import { BuildConfig } from './BuildConfig';
 
@@ -141,17 +141,37 @@ export function isNewer(a: string, b: string): boolean {
   return false;
 }
 
-/** 服务端自动升级的状态（宿主机装了 deploy/auto-update.sh 才 supported）。 */
+/** 服务端升级状态：两条路都归一到这里（宿主机助手 / 容器内就地升级）。 */
 export interface UpgradeStatus {
   supported: boolean;
+  /**
+   * 能不能**点按钮就地升级**（2026-11-15 新增的容器内半自动）：
+   * 要求服务端 `/app` 是可写卷。false 时页面必须退回手动步骤并显示 `reason`。
+   */
+  canApply: boolean;
+  /** 升级后是否持久（`/app` 不是挂载点 = 重建容器会回退，要提示用户）。 */
+  persistent: boolean;
+  /** 不能就地升级的原因（人话）。 */
+  reason: string;
+  /** 服务端当前版本。 */
+  current: string;
+  /** `inplace`（容器内）/ `helper`（宿主机助手）/ 空。 */
+  mode: string;
   enabled: boolean;
-  /** idle / checking / upgrading / done / failed（空串 = 助手还没跑过）。 */
+  /** idle / downloading / verifying / switching / restarting / done / failed。 */
   state: string;
   /** 上次结果的人话说明。 */
   message: string;
   from: string;
   to: string;
   at: string;
+}
+
+/** 发起「升级服务器」的结果（成功 = 已受理，不等于已升完）。 */
+export interface ApplyResult {
+  ok: boolean;
+  /** ok=false 时是原因；ok=true 且非空表示「没受理」的说明（如正在升级中）。 */
+  msg: string;
 }
 
 function str(o: Record<string, Object>, k: string): string {
@@ -261,13 +281,18 @@ export class Updater {
    */
   static async upgradeStatus(): Promise<UpgradeStatus> {
     const out: UpgradeStatus = {
-      supported: false, enabled: false, state: '', message: '',
-      from: '', to: '', at: ''
+      supported: false, canApply: false, persistent: false, reason: '', current: '',
+      mode: '', enabled: false, state: '', message: '', from: '', to: '', at: ''
     };
     try {
       const raw: string = await httpGet(`${Store.I.user}/api/user/upgrade/status`, Store.I.token);
       const o = JSON.parse(raw) as Record<string, Object>;
       out.supported = `${o['supported']}` === 'true';
+      out.canApply = `${o['can_apply']}` === 'true';
+      out.persistent = `${o['persistent']}` === 'true';
+      out.reason = str(o, 'reason');
+      out.current = str(o, 'current');
+      out.mode = str(o, 'mode');
       out.enabled = `${o['enabled']}` === 'true';
       out.state = str(o, 'state');
       out.message = str(o, 'message');
@@ -279,6 +304,28 @@ export class Updater {
       console.info(`[amane] upgrade status: ${e.code} ${e.message}`);
     }
     return out;
+  }
+
+  /**
+   * 容器内就地升级（半自动）：服务端自己下载→校验→换 /app→重启。
+   *
+   * 返回 `{ok, msg}`：ok=false 时 msg 是给人看的原因（只读挂载 / 没有校验值 / 版本不合法…）。
+   * 注意成功**不代表已经升完** —— 服务端换完代码会退出重启，客户端要轮询 `upgradeStatus()`
+   * 直到 `done`/`failed`（重启期间请求会失败，属正常）。
+   */
+  static async applyUpgrade(version: string, sha256: string): Promise<ApplyResult> {
+    try {
+      const body: string = JSON.stringify({ version: version, sha256: sha256 });
+      const raw: string = await httpPost(`${Store.I.user}/api/user/upgrade/apply`,
+        Store.I.token, body);
+      const o = JSON.parse(raw) as Record<string, Object>;
+      const accepted: boolean = `${o['accepted']}` === 'true';
+      return { ok: true, msg: accepted ? '' : str(o, 'message') };
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] upgrade apply: ${e.code} ${e.message}`);
+      return { ok: false, msg: e.message.length > 0 ? e.message : `请求失败（${e.code}）` };
+    }
   }
 
   /** 开 / 关自动升级；返回是否写成功。 */

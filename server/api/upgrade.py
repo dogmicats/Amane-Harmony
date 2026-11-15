@@ -13,6 +13,8 @@ import core.logic as _L
 
 _L.export_to(globals())
 
+import core.upgrader as _U
+
 
 class UpgradeMixin(object):
     def _upgrade_files(self) -> tuple[str, str, str]:
@@ -22,13 +24,26 @@ class UpgradeMixin(object):
 
     @route("GET", r"/api/user/upgrade/status")
     def upgrade_status(self, query: dict, *_) -> None:
-        """客户端只看这一个：装没装助手、开关开没开、上一次升级结果。"""
+        """客户端只看这一个：装没装助手、开关开没开、上一次升级结果。
+
+        2026-11-15 加「容器内自升级」：`supported` 现在是**两选一**都能为真 ——
+        宿主装了 systemd 助手（旧方案），或者本机 `/app` 是可写卷（新方案，半自动）。
+        `mode` 说明哪一种；`can_apply` 才是「能不能点那个按钮」。
+        """
+        _U.recover_if_needed()
         cfg_p, req_p, state_p = self._upgrade_files()
         cfg, req, state = (self._read_json_dict(p) for p in (cfg_p, req_p, state_p))
+        cap = _U.capability()
+        host_helper = bool(state.get("installed")) and str(state.get("mode") or "") != "inplace"
         self._json({
             "ok": True,
-            # 没有状态文件 = 宿主机没装 auto-update.sh
-            "supported": bool(state.get("installed")),
+            "supported": bool(host_helper or cap["supported"]),
+            "mode": "inplace" if cap["supported"] else ("helper" if host_helper else ""),
+            "can_apply": bool(cap["supported"]),
+            "persistent": bool(cap["persistent"]),
+            "writable": bool(cap["writable"]),
+            "reason": str(cap["reason"] or ""),
+            "current": _U.VERSION,
             "enabled": bool(cfg.get("enabled")),
             "requested": str(req.get("want") or ""),
             "state": str(state.get("state") or ""),
@@ -38,6 +53,21 @@ class UpgradeMixin(object):
             "message": str(state.get("message") or ""),
             "checked_at": str(state.get("checked_at") or ""),
         })
+
+    @route("POST", r"/api/user/upgrade/apply")
+    def upgrade_apply(self, query: dict, *_) -> None:
+        """body `{version, sha256?, url?}` —— 容器内就地升级（下载→校验→切换→重启）。
+
+        `url` 只给自测用（默认按 `AMANE_UPGRADE_REPO` 拼 GitHub 源码包地址）；
+        生产路径应当由清单给 sha256，没有校验值一律拒绝。
+        """
+        body = self._body() or {}
+        res = _U.start(str(body.get("version") or ""),
+                       str(body.get("sha256") or ""),
+                       str(body.get("url") or ""))
+        if not res.get("ok"):
+            return self._error(400, str(res.get("error") or "升级被拒绝"))
+        self._json(res)
 
     @route("PUT", r"/api/user/upgrade/auto")
     def upgrade_auto(self, query: dict, *_) -> None:

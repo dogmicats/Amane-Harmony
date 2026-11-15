@@ -170,6 +170,8 @@ export struct ShortsView {
   @State scrubRatio: number = 0;
   /** 刚 seek 完的「保护期」：mpv 的 position 要几百毫秒才跟上，期间别用旧值覆盖进度。 */
   private seekHoldUntil: number = 0;
+  /** 自愈节流：播放器被销毁而视图还活着时，最多每 1.5 秒重建一次。 */
+  private healAt: number = 0;
   /** 双击点赞的「点亮」动效（0 = 不显示）。 */
   @State burstAlpha: number = 0;
   @State burstScale: number = 0.45;
@@ -335,6 +337,11 @@ export struct ShortsView {
 
   private initPlayer(): void {
     try {
+      // 重建前先收掉旧 tick（自愈路径可能重复调用，否则每建一次就多一个定时器）
+      if (this.tickId >= 0) {
+        clearInterval(this.tickId);
+        this.tickId = -1;
+      }
       const ctx = getContext(this) as common.UIAbilityContext;
       const tuning = PlayerPrefs.apply(ctx);
       PlayerPrefs.dir(ctx);
@@ -600,6 +607,16 @@ export struct ShortsView {
     const p: Player | undefined = this.player;
     const it: ShortItem | undefined = this.cur();
     if (p === undefined || it === undefined) {
+      // 自愈（2026-11-15 用户报「进度条永远 0:00/0:10、拖不动点不动」）：
+      // 只要播放器被 teardown 掉（离开再回来、页面壳重排）而视图还活着，syncState 与
+      // seekClip 都会静默 return —— 表现就是时间永远 0:00、Slider 怎么点都没反应。
+      // 这里节流重建一次：正常路径上 player 不会为空，所以这段平时不会触发。
+      if (p === undefined && it !== undefined && Date.now() - this.healAt > 1500) {
+        this.healAt = Date.now();
+        console.info('[amane] shorts heal（播放器为空，重建后重开当前条）');
+        this.initPlayer();
+        this.openAt(this.idx);
+      }
       return;
     }
     try {
@@ -617,8 +634,18 @@ export struct ShortsView {
         // 刚点/拖完进度条：这个窗口里的 position 还是 seek 之前的旧值，
         // 拿它算 ratio 会让滑块「跳一下又弹回去」（真机 23:44 实测），保持乐观值不动。
       } else {
-        this.ratio = Math.max(0, Math.min(1, rel / span));
-        this.clipPos = Math.max(0, Math.min(span, rel));
+        let relShown: number = Math.max(0, Math.min(span, rel));
+        // 起播头几秒的「墙钟兜底」（2026-11-15 用户：片段都播了一会了进度条才动）。
+        // mpv 换源后 `state.position` 要一段时间才从起点跟上（画面已经在动、position 还停在
+        // start），这段时间 rel≈0，进度条就干等着 —— 这是那种「老 bug」的来源。
+        // 所以开场 3 秒内取「墙钟秒数」和「position 差」的大者：画面一动，条就动；
+        // 3 秒之后完全交回 position，暂停/缓冲时不会被墙钟越拖越远。
+        const since: number = (Date.now() - this.openedAt) / 1000;
+        if (since < 3 && relShown < since - 0.2) {
+          relShown = Math.min(span, since);
+        }
+        this.ratio = Math.max(0, Math.min(1, relShown / span));
+        this.clipPos = relShown;
       }
       // 真实画面比例：有了就套上，上下留白才是「模糊填充」而不是黑边
       // 不声明中间变量：`VideoParams` 不从包根导出，靠 `st.videoParams` 的声明类型推导
@@ -1077,7 +1104,12 @@ export struct ShortsView {
           } else {
             // End / Click：松手才真正 seek，拖动过程中不发命令
             this.scrub = false;
-            this.seekClip(it, v / 100);
+            // **用当前条（this.cur()）算落点，不要用 builder 形参 `it`**（2026-11-15 修）：
+            // @Builder 的参数是**按值**传的，翻页后这一份可能还是上一条的 start，
+            // seek 到「上一条的起点 + 百分比」就会落在当前片段之外 —— 实测表现为
+            // 进度条一直 0:00 / 0:10、点了也像没反应（position 被打到负区间被夹回 0）。
+            const live: ShortItem | undefined = this.cur();
+            this.seekClip(live === undefined ? it : live, v / 100);
           }
         })
     }
@@ -1107,7 +1139,8 @@ export struct ShortsView {
       return;
     }
     try {
-      pl.seek(it.start + r * span);
+      const target: number = Math.max(0, it.start + r * span);
+      pl.seek(target);
       pl.play();
       // 1.2 秒内不采信 position：seek 之后 mpv 的 state.position 要几帧到一秒才跟上来，
       // 这段窗口里的旧值会把刚拖好的进度条打回 0（真机 23:44 就是这么「跳完又回去」的）。
