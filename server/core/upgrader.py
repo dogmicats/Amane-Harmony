@@ -297,12 +297,38 @@ def _py_compile(root: str) -> None:
         raise RuntimeError("新版本语法检查没过：" + "; ".join(bad))
 
 
+def _merge_dir(src: str, dst: str) -> None:
+    """把 src 里的东西并进 dst（目录遇到目录就递归合并，不套娃）。"""
+    for name in os.listdir(src):
+        s = os.path.join(src, name)
+        d = os.path.join(dst, name)
+        if os.path.isdir(s) and os.path.isdir(d):
+            _merge_dir(s, d)
+            continue
+        if os.path.exists(d):
+            if os.path.isdir(d):
+                shutil.rmtree(d, ignore_errors=True)
+            else:
+                os.remove(d)
+        shutil.move(s, d)
+
+
 def _move_contents(src: str, dst: str, skip: tuple = ()) -> None:
+    """搬目录内容。目标已有同名目录时**合并**，别 `shutil.move` 套成 data/data。
+
+    2026-11-17 实测：`<app>/data` 已存在（词表/缓存），move 把新包的 data 整个塞进去，
+    结果词表落在 `<app>/data/data/*.tsv`，升级后简繁/拼音检索全部降级。
+    """
     os.makedirs(dst, exist_ok=True)
     for name in os.listdir(src):
         if name in skip:
             continue
-        shutil.move(os.path.join(src, name), os.path.join(dst, name))
+        s = os.path.join(src, name)
+        d = os.path.join(dst, name)
+        if os.path.isdir(s) and os.path.isdir(d):
+            _merge_dir(s, d)
+            continue
+        shutil.move(s, d)
 
 
 def _snapshot_image_code() -> None:
@@ -314,7 +340,9 @@ def _snapshot_image_code() -> None:
     try:
         shutil.rmtree(APP_PREV, ignore_errors=True)
         shutil.copytree(ROOT_DIR, APP_PREV, ignore=shutil.ignore_patterns(
-            "__pycache__", "*.pyc", "app", "app.prev", "app.new"))
+            "__pycache__", "*.pyc", "app", "app.prev", "app.new",
+            # `data` 是挂进来的数据卷（imgcache/备份，实测 7.9GB），不是代码
+            "data"))
         log(f"upgrade: 已把镜像代码快照到 {APP_PREV}")
     except OSError as exc:
         log(f"WARN 快照镜像代码失败: {exc}")
@@ -335,7 +363,10 @@ def _ensure_cjk_tables() -> None:
     """
     want = ("t2s.tsv", "jp2s.tsv", "pinyin.tsv", "alias.tsv")
     dst_dir = os.path.join(APP_DIR, "data")
-    for src_dir in (os.path.join(APP_DIR, "core", "data"), os.path.join(APP_DIR, "server", "data")):
+    for src_dir in (os.path.join(APP_DIR, "data"),
+                    os.path.join(APP_DIR, "data", "data"),
+                    os.path.join(APP_DIR, "core", "data"),
+                    os.path.join(APP_DIR, "server", "data")):
         if not os.path.isdir(src_dir):
             continue
         try:
