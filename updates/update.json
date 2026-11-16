@@ -1,13 +1,13 @@
 {
-  "published_at": "2026-11-16T23:56+08:00",
+  "published_at": "2026-11-17T00:37+08:00",
   "channel": "public",
   "release": "v2.7.3",
   "client": {
     "version": "2.7.3",
     "code": 2007003,
     "url": "https://github.com/dogmicats/Amane-Harmony/releases/download/v2.7.3/Amane-2.7.3-unsigned.hap",
-    "size": 45892482,
-    "sha256": "0a3a1b3bbd1af71b4bf6e6969e8df0a442913ea9443e735bf1788914380d2f82",
+    "size": 45892271,
+    "sha256": "94489b536a49b2a853440e7a164383ca971847283e6997df3a5ee0ac58faf1c9",
     "notes": "2.7.3：界面铺到屏幕边缘 · 底栏自动让位 · 抽卡瀑布流 · 我的更短 · 归档改为文件搬完才算完成"
   },
   "server": {
