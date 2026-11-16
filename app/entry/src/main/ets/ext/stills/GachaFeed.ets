@@ -19,7 +19,14 @@ import { GachaPage, GachaStill, safeGachaPage } from './GachaTypes';
  */
 
 const POOL_MAX: number = 36;
-const POOL_FACTOR: number = 3;
+/**
+ * 一次请求最多等多久（2026-11-16）。
+ *
+ * `httpGet` 的读超时是 25 秒；以前追加时还会**连打 3 次**，最坏 75 秒都挂着——
+ * 真机上就是「底部一直显示『再翻一批…』、怎么滑都不动」。
+ * 这里给每次取图设一个硬上限，到点就收手并让 UI 收掉转圈。
+ */
+const FETCH_TIMEOUT_MS: number = 12000;
 
 export class StillFeed {
   scope: string = 'all';
@@ -39,6 +46,13 @@ export class StillFeed {
 
   private pool: GachaStill[] = [];
   private cursor: number = 0;
+  /**
+   * 已经摆出来过的片子（2026-11-16）。服务端是 `ORDER BY RANDOM() LIMIT n`，**没有 offset**，
+   * 所以「往下不断加载」只能靠客户端去重累加，否则同一张剧照会反复出现。
+   */
+  private seen: Set<number> = new Set<number>();
+  /** 没有更多了：连续两批都捞不到新图（候选被我们刷完了）。 */
+  exhausted: boolean = false;
 
   constructor(scope: string, scopeId: number, count: number, extra: string = '') {
     this.scope = scope;
@@ -55,6 +69,8 @@ export class StillFeed {
     this.extra = extra;
     this.pool = [];
     this.cursor = 0;
+    this.seen = new Set<number>();
+    this.exhausted = false;
     this.candidates = -1;
     this.error = '';
   }
@@ -85,13 +101,84 @@ export class StillFeed {
       }
       return [];
     }
+    for (let i = 0; i < got.length; i++) {
+      this.seen.add(got[i].id);
+    }
     this.pool = got;
     this.cursor = this.count;
     return got.slice(0, this.count);
   }
 
+  /**
+   * 追加一批（瀑布流触底时调）。
+   *
+   * 与 `next` 的区别：**永远只给没摆过的图**。本地池还有剩就先用完；
+   * 用完再随机捞一次（服务端没有 offset），把已经在墙上的过滤掉。
+   * 连续两批都捞不到新的 = 这个范围基本刷完了，`exhausted` 置真，界面提示「没有更多了」。
+   */
+  async more(): Promise<GachaStill[]> {
+    if (this.hasNext()) {
+      const out: GachaStill[] = this.pool.slice(this.cursor, this.cursor + this.count);
+      this.cursor += this.count;
+      return out;
+    }
+    // 服务端是「随机 96 部里挑」，同一批很可能和墙上已有的重合。
+    // **只再试一次**（2026-11-16）：以前 3 次 × 25 秒超时 = 最多挂 75 秒，
+    // 真机表现就是底部「再翻一批…」一直转、怎么滑都不动。
+    const got: GachaStill[] = await this.fetch();
+    if (got.length === 0) {
+      return [];                     // 网络/服务端错误：不当成「刷完了」
+    }
+    const fresh: GachaStill[] = [];
+    for (let i = 0; i < got.length; i++) {
+      if (!this.seen.has(got[i].id)) {
+        fresh.push(got[i]);
+      }
+    }
+    if (fresh.length === 0) {
+      // 这批全是墙上已有的：说明这个范围确实刷得差不多了
+      this.exhausted = true;
+      return [];
+    }
+    for (let i = 0; i < fresh.length; i++) {
+      this.seen.add(fresh[i].id);
+    }
+    this.pool = fresh;
+    const out: GachaStill[] = fresh.slice(0, this.count);
+    this.cursor = out.length;
+    return out;
+  }
+
+  /** 给一次请求加硬上限：到点就当失败，别让界面无限转圈（超时不可取消，但不再等它）。 */
+  private withTimeout(p: Promise<string>, ms: number): Promise<string> {
+    return new Promise<string>((resolve: (v: string) => void, reject: (e: Error) => void) => {
+      let done: boolean = false;
+      const timer: number = setTimeout(() => {
+        if (!done) {
+          done = true;
+          reject(new Error('timeout'));
+        }
+      }, ms);
+      p.then((v: string) => {
+        if (!done) {
+          done = true;
+          clearTimeout(timer);
+          resolve(v);
+        }
+      }).catch((e: Error) => {
+        if (!done) {
+          done = true;
+          clearTimeout(timer);
+          reject(e);
+        }
+      });
+    });
+  }
+
   private async fetch(): Promise<GachaStill[]> {
-    const limit: number = Math.min(POOL_MAX, Math.max(this.count * POOL_FACTOR, this.count));
+    // 追加时按服务端上限要满 36 张：随机池越大，去重后能拿到的新图越多，
+    // 也就不用为了「凑一批」反复请求（那正是转圈转很久的来源）。
+    const limit: number = Math.max(this.count, POOL_MAX);
     let tail: string = '';
     if (this.extra.length > 0) {
       tail = this.extra.startsWith('&') ? this.extra : `&${this.extra}`;
@@ -99,7 +186,7 @@ export class StillFeed {
     const url: string = `${Store.I.user}/api/user/stills?scope=${this.scope}` +
       `&id=${this.scopeId}&limit=${limit}${tail}`;
     try {
-      const text: string = await httpGet(url, Store.I.token);
+      const text: string = await this.withTimeout(httpGet(url, Store.I.token), FETCH_TIMEOUT_MS);
       const page: GachaPage = safeGachaPage(JSON.parse(text) as GachaPage);
       this.candidates = page.candidates;
       this.error = '';

@@ -16,10 +16,13 @@ export class PoolParams {
   /**
    * 条件串（**不带 `?`**，可直接拼在 `?` 或 `&` 后面）。
    * 有自由条件 → `plib=1,2&ptag=中字&...`；没有 → `pool=all` / `pool=fav` 这类预设。
+   *
+   * 2026-11-15：抽成 `queryFor(specKey, presetKey)` —— 拼法（实现）只有一份，
+   * **存哪套条件由调用方决定**：顶部大图用 `hero_pool_spec`，刷一刷用 `shorts_pool_spec`。
    */
-  static query(): string {
+  static queryFor(specKey: string, presetKey: string): string {
     const parts: string[] = [];
-    const raw: string = Store.I.prefString('hero_pool_spec', '');
+    const raw: string = Store.I.prefString(specKey, '');
     if (raw.length > 0) {
       try {
         const o = JSON.parse(raw) as Record<string, Object>;
@@ -52,25 +55,26 @@ export class PoolParams {
           parts.push(`pstate=${st}`);
         }
       } catch (e) {
-        console.info('[amane] hero_pool_spec 解析失败，退回预设池');
+        console.info(`[amane] ${specKey} 解析失败，退回预设池`);
       }
     }
     if (parts.length === 0) {
-      parts.push(`pool=${Store.I.prefString('hero_pool', 'all')}`);
+      parts.push(`pool=${Store.I.prefString(presetKey, 'all')}`);
     }
     return parts.join('&');
   }
 
-  /**
-   * 负一屏是否跟随同一套条件（设置 → 首页内容 里的开关，偏好 `shorts_pool_follow_hero`）。
-   * 默认开：用户在一处设的范围，刷一刷也认这个范围。
-   */
-  static shortsFollow(): boolean {
-    return Store.I.prefString('shorts_pool_follow_hero', '1') !== '0';
+  /** 顶部大图的条件串（首页 `/api/user/home`）。 */
+  static query(): string {
+    return PoolParams.queryFor('hero_pool_spec', 'hero_pool');
   }
 
-  /** 负一屏用的条件串：跟随开关关掉时明确回全库（`pool=all`）。 */
+  /**
+   * 刷一刷的条件串（`/api/user/shorts`）。**自己一套**（2026-11-15 用户要求拆开）：
+   * 实现同 `queryFor`，但读写的是 `shorts_pool_spec` / `shorts_pool` ——
+   * 改刷一刷的范围不会再动顶部大图，反之亦然。
+   */
   static shortsQuery(): string {
-    return PoolParams.shortsFollow() ? PoolParams.query() : 'pool=all';
+    return PoolParams.queryFor('shorts_pool_spec', 'shorts_pool');
   }
 }

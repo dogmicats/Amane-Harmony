@@ -87,6 +87,23 @@ export default class EntryAbility extends UIAbility {
       // 以前只有播放页会改方向，退出播放后窗口停在横屏、主页又是竖屏布局，
       // 就成了「横着的主页 + 怎么转都不回来」。
       mainWindow.setPreferredOrientation(window.Orientation.AUTO_ROTATION);
+      // ── 系统栏透明，跟应用融为一体（2026-11-16 用户：上下还有黑边，要像 hosplayer 那样）──
+      // 两根系统栏的底色做成全透明，背后露出窗口背景（#0B0B0F），和 App 深色底一致。
+      mainWindow.setWindowSystemBarProperties({
+        statusBarColor: '#00000000',
+        navigationBarColor: '#00000000',
+        // 深色底 → 图标用浅色
+        isStatusBarLightIcon: true,
+        isNavigationBarLightIcon: true
+      }).catch((e: BusinessError) => {
+        hilog.warn(DOMAIN, TAG, 'system bar props failed: %{public}s', JSON.stringify(e));
+      });
+      // 真全屏必须在**页面加载之前**打开（2026-11-16 用户：演员页首屏底部留一条黑边，
+      // 手指轻轻一滑才铺满）。放到 `Index.aboutToAppear` 里做，第一次布局已经按
+      // 「非全屏」的高度算过一遍，页面得等一次重新布局才铺到底 —— 那一帧就是黑边。
+      mainWindow.setWindowLayoutFullScreen(true).catch((e: BusinessError) => {
+        hilog.warn(DOMAIN, TAG, 'fullscreen failed: %{public}s', JSON.stringify(e));
+      });
     } catch (error) {
       hilog.warn(DOMAIN, TAG, '%{public}s', 'set window background failed');
     }

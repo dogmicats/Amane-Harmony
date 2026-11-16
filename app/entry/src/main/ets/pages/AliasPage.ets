@@ -76,6 +76,18 @@ struct AliasPage {
   @State addFor: string = '';
   @State addRows: MissCand[] = [];
   @State addLoading: boolean = false;
+  /** 出厂（内置）别名的条数与内容：默认折叠，只在底部留一个小入口（2026-11-16 用户要求）。 */
+  @State builtinCount: number = 0;
+  @State showBuiltin: boolean = false;
+  @State builtinRows: AliasRow[] = [];
+  /** 自己配一条：不依赖「待处理」里有没有人搜过。 */
+  @State manualAlias: string = '';
+  @State manualTarget: string = '';
+  @State manualKind: string = 'tag';
+  /** 真名的候选（库里的标签/系列/演员）。不让用户凭空敲，一字之差就白配了。 */
+  @State manualRows: PickRow[] = [];
+  @State manualLoading: boolean = false;
+  private manualTimer: number = -1;
 
   aboutToAppear(): void {
     this.loadAll();
@@ -102,15 +114,87 @@ struct AliasPage {
   private async loadAliases(): Promise<void> {
     try {
       const text: string = await httpGet(
-        `${Store.I.user}/api/user/search/aliases`, Store.I.token);
+        `${Store.I.user}/api/user/search/aliases?source=user`, Store.I.token);
       const obj = JSON.parse(text) as Record<string, Object>;
       this.aliases = safeAliases(obj.items as AliasRow[]);
       const vc: number = Number(obj.variants);
       this.variantCount = Number.isFinite(vc) ? vc : 0;
+      // 出厂别名很多（几百条），默认只留个入口让人自己点开看
+      const bc: number = Number(obj.builtin_total);
+      this.builtinCount = Number.isFinite(bc) ? bc : 0;
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] alias list: ${e.code} ${e.message}`);
     }
+  }
+
+  /** 点开「出厂别名」才去拉：不点就不占流量，也不挤占自己维护的那几条。 */
+  private async loadBuiltin(): Promise<void> {
+    try {
+      const text: string = await httpGet(
+        `${Store.I.user}/api/user/search/aliases?source=builtin`, Store.I.token);
+      const obj = JSON.parse(text) as Record<string, Object>;
+      this.builtinRows = safeAliases(obj.items as AliasRow[]);
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error(`[amane] alias builtin: ${e.code} ${e.message}`);
+      this.say('读取出厂别名失败，检查连接');
+    }
+  }
+
+  /** 自己配一条：不走「待处理」，直接按俗称 + 库里的真名写进去。 */
+  private async addManual(): Promise<void> {
+    const alias: string = this.manualAlias.trim();
+    const target: string = this.manualTarget.trim();
+    if (alias.length === 0 || target.length === 0) {
+      this.say('俗称和真名都要填');
+      return;
+    }
+    await this.addAlias(alias, this.manualKind, target, '');
+    this.manualAlias = '';
+    this.manualTarget = '';
+    this.manualRows = [];
+  }
+
+  /** 真名输入 → 防抖 260ms 去库里找候选（「一字之差」是别名最常见的错法）。 */
+  private manualSuggest(v: string): void {
+    if (this.manualTimer >= 0) {
+      clearTimeout(this.manualTimer);
+    }
+    const key: string = v.trim();
+    if (key.length === 0) {
+      this.manualRows = [];
+      return;
+    }
+    this.manualTimer = setTimeout(() => {
+      this.fetchManual(key);
+    }, 260);
+  }
+
+  private async fetchManual(key: string): Promise<void> {
+    this.manualLoading = true;
+    try {
+      const url: string = `${Store.I.user}/api/user/suggest?q=${encodeURIComponent(key)}`
+        + `&types=tag,series,actor&per=8`;
+      const text: string = await httpGet(url, Store.I.token);
+      const obj = JSON.parse(text) as Record<string, Object>;
+      const items: SuggestItem[] = (obj.items as SuggestItem[]);
+      const list: PickRow[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const it: SuggestItem = items[i];
+        const t: string = it.type === undefined || it.type === null ? '' : String(it.type);
+        const name: string = it.name === undefined || it.name === null ? '' : String(it.name);
+        if (t.length === 0 || t === 'film' || name.length === 0) {
+          continue;
+        }
+        list.push({ kind: t, name: name });
+      }
+      this.manualRows = list;
+    } catch (err) {
+      const e = err as BusinessError;
+      console.error(`[amane] alias manual suggest: ${e.code} ${e.message}`);
+    }
+    this.manualLoading = false;
   }
 
   private say(text: string): void {
@@ -440,6 +524,19 @@ struct AliasPage {
   }
 
   @Builder
+  KindChip(key: string, label: string) {
+    Text(label)
+      .fontSize(12)
+      .fontColor(this.manualKind === key ? '#FFFFFF' : Theme.TEXT_DIM)
+      .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+      .backgroundColor(this.manualKind === key ? Theme.ACCENT : Theme.BG_RAISED)
+      .borderRadius(Theme.R_PILL)
+      .onClick(() => {
+        this.manualKind = key;
+      })
+  }
+
+  @Builder
   AliasCard(row: AliasRow) {
     Column({ space: 6 }) {
       Row({ space: 8 }) {
@@ -583,6 +680,92 @@ struct AliasPage {
             }, (m: MissRow) => `m-${m.q}`)
           }
 
+          // 自己配一条（2026-11-16 用户要求）：别名不能只靠软件猜。
+          // 场景：知道「XX 说」其实指某个标签，但从来没搜错过 —— 待处理里不会出现，
+          // 就得让用户自己写进去。真名写错时服务端会 404 并回一句纠错提示。
+          Column({ space: 8 }) {
+            Text('自己加一条')
+              .fontSize(12)
+              .fontColor(Theme.TEXT_DIM)
+              .width('100%')
+            TextInput({ text: this.manualAlias, placeholder: '俗称：你会怎么搜它（比如「寝室」）' })
+              .height(38)
+              .fontSize(13)
+              .backgroundColor(Theme.BG_RAISED)
+              .borderRadius(10)
+              .onChange((v: string) => {
+                this.manualAlias = v;
+              })
+            TextInput({ text: this.manualTarget, placeholder: '真名：库里实际叫它什么（输两个字就有候选）' })
+              .height(38)
+              .fontSize(13)
+              .backgroundColor(Theme.BG_RAISED)
+              .borderRadius(10)
+              .onChange((v: string) => {
+                this.manualTarget = v;
+                this.manualSuggest(v);
+              })
+            // 候选：点一下就填进去。「真名必须一字不差」是别名最容易出错的地方，
+            // 所以别让人凭空敲。
+            if (this.manualLoading) {
+              Text('找…')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+            } else if (this.manualRows.length > 0) {
+              Flex({ wrap: FlexWrap.Wrap }) {
+                ForEach(this.manualRows, (p: PickRow) => {
+                  Row({ space: 4 }) {
+                    Text(p.kind === 'tag' ? '标签' : (p.kind === 'series' ? '系列' : '演员'))
+                      .fontSize(9)
+                      .fontColor(Theme.TEXT_FAINT)
+                    Text(p.name)
+                      .fontSize(12)
+                      .fontColor(this.manualTarget === p.name ? Theme.ACCENT : Theme.TEXT)
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  }
+                  .constraintSize({ maxWidth: '70%' })
+                  .padding({ left: 8, right: 8, top: 5, bottom: 5 })
+                  .backgroundColor(this.manualTarget === p.name ? Theme.CARD_HI : Theme.BG_RAISED)
+                  .borderRadius(9)
+                  .margin({ right: 6, bottom: 6 })
+                  .onClick(() => {
+                    this.manualTarget = p.name;
+                    this.manualKind = p.kind;
+                    this.manualRows = [];
+                  })
+                }, (p: PickRow) => `mp-${p.kind}-${p.name}`)
+              }
+              .width('100%')
+            } else if (this.manualTarget.trim().length > 0) {
+              Text('库里没有相近的名字 —— 多半是敲错了，换个词试试')
+                .fontSize(10)
+                .fontColor(Theme.GOLD)
+                .width('100%')
+            }
+            Row({ space: 8 }) {
+              this.KindChip('tag', '标签')
+              this.KindChip('series', '系列')
+              this.KindChip('actor', '演员')
+              Blank()
+              Button('加进别名')
+                .height(34)
+                .fontSize(12)
+                .fontColor('#FFFFFF')
+                .backgroundColor(Theme.ACCENT)
+                .borderRadius(Theme.R_PILL)
+                .onClick(() => {
+                  this.addManual();
+                })
+            }
+            .width('100%')
+          }
+          .width('100%')
+          .padding(12)
+          .backgroundColor(Theme.CARD)
+          .borderRadius(Theme.RADIUS)
+
           // 已有别名
           Row({ space: 6 }) {
             Text('已有别名')
@@ -592,7 +775,7 @@ struct AliasPage {
               .fontSize(10)
               .fontColor(Theme.TEXT_FAINT)
             Blank()
-            Text('点右边可删（出厂的不行）')
+            Text('点右边可删')
               .fontSize(9)
               .fontColor(Theme.TEXT_FAINT)
           }
@@ -602,6 +785,34 @@ struct AliasPage {
           ForEach(this.aliases, (a: AliasRow) => {
             this.AliasCard(a)
           }, (a: AliasRow) => `a-${a.alias}-${a.kind}-${a.target}`)
+
+          // 出厂别名：小入口（默认折叠）。写清楚它「一直在生效」，
+          // 免得好不容易配出来的效果被当成玄学。
+          Row({ space: 6 }) {
+            Text(this.showBuiltin
+              ? '收起出厂别名'
+              : `出厂别名 ${this.builtinCount} 条 · 一直生效，只是不在这儿列`)
+              .fontSize(11)
+              .fontColor(Theme.ACCENT)
+            Blank()
+            Text(this.showBuiltin ? '⌃' : '›')
+              .fontSize(13)
+              .fontColor(Theme.ACCENT)
+          }
+          .width('100%')
+          .padding({ left: 2, top: 10, bottom: 4 })
+          .onClick(() => {
+            this.showBuiltin = !this.showBuiltin;
+            if (this.showBuiltin && this.builtinRows.length === 0) {
+              this.loadBuiltin();
+            }
+          })
+
+          if (this.showBuiltin) {
+            ForEach(this.builtinRows, (a: AliasRow) => {
+              this.AliasCard(a)
+            }, (a: AliasRow) => `b-${a.alias}-${a.kind}-${a.target}`)
+          }
 
           Text('「部」是那个名字在库里挂了多少部片。0 部说明名字写错了 —— '
             + '错一个字在搜索里就是一条都搜不到，而且不会报错。')

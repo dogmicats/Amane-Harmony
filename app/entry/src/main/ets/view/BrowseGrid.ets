@@ -3,6 +3,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGetCached, cachedBody } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { NavBarWatch } from '../common/NavBarWatch';
 import { Personalize } from '../common/Personalize';
 import { BrowseResult, DetailParams, MediaItem } from '../common/Types';
 import { safeItems } from '../common/Safe';
@@ -22,14 +23,14 @@ const PAGE_SIZE: number = 45;
 /** 悬浮 Tab 导航栏占的底部高度：Tab 内的筛选/排序面板要让出这么多，否则最下面被挡住。 */
 export const TAB_SAFE: number = 84;
 
-const MOSAIC_OPTIONS: ChipOption[] = [
+export const MOSAIC_OPTIONS: ChipOption[] = [
   { key: '', label: '全部' },
   { key: 'LEAKED', label: '无码流出' },
   { key: 'CRACKED', label: '破解' },
   { key: 'NONE', label: '原版' }
 ];
 
-const CTYPE_OPTIONS: ChipOption[] = [
+export const CTYPE_OPTIONS: ChipOption[] = [
   { key: '', label: '全部' },
   { key: 'CENSORED', label: '有码' },
   { key: 'UNCENSORED', label: '无码' },
@@ -37,14 +38,15 @@ const CTYPE_OPTIONS: ChipOption[] = [
   { key: 'AMATEUR', label: '业余' }
 ];
 
-const SUB_OPTIONS: ChipOption[] = [
+export const SUB_OPTIONS: ChipOption[] = [
   { key: '', label: '全部' },
   { key: '1', label: '有字幕' },
   { key: '0', label: '无字幕' }
 ];
 
+// 必须导出：收藏页的 9 组筛选复用同一套选项（2026-11-16 agent2）。
 
-const SCORE_OPTIONS: ChipOption[] = [
+export const SCORE_OPTIONS: ChipOption[] = [
   { key: '', label: '全部' },
   { key: '4.5', label: '4.5 以上' },
   { key: '4.0', label: '4.0 以上' },
@@ -52,7 +54,7 @@ const SCORE_OPTIONS: ChipOption[] = [
   { key: '3.0', label: '3.0 以上' }
 ];
 
-const YEAR_OPTIONS: ChipOption[] = [
+export const YEAR_OPTIONS: ChipOption[] = [
   { key: '', label: '全部' },
   { key: '2026', label: '2026' },
   { key: '2025', label: '2025' },
@@ -69,6 +71,12 @@ export struct BrowseGrid {
   /** 海报列数：设置页与双指捏合共用同一个值（2.5.2，见 common/Personalize.ets）。 */
   @StorageProp('amaneCols') posterCols: number = 3;
   @Prop @Watch('onExternalChange') libraryId: number = 0;
+  /**
+   * 多选媒体库（2.6.3.3）：给了就用它，且**语义是 AND** ——
+   * 影片要同时出现在所选每个库里才算命中（用户要的是「同时出现在哪些库」）。
+   * 只选一个时等价于 `libraryId`；一个都不选 = 全部。
+   */
+  @Prop @Watch('onExternalChange') libraryIds: number[] = [];
   /** 只看某个清单里的片（详情页 / 清单页跳过来）。0 = 不限。 */
   @Prop @Watch('onExternalChange') collectionId: number = 0;
   @Prop @Watch('onExternalChange') refreshKey: number = 0;
@@ -195,8 +203,13 @@ export struct BrowseGrid {
     const parts: string[] = [
       `offset=${offset}`, `limit=${PAGE_SIZE}`, `sort=${this.sort}`, `order=${this.order}`
     ];
-    if (this.libraryId > 0) {
-      parts.push(`library_id=${this.libraryId}`);
+    // 媒体库筛选（2.6.3.3）：多选发 `libs=1,2`（语义是「同时出现在每个所选库」），
+    // 单选仍走 `library_id` —— 老服务端也认识，不至于退化成全部。
+    const libIds: number[] = this.activeLibIds();
+    if (libIds.length > 1) {
+      parts.push(`libs=${libIds.join(',')}`);
+    } else if (libIds.length === 1) {
+      parts.push(`library_id=${libIds[0]}`);
     }
     // 清单视图（2.5.5.25）：`collection=<id>` 由 collections 扩展在 browse 里加条件
     if (this.collectionId > 0) {
@@ -340,17 +353,30 @@ export struct BrowseGrid {
     this.fCollection = '';
   }
 
-  /** 抽卡空墙文案里用的库名（0 = 全部库）。 */
+  /** 当前生效的库 id 列表：多选优先，其次单选，都没有 = 全部。 */
+  private activeLibIds(): number[] {
+    if (this.libraryIds.length > 0) {
+      return this.libraryIds;
+    }
+    return this.libraryId > 0 ? [this.libraryId] : [];
+  }
+
+  /** 空墙/标题文案里用的库名（多选时用「A + B」，全选 = 全部影片）。 */
   private scopeLabel(): string {
-    if (this.libraryId <= 0) {
+    const ids: number[] = this.activeLibIds();
+    if (ids.length === 0) {
       return '全部影片';
     }
-    for (let i = 0; i < Store.I.libraries.length; i++) {
-      if (Store.I.libraries[i].id === this.libraryId) {
-        return Store.I.libraries[i].name;
+    const names: string[] = [];
+    for (let k = 0; k < ids.length; k++) {
+      for (let i = 0; i < Store.I.libraries.length; i++) {
+        if (Store.I.libraries[i].id === ids[k]) {
+          names.push(Store.I.libraries[i].name);
+          break;
+        }
       }
     }
-    return '';
+    return names.length > 1 ? names.join(' + ') : (names[0] || '');
   }
 
   /** 清单内关键词搜索：不动筛选条件，只在当前结果里按相关性缩小。 */
@@ -543,34 +569,34 @@ export struct BrowseGrid {
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       Column() {
-        if (this.gachaOn) {
-          this.GachaBar()
-        } else {
+        // 抽卡模式下不再放工具条（2026-11-16 用户要求）：那行「抽卡中 · 随机剧照 ·
+        // 点图看详情」和墙头里的开关重复；退出抽卡用墙头右端那个开关。
+        if (!this.gachaOn) {
           this.SearchBar()
           this.Toolbar()
         }
 
         if (this.gachaOn) {
-          Scroll() {
-            Column() {
-              GachaWall({
-                scope: this.libraryId > 0 ? 'library' : 'all',
-                scopeId: this.libraryId,
-                label: this.scopeLabel(),
-                count: 0,
-                gachaOn: this.gachaOn,
-                onToggleGacha: (v: boolean) => {
-                  this.gachaOn = v;
-                }
-              })
-            }
-            .width('100%')
-            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: TAB_SAFE })
+          // 抽卡墙自己滚（2026-11-16 改成瀑布流：一次一批、触底继续）
+          Column() {
+            GachaWall({
+              // 抽卡是「这个库里随机铺」，多选时按第一个库 = 各库合并随机感受最接近；
+              // 一个都不选才是全站。
+              scope: this.activeLibIds().length > 0 ? 'library' : 'all',
+              scopeId: this.activeLibIds().length > 0 ? this.activeLibIds()[0] : 0,
+              label: this.scopeLabel(),
+              count: 0,
+              gachaOn: this.gachaOn,
+              onToggleGacha: (v: boolean) => {
+                this.gachaOn = v;
+              }
+            })
           }
+          .width('100%')
           .layoutWeight(1)
-          .align(Alignment.Top)
-          .scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.Spring)
+          // 抽卡墙体铺到屏幕最底（2026-11-16 用户要求）：底部不再留 TAB_SAFE，
+          // 被悬浮导航栏压住一部分没关系 —— 它自己会收起，还带沉浸光感。
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 0 })
         } else if (this.loading) {
           Column() {
             LoadingProgress()
@@ -600,7 +626,8 @@ export struct BrowseGrid {
           Column({ space: 8 }) {
             Text(this.keyword.length > 0
               ? `没有找到「${this.keyword}」`
-              : (this.filterCount() > 0 ? '没有符合条件的影片' : '这个库还是空的'))
+              : (this.filterCount() > 0 ? '没有符合条件的影片'
+                : (this.activeLibIds().length > 1 ? '这几个库没有共同的影片' : '这个库还是空的')))
               .fontSize(14)
               .fontColor(Theme.TEXT_DIM)
             if (this.keyword.length > 0) {
@@ -663,6 +690,8 @@ export struct BrowseGrid {
           }))
             .columnsGap(Theme.G_M)
             .rowsGap(Theme.G_L)
+          // 首帧视口高度可能比实际短，Grid 虚拟化会把底部一条留着不画（滑一下才"闪现"）
+          .cachedCount(6)
           .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: TAB_SAFE })
           .width('100%')
           .height('100%')
@@ -670,6 +699,10 @@ export struct BrowseGrid {
           .edgeEffect(EdgeEffect.Spring)
           .onReachEnd(() => {
             this.loadMore();
+          })
+          // 往下看收起底栏、往回划弹回来（2026-11-15，学 piliplus）
+          .onScrollIndex((first: number) => {
+            NavBarWatch.onIndex(first);
           })
           }
           .layoutWeight(1)

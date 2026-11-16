@@ -464,6 +464,7 @@ struct SettingsAppearancePage {
           }
           .width('100%')
 
+          // 底栏玻璃不透明度：2026-11-16 用户调完定在 0%，接口已隐藏（默认值写死 0）。
           Column({ space: 10 }) {
             Row() {
               Text('沉浸光效')

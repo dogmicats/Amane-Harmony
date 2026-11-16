@@ -3,6 +3,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
+import { NavBarWatch } from '../../common/NavBarWatch';
 import { Personalize } from '../../common/Personalize';
 import { ChipOption, SortOption } from '../../common/BrowseOptions';
 import { ActorItem, ActorList, ActorParams, safeActorList } from './ActorTypes';
@@ -38,7 +39,11 @@ export struct ActorsTab {
   /** 海报列数：设置页与双指捏合共用同一个值（2.5.2）。 */
   @StorageProp('amaneCols') posterCols: number = 3;
   @Prop @Watch('onRefresh') refreshKey: number = 0;
+  /** 顶部状态栏高度（真全屏下顶栏要让出这么多，见 Index.readInsets）。 */
+  @StorageProp('amaneTopInset') topInset: number = 30;
   @State items: ActorItem[] = [];
+  /** 演员网格的控制器：底栏自动收起要用绝对偏移判方向（见 common/NavBarWatch）。 */
+  private sc: Scroller = new Scroller();
   @State total: number = 0;
   @State loading: boolean = true;
   @State loadingMore: boolean = false;
@@ -477,7 +482,7 @@ export struct ActorsTab {
         })
     }
     .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 8, bottom: 6 })
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 8 + this.topInset, bottom: 6 })
   }
 
   @Builder
@@ -703,7 +708,7 @@ export struct ActorsTab {
           .layoutWeight(1)
           .justifyContent(FlexAlign.Center)
         } else {
-          Grid() {
+          Grid(this.sc) {
             ForEach(this.items, (a: ActorItem) => {
               GridItem() {
                 this.Cell(a)
@@ -739,12 +744,18 @@ export struct ActorsTab {
           }))
           .columnsGap(9)
           .rowsGap(12)
+          // 首帧视口高度可能比实际短，Grid 虚拟化会把底部一条留着不画（滑一下才"闪现"）
+          .cachedCount(6)
           .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 84 })
           .layoutWeight(1)
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
           .onReachEnd(() => {
             this.loadMore();
+          })
+          // 往下看收起底栏（2026-11-15）：用绝对偏移差分，见 common/NavBarWatch
+          .onScroll((x: number, y: number) => {
+            NavBarWatch.onOffset(this.sc.currentOffset().yOffset);
           })
         }
       }
@@ -791,5 +802,6 @@ export struct ActorsTab {
     }
     .width('100%')
     .height('100%')
+.expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 }

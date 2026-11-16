@@ -74,6 +74,12 @@ export function safeItem(raw: MediaItem): MediaItem {
   // 2.5.7.7：文件个数（多版本属性）。老服务端没有 → 0，界面上不显示「N 个版本」。
   item.versions = Math.trunc(num(raw.versions === undefined || raw.versions === null
     ? 0 : raw.versions));
+  // 每日推荐理由（2026-11-15）：服务端现在是「先定理由再挑片」，字段丢了就会退回
+  // 客户端那套事后凑的说法（fanart_ratio / marks 都因为这个白名单漏过）。
+  item.reason_kind = raw.reason_kind === undefined || raw.reason_kind === null
+    ? '' : `${raw.reason_kind}`;
+  item.reason_text = raw.reason_text === undefined || raw.reason_text === null
+    ? '' : `${raw.reason_text}`;
   return item;
 }
 
@@ -189,6 +195,7 @@ export function safeDetail(raw: ItemDetail): ItemDetail {
   d.still_likes = strList(raw.still_likes === undefined ? [] : raw.still_likes);
   // 公开扩展 watch_later：稍后再看状态（没装扩展时恒为 false）
   d.watch_later = raw.watch_later === true;
+  // 「归档」必须在这里接住，否则详情页永远拿不到（marks 就踩过一次）
   // 扩展下发的字段走重建式白名单：不在这里显式接住，详情页会静默丢掉
   d.my_rating = Math.trunc(num(raw.my_rating === undefined ? 0 : raw.my_rating));
   const cids: number[] = [];

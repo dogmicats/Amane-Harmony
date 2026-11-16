@@ -23,6 +23,18 @@ export const PREF_STILL_COLS: string = 'ui_still_cols';
 export const PREF_HOME_ROWS: string = 'ui_home_rows';
 /** 沉浸光效强度：0 关 / 1 轻 / 2 强（见 `view/Fx.ets`）。 */
 export const PREF_FX: string = 'ui_fx_level';
+/**
+ * 底部导航栏玻璃的不透明度（0–1）。
+ *
+ * 2026-11-16 用户实测后定的默认值是 **0**：加到 0 之后底栏仍然有毛玻璃
+ * （模糊来自 `ImmersiveStyle.REGULAR` 本身，`materialColor` 只负责压色），
+ * 而 0 的观感最好 —— 所以默认取 0，并且把设置里的滑杆**隐藏**了。
+ * 接口和偏好都留着，将来要再调直接改这个常量或在代码里调用 `setTabBarAlpha`。
+ */
+export const PREF_TABBAR_ALPHA: string = 'ui_tabbar_alpha';
+export const TABBAR_ALPHA_DEFAULT: number = 0;
+/** 一次性迁移：把老版本存的 0.24 之类复位成新默认（只做一次）。 */
+const PREF_TABBAR_MIG: string = 'ui_tabbar_alpha_mig1';
 /** 一次性迁移标记：自动小窗 / 后台出声改成默认关（2.6.1.47）。 */
 export const PREF_PLAY_MIG: string = 'play_defaults_v2';
 
@@ -32,6 +44,8 @@ export const KEY_STILL_COLS: string = 'amaneStillCols';
 export const KEY_THEME_EPOCH: string = 'amaneThemeEpoch';
 /** 沉浸光效强度（0/1/2）：页面用 `@StorageProp('amaneFx')` 订阅。 */
 export const KEY_FX: string = 'amaneFx';
+/** 底栏玻璃不透明度（0–1）：`Index` 用 `@StorageProp('amaneTabBarAlpha')` 订阅。 */
+export const KEY_TABBAR_ALPHA: string = 'amaneTabBarAlpha';
 
 export const FX_MIN: number = 0;
 export const FX_MAX: number = 2;
@@ -71,6 +85,8 @@ export class Personalize {
     AppStorage.setOrCreate<number>(KEY_STILL_COLS, stills);
     AppStorage.setOrCreate<number>(KEY_THEME_EPOCH, 0);
     AppStorage.setOrCreate<number>(KEY_FX, Personalize.clampFx(Number(Store.I.prefString(PREF_FX, `${FX_DEFAULT}`))));
+    // 底栏玻璃不透明度：用户在「外观」里调，Index 订阅这个键重建底栏材质
+    AppStorage.setOrCreate<number>(KEY_TABBAR_ALPHA, Personalize.readTabBarAlpha());
     // 触感开关（2.6.1.18）：和光效分开一套偏好 —— 有人愿意要光但不要震
     Haptics.init();
     Personalize.migratePlayDefaults();
@@ -129,6 +145,42 @@ export class Personalize {
       return '强';
     }
     return '轻';
+  }
+
+  // ---------- 底栏玻璃不透明度 ----------
+
+  /** 读偏好并夹到 0–1（读不到/写坏了就回默认）。 */
+  static readTabBarAlpha(): number {
+    // 老版本存过 0.24（可调滑杆那版）：一次性复位成新默认 0
+    if (Store.I.prefString(PREF_TABBAR_MIG, '0') !== '1') {
+      Store.I.prefSetString(PREF_TABBAR_MIG, '1');
+      Store.I.prefSetString(PREF_TABBAR_ALPHA, `${TABBAR_ALPHA_DEFAULT}`);
+    }
+    const raw: number = Number(Store.I.prefString(PREF_TABBAR_ALPHA, `${TABBAR_ALPHA_DEFAULT}`));
+    return Personalize.clampTabBarAlpha(raw);
+  }
+
+  static clampTabBarAlpha(v: number): number {
+    if (!Number.isFinite(v)) {
+      return TABBAR_ALPHA_DEFAULT;
+    }
+    if (v < 0) {
+      return 0;
+    }
+    return v > 1 ? 1 : v;
+  }
+
+  /** 非组件代码用；页面里请用 `@StorageProp('amaneTabBarAlpha')`。 */
+  static tabBarAlpha(): number {
+    const v: number | undefined = AppStorage.get<number>(KEY_TABBAR_ALPHA);
+    return Personalize.clampTabBarAlpha(v === undefined ? TABBAR_ALPHA_DEFAULT : v);
+  }
+
+  /** 改底栏不透明度：写 AppStorage（底栏立刻变）+ 落盘。 */
+  static setTabBarAlpha(v: number): void {
+    const a: number = Personalize.clampTabBarAlpha(v);
+    AppStorage.setOrCreate<number>(KEY_TABBAR_ALPHA, a);
+    Store.I.prefSetString(PREF_TABBAR_ALPHA, `${a}`);
   }
 
   // ---------- 主题 ----------

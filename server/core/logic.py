@@ -1,6 +1,6 @@
 """业务逻辑层：聚合、检索、播放、统计等全部非 HTTP 代码（从 server.py 拆出）。
 
-为什么是一个大文件而不是按域拆：这些函数互相引用极密（build 用 _banner_rows、
+为什么是一个大文件而不是按域拆：这些函数互相引用极密（build 用 build_banners、
 library 用 _stats_*、tier 用 pick_poster），按域硬切会连环 NameError。
 先整体搬出，让 `api/*.py`（端点 mixin）能 import 它而**不产生循环**
 （本文件不 import server），之后要细分再单独做。
@@ -184,6 +184,30 @@ def upstream_caps(refresh: bool = False) -> dict:
 _CJK_DIR = os.environ.get(
     "CJK_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 
+
+def _resolve_cjk_dir() -> str:
+    """找中文检索表（t2s / jp2s / pinyin / alias）。
+
+    2026-11-16：原来只认 `core/data`，而部署脚本把 tsv 放在**应用根目录的 `data/`**
+    （`/app/data`），两边对不上 —— 后果是简繁 / 拼音 / 出厂别名全部静默降级，
+    界面上看不出错，只是「搜不到某些名字」。现在按顺序找：环境变量 → core/data
+    → 应用根 data，第一个真有 tsv 的胜出。
+    """
+    cands: list[str] = []
+    env = os.environ.get("CJK_DATA_DIR")
+    if env:
+        cands.append(env)
+    here = os.path.dirname(os.path.abspath(__file__))
+    cands.append(os.path.join(here, "data"))
+    cands.append(os.path.join(os.path.dirname(here), "data"))
+    for path in cands:
+        try:
+            if any(fn.endswith(".tsv") for fn in os.listdir(path)):
+                return path
+        except OSError:
+            continue
+    return cands[-1]
+
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 _CJK_TABLES: dict | None = None
@@ -204,7 +228,7 @@ class _CjkTables:
         return bool(self.t2s or self.py)
 
 def _read_tsv(name: str) -> list[list[str]]:
-    path = os.path.join(_CJK_DIR, name)
+    path = os.path.join(_resolve_cjk_dir(), name)
     try:
         # utf-8-sig：Windows 记事本编辑 alias.tsv 会带 BOM，带 BOM 时首行的第一个
         # 键会变成 "\ufeff牛头人"，看着像「加了这个词却没生效」。这里统一吃掉。
@@ -454,6 +478,14 @@ _PY_COND: dict[str, str] = {
     "series": "m.series = ?",
     "actor": "m.actors LIKE ?",
 }
+
+# 演员 / 标签的**正确**写法（2026-11-15 每日推荐踩过）：
+# `metadata.actors` 是 JSON 文本，值是 `\uXXXX` 转义过的 —— 拿中文名去 LIKE 永远 0 行。
+# 上游有 `metadata_actors` / `metadata_tags` 关联表，按名字 JOIN 才准。
+DAILY_ACTOR_WHERE: str = ("m.id IN (SELECT ma.metadata_id FROM metadata_actors ma "
+                          "JOIN actors a ON a.id = ma.actor_id WHERE a.name = ?)")
+DAILY_TAG_WHERE: str = ("m.id IN (SELECT mt.metadata_id FROM metadata_tags mt "
+                        "JOIN tags t ON t.id = mt.tag_id WHERE t.name = ?)")
 
 _PY_MAX_CLAUSES = 6
 
@@ -804,13 +836,30 @@ def alias_candidates(word: str, limit: int = 4, min_shared: int = 1) -> list[dic
         item.pop("_score", None)
     return picked
 
+_NUM_QUERY_RE = re.compile(r"^[a-z]{1,8}-?\d{2,6}$|^\d{3,}$", re.I)
+
+def looks_like_number(raw: str) -> bool:
+    """像番号 / 纯数字的查询：`SSIS-001`、`ssis001`、`12345`。
+
+    这类词搜不到，说明**这部片不在库里**，不代表「用户不知道正确名字」——
+    把它塞进别名待办是错的（2026-11-16 用户指出：搜番号也进了待处理）。
+    别名要解决的是「同一件东西的不同叫法」，不是「库里没有」。
+    """
+    q = re.sub(r"[\s_]+", "", (raw or "")).strip().lower()
+    if not q:
+        return False
+    return bool(_NUM_QUERY_RE.match(q))
+
 def record_search_miss(raw: str, q_norm: str, hits: int) -> None:
     """记下「严格搜索也几乎没结果」的词，供别名页当待办。
 
     只在 `qmode != or` 时调用：客户端放宽重试那次结果会变多，记下来就是假账。
+    **番号形态的词直接跳过**（见 `looks_like_number`）。
     """
     q = re.sub(r"\s+", " ", (q_norm or "")).strip().lower()
     if len(q) < 2 or hits > _MISS_MAX_HITS:
+        return
+    if looks_like_number(q) or looks_like_number(raw):
         return
     now = now_iso()
     try:
@@ -3643,7 +3692,7 @@ def build_recommend(limit: int = 20) -> list[dict]:
     # 每天的种子：推荐位要**当天固定**（用户定的），所以库里不能用 RANDOM() 抽池子 ——
     # 那会让每次请求（包括下拉刷新）拿到不同的一批 40 部。改成按「id × 常数 + 当日种子」
     # 取模排序：同一天恒定，第二天自然换一批。
-    day_seed = int(date.today().strftime("%Y%m%d"))
+    day_seed = int(today_local().strftime("%Y%m%d"))
     with amane_db() as conn:
         for lib in libs:
             items = query_meta(
@@ -3661,7 +3710,7 @@ def build_recommend(limit: int = 20) -> list[dict]:
             continue
         seen.add(item["id"])
         uniq.append(item)
-    rng = random.Random(date.today().isoformat())
+    rng = random.Random(today_local().isoformat())
     rng.shuffle(uniq)
     # 每日推荐用横幅展示，横图（剧照/封面 fanart）是硬需求：没有横图的往后排，
     # 不足 limit 再用竖版海报补位，保证总数不变。
@@ -3846,13 +3895,35 @@ BANNER_TTL = 1800
 
 BANNER_POOL_TARGET = 60          # 池子里攒够这么多张就不再预热
 
+# ── 「今天」按哪个时区算（2026-11-15 修）──────────────────────────────
+# 用户报「每日推荐昨天和今天一样」。根因候选有两条，这里一次性都堵上：
+#   ① **时区**：容器里 TZ 可能没生效（镜像缺 tzdata 时 `TZ=Asia/Shanghai` 被忽略），
+#      `date.today()` 就变成 UTC 日期 —— 北京时间 08:00 才翻页。于是用户 23:00 看到的
+#      和次日 07:00 看到的是同一批，主观就是「昨天=今天」。改用显式 UTC+8。
+#   ② **池子小**：横幅池上限 BANNER_POOL_TARGET=60，每天各洗一次牌取前 12，两天之间
+#      很容易高度重合（60 选 12，期望重合 ~2.4 张，但小池时会更像）。
+#      改成「按日种子洗牌 + 按日期轮转窗口」：相邻两天必然取到不同的 12 张。
+LOCAL_TZ = timezone(timedelta(hours=8))
+
+def today_local() -> date:
+    """服务器视角的「今天」= 北京时间（UTC+8），与用户体感一致。"""
+    return datetime.now(LOCAL_TZ).date()
+
+def _day_of(raw: str | None) -> date:
+    """`?day=YYYY-MM-DD` 仅用于排查/对账；非法或缺省都当今天。"""
+    if raw:
+        try:
+            return date.fromisoformat(raw.strip())
+        except ValueError:
+            pass
+    return today_local()
+
 _banner_warm_lock = threading.Lock()
 
 _banner_warming = False
 
-_banner_daily_key = ""
-
-_banner_daily_rows: list = []
+# 正在补图的候选（按 metadata_id），避免同一条被重复探测
+_banner_id_warming: set = set()
 
 _still_dims_lock = threading.Lock()
 
@@ -3949,7 +4020,7 @@ def _scan_banners(seconds: float = 5.0, tries: int = 40) -> int:
                 "ORDER BY m.updated_at DESC LIMIT 900"
             ).fetchall()
             rows = list(rows)
-            random.Random(date.today().isoformat()).shuffle(rows)
+            random.Random(today_local().isoformat()).shuffle(rows)
             with user_db() as uconn:
                 done = {r["metadata_id"] for r in uconn.execute("SELECT metadata_id FROM banner_ok")}
             deadline = time.monotonic() + seconds
@@ -4020,63 +4091,441 @@ def _kick_banner_warm() -> None:
         finally:
             with _banner_warm_lock:
                 _banner_warming = False
-            # 池子变了，让当日缓存失效
-            _banner_daily_rows.clear()
+            # 池子变了就重新算（当日顺序由 build_banners 现算，这里没有缓存要清）
+            pass
 
     threading.Thread(target=worker, name="banner-warm", daemon=True).start()
 
-def _banner_rows(limit: int, fresh: bool = False) -> list[dict]:
-    """从已校验池里按日种子洗牌取前 N；洗牌结果当日缓存。
+def _kick_banner_warm_ids(ids: list[int]) -> None:
+    """**针对候选**补横图（2026-11-15）。
 
-    `fresh=True`（下拉刷新）：**绕过日种子**，真随机洗一遍 —— 用户定的行为是
-    「横幅每次下拉换一批」，池子是当天的（保证每张都是合格横图），顺序才换。
-
-    banner_ok 在 user.db、metadata 在 amane.db，跨库不能 JOIN：各自查再按 id 合并。
+    以前只有「按更新时间扫 900 部、攒够 60 张就停」的通用预热 —— 于是推荐位上永远只有
+    那 60 部在转。现在推荐先挑片、再看有没有合格横图；候选缺图就把这几条丢进后台探测，
+    下一轮请求就能命中。不阻塞当前请求，失败只留日志。
     """
-    global _banner_daily_key, _banner_daily_rows
-    key = date.today().isoformat()
-    if _banner_daily_key != key or not _banner_daily_rows:
-        with amane_db() as conn:
-            metas = conn.execute(
-                "SELECT " + META_COLUMNS + " FROM metadata m "
-                "WHERE m.id IN (SELECT metadata_id FROM media_files) "
-                "ORDER BY m.updated_at DESC LIMIT 1200"
-            ).fetchall()
-        by_id = {r["id"]: r for r in metas}
-        with user_db() as conn:
-            pool = conn.execute(
-                "SELECT metadata_id, url, ratio FROM banner_ok WHERE url <> ''"
-            ).fetchall()
-        items = []
-        for p in pool:
-            row = by_id.get(p["metadata_id"])
-            if row is None:
+    todo: list[int] = []
+    with _banner_warm_lock:
+        for mid in ids:
+            if mid in _banner_id_warming:
                 continue
-            item = item_of(row)
-            item["fanart"] = p["url"]
-            item["fanart_ratio"] = p["ratio"]
-            items.append(item)
-        random.Random(key).shuffle(items)
-        # 覆盖层在**入缓存前**套好：列表元素是同一批 dict，出缓存时再套会污染缓存
-        # （恢复默认后仍显示改过的值）。
-        apply_overrides(items)
-        _banner_daily_key = key
-        _banner_daily_rows = items
-    if fresh:
-        # 下拉刷新：真随机洗一遍再取前 N（不动当日缓存，也不改推荐位的日种子）
-        shuffled = list(_banner_daily_rows)
-        random.shuffle(shuffled)
-        return shuffled[:limit]
-    return list(_banner_daily_rows[:limit])
+            _banner_id_warming.add(mid)
+            todo.append(mid)
+    if not todo:
+        return
 
-def build_banners(limit: int = 12, fresh: bool = False) -> list[dict]:
-    items = _banner_rows(limit, fresh=fresh)
-    if len(items) < limit:
-        _kick_banner_warm()
-    if items:
+    def worker() -> None:
+        try:
+            for mid in todo:
+                try:
+                    with amane_db() as conn:
+                        row = conn.execute(
+                            "SELECT " + META_COLUMNS + " FROM metadata m WHERE m.id = ?",
+                            (mid,),
+                        ).fetchone()
+                    if row is None:
+                        continue
+                    url, ratio = _pick_banner(None, row)
+                    stamp = now_iso()
+                    with user_db() as wconn:
+                        wconn.execute(
+                            "INSERT INTO banner_ok(metadata_id, url, ratio, updated_at) "
+                            "VALUES(?, ?, ?, ?) ON CONFLICT(metadata_id) DO UPDATE SET "
+                            "url = excluded.url, ratio = excluded.ratio, "
+                            "updated_at = excluded.updated_at",
+                            (mid, url or "", ratio if url else 0, stamp),
+                        )
+                except Exception as exc:          # noqa: BLE001
+                    log(f"WARN 候选补横图失败 {mid}: {exc}")
+        finally:
+            with _banner_warm_lock:
+                for mid in todo:
+                    _banner_id_warming.discard(mid)
+
+    try:
+        threading.Thread(target=worker, daemon=True, name="banner-warm-ids").start()
+    except RuntimeError as exc:
+        log(f"WARN banner warm ids thread: {exc}")
+        with _banner_warm_lock:
+            for mid in todo:
+                _banner_id_warming.discard(mid)
+
+# ── 每日推荐：理由登记表 + 配额（2026-11-15）─────────────────────────────
+# 设计要点（用户要求）：
+#   ① **理由先定、片子后挑**：每个 kind 的「选片条件」就是它给用户的说法；
+#   ② 理由会**持续新增**，所以这里是一张登记表：加一个 kind = 加一行 + 一个 picker，
+#      配额由权重算，不用改 build_daily；
+#   ③ 配额对用户开放，但**只给取向**（更懂我 / 均衡 / 多惊喜），不列桶名与比例。
+DAILY_ORDER: tuple = ("taste", "similar", "series", "studio", "era", "top", "fresh", "explore")
+
+DAILY_REASONS: dict = {
+    "taste":   "同演员：你给过 4~5 星或收藏过的人",
+    "similar": "同标签：你偏好的口味",
+    "series":  "同系列 / 同番号前缀",
+    "studio":  "常看厂牌",
+    "era":     "你偏好的年代",
+    "top":     "库里评分高的（你还没看）",
+    "fresh":   "新入库",
+    "explore": "没接触过的演员",
+}
+
+DAILY_PRESETS: dict = {
+    # 权重绝对值不重要，build_daily 会按比例折算成整数配额（最大余数法）
+    "taste":    {"taste": 5, "similar": 3, "series": 2, "studio": 1, "era": 1,
+                 "top": 2, "fresh": 1, "explore": 0},
+    "balanced": {"taste": 3, "similar": 3, "series": 2, "studio": 1, "era": 1,
+                 "top": 2, "fresh": 2, "explore": 1},
+    "explore":  {"taste": 1, "similar": 1, "series": 1, "studio": 0, "era": 1,
+                 "top": 3, "fresh": 3, "explore": 4},
+}
+
+DEFAULT_DAILY_PRESET = "balanced"
+
+def _short_title(title: str, n: int = 14) -> str:
+    t = (title or "").strip()
+    return t if len(t) <= n else t[:n] + "…"
+
+def daily_preset() -> str:
+    """用户选的取向（taste / balanced / explore）。读不到 = balanced。"""
+    try:
+        path = os.path.join(DATA_DIR, "daily.json")
+        with open(path, encoding="utf-8") as fh:
+            name = str((json.load(fh) or {}).get("preset") or "")
+        return name if name in DAILY_PRESETS else DEFAULT_DAILY_PRESET
+    except (OSError, ValueError):
+        return DEFAULT_DAILY_PRESET
+
+def set_daily_preset(name: str) -> dict:
+    if name not in DAILY_PRESETS:
+        raise ValueError(f"没有这个取向：{name}")
+    path = os.path.join(DATA_DIR, "daily.json")
+    tmp = path + ".tmp"
+    data: dict = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh) or {}
+    except (OSError, ValueError):
+        data = {}
+    data["preset"] = name
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+    return {"preset": name}
+
+def daily_quotas(limit: int, preset: str | None = None) -> dict:
+    """把权重折算成整数配额（最大余数法），保证总数正好 = limit。"""
+    weights = DAILY_PRESETS.get(preset or daily_preset(), DAILY_PRESETS[DEFAULT_DAILY_PRESET])
+    total = sum(w for w in weights.values() if w > 0) or 1
+    raw = {k: (limit * w / total) for k, w in weights.items() if w > 0}
+    out = {k: int(v) for k, v in raw.items()}
+    rest = limit - sum(out.values())
+    for k, _v in sorted(raw.items(), key=lambda kv: -(kv[1] - int(kv[1])))[:max(0, rest)]:
+        out[k] = out.get(k, 0) + 1
+    return out
+
+def _daily_profile() -> dict:
+    """口味画像 —— 每日推荐的**理由来源**（2026-11-15）。
+
+    以前是「先出 12 部、客户端再看着这 12 部编理由」，所以理由只能挑「这批里最高分 /
+    同系列」这类**凑出来**的说法。现在反过来：画像先算好，挑片时就用它当条件，
+    理由只是把条件说出来。
+
+    读不到用户数据就返回空画像，调用方退化成「新用户配方」，不让首页塌掉。
+    """
+    prof: dict = {"stars": {}, "seen": set(), "disliked": set(),
+                  "actors": {}, "actor_seed": {}, "tags": {}, "series": {},
+                  "studios": {}, "eras": {}, "prefixes": {}, "seeds": {}}
+    try:
+        with user_db() as conn:
+            ratings = conn.execute("SELECT metadata_id, score FROM user_ratings").fetchall()
+            favs = [r["metadata_id"]
+                    for r in conn.execute("SELECT metadata_id FROM favorites").fetchall()]
+            prof["seen"] = {r["metadata_id"]
+                            for r in conn.execute("SELECT metadata_id FROM history").fetchall()}
+    except sqlite3.Error as exc:      # noqa: BLE001
+        log(f"WARN 每日推荐画像：读不到用户数据（按空画像继续）{exc}")
+        return prof
+    stars: dict = {}
+    for r in ratings:
+        try:
+            stars[int(r["metadata_id"])] = int(r["score"] or 0)
+        except (TypeError, ValueError):
+            continue
+    prof["stars"] = stars
+    prof["disliked"] = {mid for mid, s in stars.items() if s <= 2}
+    seeds = list(dict.fromkeys([m for m, s in stars.items() if s >= 4] + list(favs)))[-80:]
+    if not seeds:
+        return prof
+    try:
         with amane_db() as conn:
-            attach_marks(conn, items)
-    return items
+            marks = ",".join("?" * len(seeds))
+            rows = conn.execute(
+                f"SELECT {META_COLUMNS} FROM metadata m WHERE m.id IN ({marks})", seeds).fetchall()
+    except sqlite3.Error as exc:      # noqa: BLE001
+        log(f"WARN 每日推荐画像：读不到种子片 {exc}")
+        return prof
+    for row in rows:
+        prof["seeds"][row["id"]] = _short_title(row["title"])
+        stars_of_row = int(stars.get(row["id"], 5) or 5)
+        for name in _json_list(row["actors"])[:4]:
+            if name:
+                prof["actors"][name] = prof["actors"].get(name, 0) + 1
+                if name not in prof["actor_seed"]:
+                    prof["actor_seed"][name] = (_short_title(row["title"]), stars_of_row)
+        for name in _json_list(row["tags"])[:6]:
+            if name:
+                prof["tags"][name] = prof["tags"].get(name, 0) + 1
+        if row["series"]:
+            prof["series"][row["series"]] = prof["series"].get(row["series"], 0) + 1
+        if row["studio"]:
+            prof["studios"][row["studio"]] = prof["studios"].get(row["studio"], 0) + 1
+        year = str(row["release"] or "")[:4]
+        if year.isdigit():
+            era = f"{(int(year) // 10) * 10}s"
+            prof["eras"][era] = prof["eras"].get(era, 0) + 1
+        prefix = (row["number"] or "").split("-")[0].strip().upper()
+        if prefix:
+            prof["prefixes"][prefix] = prof["prefixes"].get(prefix, 0) + 1
+    return prof
+
+def _daily_pool(where: str, params: tuple, order: str = "m.updated_at DESC",
+                limit: int = 40) -> list[dict]:
+    """一次候选查询；失败只记日志（不让首页塌掉）。"""
+    try:
+        with amane_db() as conn:
+            return query_meta(conn, where, params, order, limit)
+    except sqlite3.Error as exc:      # noqa: BLE001
+        log(f"WARN 每日推荐候选查询失败 {where}: {exc}")
+        return []
+
+def _by_score(items: list[dict]) -> list[dict]:
+    return sorted(items, key=lambda x: -float(x.get("score") or 0))
+
+def build_daily(limit: int = 12, day: date | None = None) -> list[dict]:
+    """每日推荐：**理由先定、片子后挑**（2026-11-15 用户定 · 可扩展登记表）。
+
+    每个 kind 的「选片条件」就是它给用户的那句话；配额来自取向权重（`daily_quotas`）。
+    加新理由 = 在 `DAILY_ORDER` / `DAILY_REASONS` / 下面 `pickers` 里各加一处，主流程不动。
+
+    硬排除：看过的不推、给过 1~2 星的不推、同一批不重复。
+    顺序与集合按日期种子打散（同一天固定、跨天必换）。
+    """
+    d: date = day if day is not None else today_local()
+    rng = random.Random(f"daily|{d.isoformat()}")
+    prof = _daily_profile()
+    seen: set = set(prof["seen"]) | set(prof["disliked"])
+    used: set = set()
+    out: list[dict] = []
+    quota = daily_quotas(limit)
+    today_ord: int = d.toordinal()
+
+    def take(items: list[dict], kind: str, text_of, need: int) -> int:
+        n = 0
+        for x in items:
+            if n >= need:
+                break
+            mid = x.get("id")
+            if mid in used or mid in seen or not x.get("poster"):
+                continue
+            used.add(mid)
+            x["reason_kind"] = kind
+            x["reason_text"] = text_of(x)
+            out.append(x)
+            n += 1
+        return n
+
+    def rot(rows: list[dict], salt: str) -> list[dict]:
+        """给候选一个**按日期**的起点：候选集合固定时，跨天也能换成不同的片。
+
+        用字符和做散列（不能用内置 hash —— 它对字符串是每进程随机的，
+        服务重启后同一份数据会算出不同的日子，那就不是「当天固定」了）。
+        """
+        if not rows:
+            return rows
+        seed = sum(ord(c) for c in salt) % 997
+        start = (today_ord * 7 + seed) % len(rows)
+        return rows[start:] + rows[:start]
+
+    def p_taste(need: int) -> int:
+        actors = sorted(prof["actors"].items(), key=lambda kv: (-kv[1], kv[0]))
+        left = need
+        for actor, _cnt in actors[:6]:
+            if left <= 0:
+                break
+            rows = rot(_by_score(_daily_pool(DAILY_ACTOR_WHERE, (actor,))),
+                       f"taste:{actor}")
+            st, _ss = prof["actor_seed"].get(actor, ("", 5))
+            if st:
+                text_of = (lambda t, a: (lambda x: f"你给《{t}》5 星 · 同演员 {a}"))(st, actor)
+            else:
+                text_of = (lambda a: (lambda x: f"常看的演员 {a}"))(actor)
+            left -= take(rows, "taste", text_of, left)
+        return need - left
+
+    def p_similar(need: int) -> int:
+        tags = sorted(prof["tags"].items(), key=lambda kv: (-kv[1], kv[0]))
+        seed_title = next(iter(prof["seeds"].values()), "")
+        left = need
+        for tag, _cnt in tags[:6]:
+            if left <= 0:
+                break
+            rows = rot(_by_score(_daily_pool(DAILY_TAG_WHERE, (tag,))), f"similar:{tag}")
+            left -= take(rows, "similar",
+                         (lambda t, g: (lambda x: f"《{t}》那种口味 · 同标签 {g}"))(seed_title, tag),
+                         left)
+        return need - left
+
+    def p_series(need: int) -> int:
+        series = sorted(prof["series"].items(), key=lambda kv: (-kv[1], kv[0]))
+        prefixes = sorted(prof["prefixes"].items(), key=lambda kv: (-kv[1], kv[0]))
+        left = need
+        for name, _cnt in series[:4]:
+            if left <= 0:
+                break
+            rows = rot(_by_score(_daily_pool("m.series = ?", (name,))), f"series:{name}")
+            left -= take(rows, "series",
+                         (lambda s: (lambda x: f"《{s}》同一系列"))(name), left)
+        for pref, _cnt in prefixes[:3]:
+            if left <= 0:
+                break
+            rows = rot(_by_score(_daily_pool("m.number LIKE ?", (f"{pref}-%",))), f"pref:{pref}")
+            left -= take(rows, "series",
+                         (lambda p: (lambda x: f"你常看 {p} 的片"))(pref), left)
+        return need - left
+
+    def p_studio(need: int) -> int:
+        studios = sorted(prof["studios"].items(), key=lambda kv: (-kv[1], kv[0]))
+        left = need
+        for name, _cnt in studios[:3]:
+            if left <= 0:
+                break
+            rows = rot(_by_score(_daily_pool("m.studio = ?", (name,))), f"studio:{name}")
+            left -= take(rows, "studio", (lambda s: (lambda x: f"你常看 {s}"))(name), left)
+        return need - left
+
+    def p_era(need: int) -> int:
+        eras = sorted(prof["eras"].items(), key=lambda kv: (-kv[1], kv[0]))
+        left = need
+        for era, _cnt in eras[:2]:
+            if left <= 0:
+                break
+            base = int(era[:4])
+            rows = rot(_by_score(_daily_pool(
+                "substr(m.release, 1, 4) BETWEEN ? AND ?",
+                (str(base), str(base + 9)), "m.release DESC", 40)), f"era:{era}")
+            left -= take(rows, "era", (lambda e: (lambda x: f"你偏好的 {e} 年代"))(era), left)
+        return need - left
+
+    def p_top(need: int) -> int:
+        rows = rot(_by_score(_daily_pool("", (), "m.updated_at DESC", 160)), "top")
+        return take(rows, "top",
+                    lambda x: f"库内高分 {float(x.get('score') or 0):.1f} · 你还没看", need)
+
+    def p_fresh(need: int) -> int:
+        cutoff = (d - timedelta(days=45)).isoformat()
+        rows = rot(_by_score(_daily_pool("m.updated_at >= ?", (cutoff,), "m.updated_at DESC", 60)),
+                   "fresh")
+        return take(rows, "fresh",
+                    lambda x: f"新入库 {(today_ord - _ord_of(x.get('updated_at')))} 天 · "
+                              f"{float(x.get('score') or 0):.1f} 分", need)
+
+    def p_explore(need: int) -> int:
+        pool = rot(_by_score(_daily_pool("", (), "m.updated_at DESC", 120)), "explore")
+        known = set(prof["actors"].keys())
+        strangers = [x for x in pool if not (set(x.get("actors") or []) & known)]
+
+        def explore_text(x: dict) -> str:
+            ac = x.get("actors") or []
+            name = ac[0] if ac else ""
+            sc = f"{float(x.get('score') or 0):.1f} 分"
+            # 没写演员的片子说「没看过的 演员」很怪，换个说法
+            return f"没看过的 {name} · {sc}" if name else f"没碰过的片子 · {sc}"
+
+        return take(strangers, "explore", explore_text, need)
+
+    pickers: dict = {"taste": p_taste, "similar": p_similar, "series": p_series,
+                     "studio": p_studio, "era": p_era, "top": p_top,
+                     "fresh": p_fresh, "explore": p_explore}
+
+    for kind in DAILY_ORDER:
+        need = int(quota.get(kind, 0))
+        if need <= 0 or kind not in pickers:
+            continue
+        try:
+            pickers[kind](need)
+        except Exception as exc:      # noqa: BLE001
+            log(f"WARN 每日推荐 {kind} 桶失败（跳过）: {exc}")
+
+    # 没凑够（新用户 / 库小 / 某桶空）：先用「库内高分」补（画像空时它就是最合理的推荐），
+    # 还不够才用新入库 —— 兜底也带理由，不硬凑。
+    if len(out) < limit:
+        try:
+            p_top(limit - len(out))
+        except Exception as exc:      # noqa: BLE001
+            log(f"WARN 每日推荐 top 兜底失败: {exc}")
+    if len(out) < limit:
+        rows = rot(_by_score(_daily_pool("m.updated_at >= ?",
+                                         ((d - timedelta(days=90)).isoformat(),),
+                                         "m.updated_at DESC", 80)), "fallback")
+        for x in rows:
+            if len(out) >= limit:
+                break
+            mid = x.get("id")
+            if mid in used or mid in seen or not x.get("poster"):
+                continue
+            used.add(mid)
+            x["reason_kind"] = "fresh"
+            x["reason_text"] = f"新入库 {(today_ord - _ord_of(x.get('updated_at')))} 天"
+            out.append(x)
+
+    rng.shuffle(out)
+    return attach_marks_auto(attach_progress(out))
+
+def _ord_of(stamp: str | None) -> int:
+    """`YYYY-MM-DD...` → 日期序号；解析不了就当今天（差 0 天）。"""
+    if not stamp:
+        return today_local().toordinal()
+    try:
+        return date.fromisoformat(str(stamp)[:10]).toordinal()
+    except ValueError:
+        return today_local().toordinal()
+
+
+def build_banners(limit: int = 12, fresh: bool = False, day: date | None = None) -> list[dict]:
+    """每日推荐横幅：`build_daily` 挑人 + 理由，这里只负责「有没有合格横图」。
+
+    **顺序：先推荐（带理由）→ 再判横图**（2026-11-15 用户指出）。
+    老实现是先划横图池再挑片，等于每天只在 60 部里转，理由也只能事后凑。
+
+    横图是展示要求：命中 `banner_ok` 的带上 fanart 直接用；没命中的排后面兜底，
+    并丢进后台按 id 补探测（`_kick_banner_warm_ids`），下一轮就命中。
+
+    `day` 只给排查用（`/api/user/banners?day=YYYY-MM-DD`），缺省 = 北京时间今天。
+    """
+    cand: list[dict] = build_daily(max(limit, 12), day=day)
+    with user_db() as conn:
+        have: dict = {
+            r["metadata_id"]: (r["url"], r["ratio"])
+            for r in conn.execute("SELECT metadata_id, url, ratio FROM banner_ok WHERE url <> ''")
+        }
+    with_fan: list[dict] = []
+    plain: list[dict] = []
+    for x in cand:
+        hit = have.get(x["id"])
+        if hit is None:
+            plain.append(x)
+            continue
+        x["fanart"] = hit[0]
+        x["fanart_ratio"] = hit[1]
+        with_fan.append(x)
+    picked: list[dict] = list(with_fan[:limit])
+    if fresh:
+        # 下拉刷新：在这批有横图的候选里换一下顺序（不改推荐集合与理由）
+        random.shuffle(picked)
+    if len(picked) < limit:
+        picked += plain[:limit - len(picked)]
+    if plain:
+        _kick_banner_warm_ids([x["id"] for x in plain[:24]])
+    return picked
 
 def cached_home(fresh: bool = False, hero_pool: str = "all",
                 hero_spec: dict | None = None) -> dict:
@@ -4089,7 +4538,7 @@ def cached_home(fresh: bool = False, hero_pool: str = "all",
     `hero_pool`（2026-11-14）：大图候选池。**必须进缓存 key** —— 否则用户切换池子后
     5 分钟内看到的还是上一个池的内容，会被当成"开关没生效"。
     """
-    key = date.today().isoformat() + "|" + (hero_pool or "all") + "|" + \
+    key = today_local().isoformat() + "|" + (hero_pool or "all") + "|" + \
         (json.dumps(hero_spec, sort_keys=True, ensure_ascii=False) if hero_spec else "")
     hit = _home_cache.get(key)
     now = time.time()
@@ -4107,6 +4556,9 @@ def cached_home(fresh: bool = False, hero_pool: str = "all",
             _home_cache[key] = (now, base)
         base = dict(base)
     base["continue"] = build_continue()
+    # 诊断字段（2026-11-15）：「服务器认为今天是哪天」。每日推荐按这个日期翻页，
+    # 以后再有人问「为什么昨天和今天一样」，看一眼这个字段就知道是不是时区/跨天问题。
+    base["home_date"] = today_local().isoformat()
     # ★ hero 不进缓存（2026-11-14 12:00 用户定）★
     # 「每次进 App 首页大图都要换新」，而这份缓存是 5 分钟的 —— 若 hero 跟着缓存走，
     # 用户连续切几次首页（甚至重开 App）看到的还是同一批。
@@ -4230,12 +4682,12 @@ def invalidate_item_caches() -> None:
     """改了某部片（字段 / 封面）之后调用：首页聚合与横幅池都要立刻重算。
 
     以前没这一步，表现是「详情页封面换了，回首页还是旧图，等 5 分钟才好」。
-    横幅缓存存的是同一批 dict，且已套过覆盖层，所以必须整池丢弃重扫。
+    2026-11-15 起横幅不再有「当日缓存」（候选每次按推荐现挑、横图命中 banner_ok），
+    所以这里只需要丢掉首页聚合缓存 + 横幅候选的补图在飞集合。
     """
-    global _banner_daily_key
     _home_cache.clear()
-    _banner_daily_key = ""
-    _banner_daily_rows.clear()
+    with _banner_warm_lock:
+        _banner_id_warming.clear()
 
 def serve_image(url: str) -> tuple[bytes, str]:
     os.makedirs(IMAGE_CACHE, exist_ok=True)

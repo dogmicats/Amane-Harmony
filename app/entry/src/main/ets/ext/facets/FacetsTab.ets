@@ -3,6 +3,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet, httpPost } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
+import { NavBarWatch } from '../../common/NavBarWatch';
 import { Personalize } from '../../common/Personalize';
 import { BuildConfig } from '../../common/BuildConfig';
 import { ChipOption, SortOption } from '../../common/BrowseOptions';
@@ -52,7 +53,11 @@ export struct FacetsTab {
   /** 海报列数：设置页与双指捏合共用同一个值（2.5.2）。 */
   @StorageProp('amaneCols') posterCols: number = 3;
   @Prop @Watch('onRefresh') refreshKey: number = 0;
+  /** 顶部状态栏高度（真全屏下顶栏要让出这么多，见 Index.readInsets）。 */
+  @StorageProp('amaneTopInset') topInset: number = 30;
   @State items: FacetItem[] = [];
+  /** 标签网格的控制器：底栏自动收起要用绝对偏移判方向（见 common/NavBarWatch）。 */
+  private sc: Scroller = new Scroller();
   @State total: number = 0;
   @State loading: boolean = true;
   @State loadingMore: boolean = false;
@@ -60,6 +65,9 @@ export struct FacetsTab {
   @State tip: string = '';
   @State keyword: string = '';
   @State kind: string = 'tag';
+  /** 上半屏横滑（2026-11-15）：Index 拦下翻页后写 `facet|<dir>|<时间戳>` 到这里。 */
+  @StorageProp('inPageSwipe') @Watch('onInPageSwipe') inPageSwipe: string = '';
+  private lastSwipe: string = '';
   @State sortBy: string = 'count';
   @State order: string = 'desc';
   @State onlyFav: boolean = false;
@@ -305,6 +313,44 @@ export struct FacetsTab {
     this.showSort = false;
     this.showFilter = false;
     this.reload();
+  }
+
+  /** Index 拦下翻页后发来的「切大类」指令。 */
+  onInPageSwipe(): void {
+    const raw: string = this.inPageSwipe;
+    if (raw.length === 0 || raw === this.lastSwipe) {
+      return;
+    }
+    this.lastSwipe = raw;
+    const parts: string[] = raw.split('|');
+    if (parts.length < 2 || parts[0] !== 'facet') {
+      return;
+    }
+    const dir: number = Number(parts[1]);
+    if (dir === 1 || dir === -1) {
+      this.swipeKind(dir);
+    }
+  }
+
+  /**
+   * 上半屏横滑切大类（2026-11-15；dir：1 = 下一个，-1 = 上一个）。
+   * 走 `pickKind` 而不是直接改 `this.kind` —— 切大类要顺手清掉它不支持的筛选/排序与多选态。
+   */
+  private swipeKind(dir: number): void {    let at: number = -1;
+    for (let i = 0; i < this.kinds.length; i++) {
+      if (this.kinds[i].key === this.kind) {
+        at = i;
+        break;
+      }
+    }
+    if (at < 0) {
+      return;
+    }
+    const next: number = at + dir;
+    if (next < 0 || next >= this.kinds.length) {
+      return;
+    }
+    this.pickKind(this.kinds[next].key);
   }
 
   /**
@@ -749,7 +795,7 @@ export struct FacetsTab {
         .maxLines(1)
     }
     .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 8, bottom: 6 })
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 8 + this.topInset, bottom: 6 })
   }
 
   /** 标签 / 系列 / 导演 / 制片商 / 我的标签：换大类，属于导航不是筛选。 */
@@ -960,7 +1006,7 @@ export struct FacetsTab {
           .layoutWeight(1)
           .justifyContent(FlexAlign.Center)
         } else {
-          Grid() {
+          Grid(this.sc) {
             ForEach(this.items, (f: FacetItem) => {
               GridItem() {
                 if (this.isLane()) {
@@ -1012,6 +1058,10 @@ export struct FacetsTab {
           .edgeEffect(EdgeEffect.Spring)
           .onReachEnd(() => {
             this.loadMore();
+          })
+          // 往下看收起底栏（2026-11-15）：用绝对偏移差分，见 common/NavBarWatch
+          .onScroll((x: number, y: number) => {
+            NavBarWatch.onOffset(this.sc.currentOffset().yOffset);
           })
         }
 
@@ -1078,5 +1128,6 @@ export struct FacetsTab {
     }
     .width('100%')
     .height('100%')
+.expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 }

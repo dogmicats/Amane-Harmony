@@ -24,6 +24,12 @@ export interface MediaItem {
   my_rating?: number;
   /** 横图真实宽高比（宽/高）：每日推荐桶幅按它定宽，不再强行 16:9。 */
   fanart_ratio?: number;
+  /**
+   * 服务端给出的**每日推荐理由**（2026-11-15：改成「理由先定、片子后挑」）。
+   * 只有进了当天推荐位才有；kind = taste / similar / fresh / explore。
+   */
+  reason_kind?: string;
+  reason_text?: string;
   /** 该片在库里有多少个文件（= 几个版本）。2.5.7.7 起服务端随列表一起给。 */
   versions?: number;
 }
@@ -275,6 +281,11 @@ export interface PosterRef {
 
 export interface BrowseParams {
   libraryId: number;
+  /**
+   * 多选媒体库（2026-11-15）：给了就优先用它，语义是 **AND** ——
+   * 影片要同时出现在所选每个库里。空/缺省时退回 `libraryId`。
+   */
+  libraryIds?: number[];
   title: string;
   /** 从详情页点「N 岁」进来：预置出演年龄分桶，key 见 common/BrowseOptions.ets。 */
   ageBand?: string;

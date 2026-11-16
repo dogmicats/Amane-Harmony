@@ -38,21 +38,26 @@ export struct HeroBanner {
   @State tint: string = '';
   private tintFor: number = -1;
   /**
-   * 整块横幅的透明度：换图片时先压暗再淡入（用户 2026-11-15 01:11 反馈「进 App 先是一张，
-   * 随后突然变成另一张」）。
+   * 整块横幅的透明度。两种用途：
    *
-   * 为什么会换：冷启动先用 `PageCache` 里**上次**的 home 画面铺首屏（不闪骨架屏），
-   * 紧接着 `?fresh=1` 回来的是**新随机的一批 hero**（服务端 build_hero 每次 fresh 都重洗），
-   * 于是同一块位置从 A 硬切成 B —— 看着像"闪了一下"。
-   * 这里不改变"每次换一批"的行为，只把硬切改成压到 0.25 再淡回 1，视觉上是换台不是跳帧。
+   * 1. **首次出现**：从 0 淡到 1（2026-11-16）。顶部大图现在等本次数据才挂载
+   *    （`HomeTab.heroSkeleton` 先占位），所以"骨架 → 大图"也要有入场。
+   * 2. **换了一批**（下拉刷新 / 切回首页换推荐）：压到 0.25 再淡回 1。
+   *    注意冷启动那条路**已经不再走这里** —— 缓存首帧不再画 hero，从根上避免"先 A 后 B"。
    */
-  @State alpha: number = 1;
+  @State alpha: number = 0;
   /** 上一批的首部 id（=1 说明是同一部，不用淡）。 */
   private firstId: number = -1;
 
   aboutToAppear(): void {
     this.firstId = this.items.length > 0 ? this.items[0].id : -1;
     this.loadTint(0);
+    // 首次挂载从 0 淡进来（2026-11-16）：顶部大图现在等**这一次的数据**才挂载
+    // （缓存首帧只显示骨架，见 HomeTab.heroSkeleton），所以第一次出现也要有入场，
+    // 否则骨架 → 大图仍是一次硬切。
+    animateTo({ duration: 260, curve: Curve.EaseOut }, () => {
+      this.alpha = 1;
+    });
   }
 
   /**
@@ -125,16 +130,26 @@ export struct HeroBanner {
                 .height('100%')
                 .objectFit(ImageFit.Cover)
                 .backgroundColor(Theme.CARD)
+                // 2026-11-16 用户：大图上不该把负一屏拉出来（挡住「右滑进负一屏」的误触），
+                // 但下面「立即播放 / 详情」那一行要留着可以拉。用首页既有的
+                // rowTouchAt 机制把这一划标成「这一块归我」，父层就不会抢。
+                .onTouch((ev: TouchEvent) => {
+                  if (ev.type === TouchType.Down || ev.type === TouchType.Move) {
+                    AppStorage.setOrCreate<number>('rowTouchAt', Date.now());
+                  }
+                })
 
               // 顶部 scrim（2026-11-14）：让状态栏 / 顶部浮层在亮封面上也读得清，
               // 同时给画面加一层"影院幕布"的压暗感 —— 不加这层，亮片顶部会糊成一片。
+              // 2026-11-16 用户连问两次「更透」→「最透」：55% → 34% → 现在只留 10%。
+              // 状态栏那行字靠这层才不糊在亮封面上，所以没敢直接归零。
               Column()
                 .width('100%')
                 .height('38%')
                 .align(Alignment.TopStart)
                 .linearGradient({
                   angle: 180,
-                  colors: [['#8C000000', 0], ['#00000000', 1]]
+                  colors: [['#1A000000', 0], ['#00000000', 1]]
                 })
                 .hitTestBehavior(HitTestMode.None)
 
@@ -143,9 +158,16 @@ export struct HeroBanner {
                 .height('100%')
                 .linearGradient({
                   angle: 180,
-                  colors: [['#00000000', 0.22], ['#CC0B0B0F', 0.62], ['#0B0B0F', 0.96],
-                           ['#0B0B0F', 1.0]]
+                  // 2026-11-16 用户「最透」：原 0.62 处就 80% 黑、0.96 处实色，封面糊成一块。
+                  // 现在 0-70% 高度基本不压，只在底部按钮区收紧到 80%，
+                  // 好处是图全露出来；代价是白色标题压在亮画面上会变糊（用户要看极限效果）。
+                  colors: [['#00000000', 0.35], ['#4D0B0B0F', 0.70], ['#A60B0B0F', 0.92],
+                           ['#CC0B0B0F', 1.0]]
                 })
+                // 2026-11-16：这层全屏压暗盖在封面之上，会把触摸全吃掉 ——
+                // 于是大图的 onTouch 永远不触发，「右滑进负一屏」照旧生效。
+                // 让压暗层不参与命中，触摸落到下面的 Image 上。
+                .hitTestBehavior(HitTestMode.None)
 
               // 光晕：从画面左下角「溢」出来的一团主色光，右下角补一点第二色。
               // 都往外平移了一段，看起来像光从画面外打进来，而不是贴在图上的一个圆。
@@ -222,6 +244,12 @@ export struct HeroBanner {
                 }
                 .width('100%')
                 .margin({ bottom: 6 })
+                // 标题栏同样不参与「右滑进负一屏」（2026-11-16）
+                .onTouch((ev: TouchEvent) => {
+                  if (ev.type === TouchType.Down || ev.type === TouchType.Move) {
+                    AppStorage.setOrCreate<number>('rowTouchAt', Date.now());
+                  }
+                })
 
                 Text(item.title.length > 0 ? item.title : item.number)
                   .fontSize(22)
@@ -232,6 +260,11 @@ export struct HeroBanner {
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
                   .width('100%')
                   .margin({ bottom: 6 })
+                  .onTouch((ev: TouchEvent) => {
+                    if (ev.type === TouchType.Down || ev.type === TouchType.Move) {
+                      AppStorage.setOrCreate<number>('rowTouchAt', Date.now());
+                    }
+                  })
 
                 Text(runtimeText(item.runtime))
                   .fontSize(11)
@@ -272,6 +305,25 @@ export struct HeroBanner {
                     .onClick(() => {
                       this.onDetail(item);
                     })
+
+                  Blank()
+
+                  // 翻页指示（2026-11-16 用户）：从右上角搬进**这一行按钮的最右边** ——
+                  // 原来 absolute 在 top 96，正文一长就被海报/标题压住看不见。
+                  // 高度跟按钮行对齐，视觉上跟「立即播放 / 详情」是一组。
+                  if (this.items.length > 1) {
+                    Row({ space: 4 }) {
+                      ForEach(this.items, (it: MediaItem, index: number) => {
+                        Column()
+                          .width(index === this.current ? 14 : 4)
+                          .height(4)
+                          .borderRadius(2)
+                          .backgroundColor(index === this.current ? '#E6FFFFFF' : '#4DFFFFFF')
+                      }, (it: MediaItem, index: number) => `dot-${it.id}-${index}`)
+                    }
+                    .height(38)
+                    .alignItems(VerticalAlign.Center)
+                  }
                 }
                 .width('100%')
               }
@@ -305,19 +357,6 @@ export struct HeroBanner {
         if (this.fx >= 2) {
           ParticleField({ count: 22, color: '#FFFFFF', alpha: 0.34, drift: 1 })
         }
-
-        // 翻页指示：细长胶囊，放在**右上、搜索键下方**（左下会压到标题，
-        // 2026-11-14 用户报"小点跟标题重合"）。top 96 避开顶部搜索键（8+36）。
-        Row({ space: 4 }) {
-          ForEach(this.items, (item: MediaItem, index: number) => {
-            Column()
-              .width(index === this.current ? 14 : 4)
-              .height(4)
-              .borderRadius(2)
-              .backgroundColor(index === this.current ? '#E6FFFFFF' : '#4DFFFFFF')
-          }, (item: MediaItem, index: number) => `dot-${item.id}-${index}`)
-        }
-        .position({ right: Theme.PAGE_PAD, top: 96 })
       }
     }
     .width('100%')

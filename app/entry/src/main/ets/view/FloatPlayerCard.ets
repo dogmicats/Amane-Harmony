@@ -12,7 +12,7 @@
  *
  * 三按钮：放大（全屏接着看）/ 回详情页（回这部片接着播）/ ×（停播留在当前页）。
  */
-import { Player, PlayerConfig, Media, SubtitleTrack } from '@mpv-ohos/mpv-arkts';
+import { Player, PlayerConfig, Media, SubtitleTrack, PlayerState } from '@mpv-ohos/mpv-arkts';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { display } from '@kit.ArkUI';
@@ -24,6 +24,7 @@ import { SubtitleClient } from '../common/Subtitles';
 
 const CARD_W: number = 208;
 const EDGE: number = 12;
+
 /**
  * 贴底留白。
  *
@@ -322,7 +323,7 @@ export struct FloatPlayerCard {
     const p: Player | undefined = this.player;
     if (p !== undefined) {
       try {
-        const st = p.state;
+        const st: PlayerState | undefined = p.state;
         if (st !== undefined && st !== null && st.position > 0) {
           h.pos = st.position;
         }

@@ -103,6 +103,10 @@ def on_marks_extra(items: list) -> dict:
 def on_browse_where(query: dict) -> dict:
     """collection=<清单id> 只出该清单；none = 收藏了但没归类；any = 全部收藏。
 
+    2026-11-16 起支持**多选**：`collection=1,2` = **同时**在清单 1 和 2 里（AND，取交集）。
+    用户要的是「筛选同时出现在多个清单里的内容」，所以每多一个清单结果只会更少 ——
+    和媒体库多选（`libs=`）同一套语义。
+
     注意返回的是 clauses 列表，核心会按顺序 AND 起来；多个扩展各自返回
     clauses 时由核心逐扩展累加，不能靠 EXT.call() 的 dict 合并。
     `any` 是给收藏页用的：那一页要能按「我的评分」筛选和排序，走 browse 才能用
@@ -111,6 +115,36 @@ def on_browse_where(query: dict) -> dict:
     raw = ((query.get("collection") or [""])[0]).strip().lower()
     if not raw:
         return {}
+
+    # 多选：逗号分隔，逐个取成员再求交
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    multi_ids: list[int] = []
+    if len(parts) > 1:
+        for p in parts:
+            cid = _int(p, -1)
+            if cid <= 0:
+                multi_ids = []
+                break
+            multi_ids.append(cid)
+        if not multi_ids:
+            return {"clauses": [("1 = 0", [])]}
+        try:
+            with A.user_db() as conn:
+                acc: set = set()
+                for i, cid in enumerate(multi_ids):
+                    got = {int(r["metadata_id"]) for r in conn.execute(
+                        "SELECT metadata_id FROM collection_items WHERE collection_id = ?",
+                        (cid,))}
+                    acc = got if i == 0 else (acc & got)
+                    if not acc:
+                        break
+        except Exception as exc:  # noqa: BLE001
+            A.log(f"WARN collections browse_where(multi): {exc}")
+            return {}
+        if not acc:
+            return {"clauses": [("1 = 0", [])]}
+        return {"clauses": [(f"m.id IN ({','.join(str(i) for i in sorted(acc))})", [])]}
+
     try:
         with A.user_db() as conn:
             if raw == "any":

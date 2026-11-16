@@ -90,7 +90,7 @@ export function posterItem(
   return item;
 }
 
-/** 标记配色：破解粉 / 流出橙 / 无码青 / 中字蓝 / 还行金，与详情页保持一致。 */
+/** 标记配色：破解粉 / 流出橙 / 无码青 / 中字蓝 / 归档金，与详情页保持一致。 */
 export function markColor(label: string): string {
   if (label === '破解') {
     return '#FF6B8A';
@@ -101,7 +101,7 @@ export function markColor(label: string): string {
   if (label === '无码') {
     return '#7FE3C0';
   }
-  if (label === '还行') {
+  if (label === '归档') {
     return '#F2C14E';
   }
   return '#8FC6FF';

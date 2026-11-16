@@ -358,6 +358,7 @@ struct UpdatePage {
     this.msg = '';
     const r: CheckResult = await Updater.check();
     this.apply(r);
+    UpdateWatch.applyResult(r);          // 页面查完要顺手把「小黄点」复位，别等下一次静默检测
     if (!r.ok) {
       this.st = ST_FAILED;
       this.msg = r.message;

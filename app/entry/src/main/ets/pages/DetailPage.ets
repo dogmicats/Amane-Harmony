@@ -2269,7 +2269,7 @@ export struct DetailPage {
 
                 // 公开扩展 watch_later：稍后再看（2.6.1.22 从细横条升成主按钮）。
                 // 它原来在按钮下面当一条 46vp 高的横条 —— 一屏里最容易被忽略的位置，
-                // 而它恰恰是「现在不想看、但别忘」这种最常见的动作，所以和「还行」换位。
+                // 而它恰恰是「现在不想看、但别忘」这种最常见的动作，所以和「归档」换位。
                 if (BuildConfig.ENABLE_WATCHLATER) {
                   Column({ space: 1 }) {
                     Text(this.watchLater ? '◉' : '◷')
@@ -2295,6 +2295,7 @@ export struct DetailPage {
               // 今日推荐理由：紧跟主按钮 —— 从推荐位进来的人第一眼就看到「为什么是它」
               this.ReasonCard()
 
+              // 私有扩展（归档）：「归档」（2.6.1.22 从圆钮降级成横条 + 说明）。
 
               // 公开扩展 ratings：我的评分。和头部那个上游站点评分隔开，两套数据互不覆盖。
               if (BuildConfig.ENABLE_RATINGS) {

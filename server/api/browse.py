@@ -89,12 +89,30 @@ class BrowseMixin(object):
         where: list[str] = []
         params: tuple = ()
 
-        if lib_id:
+        # 媒体库筛选：`library_id=3`（单选，老客户端）或 `libs=1,2`（多选，2026-11-15）。
+        # 多选的语义是**同时出现在每个所选库里**（AND），不是「任一」——
+        # 用户原话「筛选同时出现在哪些媒体库的内容」，所以每加一个库结果只会更少。
+        lib_ids: list[int] = []
+        libs_raw = arg("libs")
+        if libs_raw:
+            for part in libs_raw.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                try:
+                    lib_ids.append(int(part))
+                except ValueError:
+                    return self._error(400, "libs 里的库 id 必须是整数")
+        elif lib_id:
             try:
-                where.append("f.metadata_id IN (SELECT metadata_id FROM media_files WHERE library_id = ?)")
-                params = (*params, int(lib_id))
+                lib_ids.append(int(lib_id))
             except ValueError:
                 return self._error(400, "library_id 必须是整数")
+
+        if lib_ids:
+            for lid in lib_ids:
+                where.append("f.metadata_id IN (SELECT metadata_id FROM media_files WHERE library_id = ?)")
+                params = (*params, lid)
 
         # 按分类**名字**筛（2.5.5.16）：自建分类（覆盖层里新起的系列 / 标签）没有 id，
         # 只能按名字查。把「库里本来属于这个名字的」和「被改到这个名字下的」并成一条，

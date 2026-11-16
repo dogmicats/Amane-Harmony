@@ -8,6 +8,7 @@ import { httpDelete, httpGet, httpGetCached, cachedBody, dropPageCache, httpPost
 import { cachePut } from '../common/PageCache';
 import { Store } from '../common/Store';
 import { PoolParams } from '../common/PoolParams';
+import { NavBarWatch } from '../common/NavBarWatch';
 import { Theme } from '../common/Theme';
 import { Personalize } from '../common/Personalize';
 import { markScroll } from '../view/Fx';
@@ -19,6 +20,7 @@ import { Reason, ReasonPack, ReasonLine } from '../common/Reason';
 import { HeroBanner } from '../view/HeroBanner';
 import { MediaRow } from '../view/MediaRow';
 import { BannerRow } from '../view/BannerRow';
+import { GlowOrb, ParticleField } from '../view/Fx';
 
 /** 首页「媒体库」一栏的一张卡（2.5.5.4）。 */
 interface LibCard {
@@ -54,7 +56,7 @@ const HOME_WARM_AT: Map<number, number> = new Map();
 /**
  * 首页的一行（2.5.2 起首页由数据驱动）。
  *
- * `kind` 决定用哪个组件渲染：`cast` 是共演筛选入口卡、`banner` 是横幅行、
+ * `kind` 决定用哪个组件渲染：`cast` 是找共演入口卡、`banner` 是横幅行、
  * 其余（`continue` / `row`）都是普通的横向海报行。`key` 同时是偏好里的键名，
  * 一旦发布不要再改（改了用户存的顺序就对不上了）。
  */
@@ -169,9 +171,6 @@ struct LibraryRow {
           .fontWeight(FontWeight.Bold)
           .fontColor(Theme.TEXT)
         Blank()
-        Text('长按换封面')
-          .fontSize(9)
-          .fontColor(Theme.TEXT_FAINT)
       }
       .width('100%')
       .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
@@ -186,6 +185,14 @@ struct LibraryRow {
       }
       .scrollable(ScrollDirection.Horizontal)
       .scrollBar(BarState.Off)
+      // 2026-11-16：这一条横滑时不要被首页的「右滑进负一屏」抢走。
+      // 行组件都在 onTouch 里写 rowTouchAt 表示「这一划归我」，这条库栏之前漏了，
+      // 于是从它上面右滑会直接把负一屏带出来（其他行不会，就是这个原因）。
+      .onTouch((ev: TouchEvent) => {
+        if (ev.type === TouchType.Down || ev.type === TouchType.Move) {
+          AppStorage.setOrCreate<number>('rowTouchAt', Date.now());
+        }
+      })
       .width('100%')
     }
     .width('100%')
@@ -330,12 +337,28 @@ export struct HomeTab {
   /** 每次回到首页 +1：只换内容，不显示骨架（见 silentRefresh）。 */
   @Prop @Watch('onResume') resumeKey: number = 0;
   /** 左侧光晕的当前透明度（0 = 不显示）。 */
+  /** 顶部状态栏高度（真全屏下顶栏要让出这么多，见 Index.readInsets）。 */
+  @StorageProp('amaneTopInset') topInset: number = 30;
   @State glowA: number = 0;
+  /**
+   * 主滚动区的控制器：底栏自动收起要用**绝对偏移**判断方向。
+   * `onScroll(x, y)` 的参数是「本帧滚了多少」的标量（回滚时符号也不可靠，真机实测
+   * 只看到过 +1 / -2 这种抖动值），拿它判方向会一直以为在往下看。
+   */
+  private sc: Scroller = new Scroller();
   @State home: HomeData = emptyHome();
   /** 这次真的要铺的行（顺序 / 显隐来自「设置 → 首页内容」）。 */
   @State sections: HomeSection[] = [];
   @State loading: boolean = true;
+  /** 光效档位（设置里可降）：2=全开 / 1=少 / 0=关。首屏占位背景按它决定画多少。 */
+  @StorageProp('amaneFx') fx: number = 2;
   @State error: string = '';
+  /**
+   * 顶部大图还在等这次的数据（缓存首帧阶段）。
+   * 为什么要有它：hero 是**每次 fresh 都重洗**的，先把上次那部画出来再换成新的，
+   * 无论怎么淡化都是"换了台"；这一块干脆等真数据，一次画对（2026-11-16 用户反馈）。
+   */
+  @State heroSkeleton: boolean = false;
   /** 首页「媒体库」一栏的卡（含自定义封面 / 拼贴海报）。 */
   @State libCards: LibCard[] = [];
   /** 下拉刷新中（Refresh 的双向绑定）。 */
@@ -359,7 +382,12 @@ export struct HomeTab {
 
   aboutToAppear(): void {
     this.load();
-    this.pulseGlowOnce();
+    // 光晕：**1 秒硬延时**（2026-11-16 用户「不要管他加载多久了」）。
+    // 之前挂在 `loading` 的 @Watch 上，但 `minus_glow` 这个偏好被"进过一次负一屏就自动关掉"
+    // 的逻辑写成了 0，于是 prompt 再准也永远不显示 —— 见 pulseGlowOnce() 里改掉的门禁。
+    setTimeout(() => {
+      this.pulseGlowOnce();
+    }, 1000);
   }
 
   /**
@@ -372,10 +400,12 @@ export struct HomeTab {
    */
   private openShorts(): void {
     this.glowA = 0;
-    // 学会了就不再提醒（2.6.1.64）：进过一次负一屏，把光晕提示关掉。
-    // 但用户如果在设置里手动打开过（minus_glow_keep=1），就别擅自关。
-    if (Store.I.prefString('minus_glow', '1') === '1'
-      && Store.I.prefString('minus_glow_keep', '0') !== '1') {
+    // 进来三次才不再提醒（2026-11-16 用户：一次太少，完全不关也不好）。
+    // 计数落在偏好里，跨启动累计；设置页手动关掉的（minus_glow=0）保持尊重。
+    const seen: number = Number(Store.I.prefString('minus_glow_seen', '0')) || 0;
+    const next: number = seen + 1;
+    Store.I.prefSetString('minus_glow_seen', `${next}`);
+    if (next >= 3 && Store.I.prefString('minus_glow_keep', '0') !== '1') {
       Store.I.prefSetString('minus_glow', '0');
     }
     AppStorage.setOrCreate<string>('minusCmd', 'open');
@@ -386,6 +416,15 @@ export struct HomeTab {
    * 「提示到、但不烦人」是这个组件唯一的目标；可在 设置 → 预览 里关掉。
    */
   private pulseGlowOnce(): void {
+    // 一次性迁移（2026-11-16）：老版本「进过一次负一屏就自动关掉」把 `minus_glow` 写成了 0，
+    // 用户没在设置里关过，却从此再也看不到（连报两轮"不触发"就是这个）。
+    // 这里把历史遗留的 0 复位一次，之后完全尊重设置页的开关。
+    if (Store.I.prefString('minus_glow_reset_v1', '0') !== '1') {
+      Store.I.prefSetString('minus_glow_reset_v1', '1');
+      if (Store.I.prefString('minus_glow', '1') === '0') {
+        Store.I.prefSetString('minus_glow', '1');
+      }
+    }
     if (Store.I.prefString('minus_glow', '1') === '0') {
       return;
     }
@@ -398,10 +437,11 @@ export struct HomeTab {
       step++;
       this.glowA = step % 2 === 1 ? 0.42 : 0;
       if (step < 6) {
-        setTimeout(tick, 760);
+        // 节奏放慢（2026-11-16 用户：稍微慢一点点）：980ms 一呼一吸，三次约 6 秒
+        setTimeout(tick, 980);
       }
     };
-    setTimeout(tick, 700);
+    setTimeout(tick, 900);
   }
 
   /**
@@ -422,7 +462,10 @@ export struct HomeTab {
     }
     // 全库统计摘要由 /api/user/home 下发；老服务端没有该字段时 undefined，
     // Reason.build 会自动跳过全库族，其余理由照常生成。
-    this.reasonPack = Reason.build(items, this.home.continue, this.home.library_stats);
+    // 注意：服务端给的那句 reason_text 在 Reason.build 内部就优先用了（否则它落盘的
+    // 快照还是旧的，理由抽屉与详情页会跟首页不一致）。
+    const pack: ReasonPack = Reason.build(items, this.home.continue, this.home.library_stats);
+    this.reasonPack = pack;
     // 老缓存兜底：home 会被 PageCache 落盘（TTL 5 分钟 / 跨重启仍在），服务端
     // 刚升级完时首屏很可能还是升级前那份没有 library_stats 的 JSON。补一次
     // 不走缓存的请求，拿到统计后重算 —— 同一天同一批的理由结果稳定，不会跳字。
@@ -557,7 +600,12 @@ export struct HomeTab {
       if (stale !== undefined) {
         try {
           this.home = safeHome(JSON.parse(stale) as HomeData);
-    this.syncCard();
+          // ★ 缓存首帧**不画顶部大图**（2026-11-16 用户反馈「先显示上次那部，然后硬跳成新的」）★
+          // 服务端 `build_hero` 每次 fresh 都重洗，缓存的那部与本次必然不同 ——
+          // 与其先画 A 再淡成 B（之前 260ms 压暗淡入，用户仍觉得"跳"），不如这一块先留骨架，
+          // 等 fresh 回来一次性画对的那部。行列表照旧用缓存铺，不闪整页。
+          this.heroSkeleton = true;
+          this.syncCard();
           this.loading = false;
         } catch (err) {
           console.info('[amane] home cache parse failed');
@@ -573,6 +621,8 @@ export struct HomeTab {
       this.home = safeHome(JSON.parse(text) as HomeData);
       // 留一份给下次冷启动"先画出来"用（只是画面上的一帧，不代表数据是最新的）
       cachePut(url, text, 1800000);
+      // 真数据到了：顶部大图从骨架换成这一次的那部（首次挂载带淡入，见 HeroBanner）
+      this.heroSkeleton = false;
       this.syncCard();
       this.loading = false;
     } catch (err) {
@@ -581,12 +631,15 @@ export struct HomeTab {
       if (this.home.rows.length === 0) {
         this.error = '首页加载失败，下拉重试';
       }
+      // 拉不到新数据就别让骨架一直挂着：退回缓存里那部（有总比空着强）
+      this.heroSkeleton = false;
       this.loading = false;
     }
     this.refreshReasons();
     this.buildLibCards();
     this.buildSections();
     this.warmHero();
+    // 光晕由 aboutToAppear 的 1 秒硬延时触发，这里不再掺一脚
   }
 
   /**
@@ -721,7 +774,7 @@ export struct HomeTab {
     const keys: string[] = [];
     if (BuildConfig.ENABLE_ACTORS) {
       avail.push({
-        key: 'cast', kind: 'cast', title: '共演筛选', subtitle: '',
+        key: 'cast', kind: 'cast', title: '找共演', subtitle: '',
         libraryId: 0, moreKind: '', items: []
       });
       keys.push('cast');
@@ -913,12 +966,12 @@ export struct HomeTab {
       })
     }
     .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 8 })
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 8 + this.topInset })
     .hitTestBehavior(HitTestMode.Transparent)
   }
 
   /**
-   * 公开扩展 actors 的特色入口卡（共演筛选）。
+   * 公开扩展 actors 的特色入口卡（找共演）。
    *
    * 从 build() 里搬出来只是为了让首页那段 ForEach 短一点；
    * 版式与 2.4.x 完全一致，别顺手改。
@@ -931,7 +984,7 @@ export struct HomeTab {
       Row({ space: 12 }) {
         Column({ space: 4 }) {
           Row({ space: 6 }) {
-            Text('共演筛选')
+            Text('找共演')
               .fontSize(15)
               .fontWeight(FontWeight.Bold)
               .fontColor(Theme.TEXT)
@@ -986,6 +1039,59 @@ export struct HomeTab {
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
+      // 左边缘漏光：放在**最底层**（2026-11-16 用户报「左侧 110vp 内滑不动」——
+      // 它原来压在内容上面，虽然设了 hitTestBehavior(None)，实测仍吃掉纵向手势）。
+      // 放底层照样能「从边缝漏出来」：列表与卡片本身透明，光从它们底下的空隙透上来。
+        // 左边缘「漏光」（2026-11-16 用户：不要真是一根条，要像负一屏里有宝藏、光从边缝漏出来）。
+        //
+        // ★ 不要用 `.blur()` ★（2026-11-16 用户报「有一层毛玻璃盖住首页内容」）：
+        //   这一层是透明容器，`blur` 会把**它背后**的首页内容一起糊掉，看起来就是毛玻璃。
+        //   柔光改用「径向渐变多档衰减 + 两层不同半径叠加」做，纯颜色渐变，不动背后像素。
+        Stack({ alignContent: Alignment.TopStart }) {
+          // 外层：更大更淡的一圈，负责"光晕"的扩散感
+          Column()
+            .width('100%')
+            .height('100%')
+            .radialGradient({
+              center: ['0%', '50%'],
+              radius: '150%',
+              colors: [
+                [Theme.accentAlpha(0.30), 0],
+                [Theme.accentAlpha(0.16), 0.35],
+                [Theme.accentAlpha(0.06), 0.65],
+                [Theme.accentAlpha(0.0), 1]
+              ]
+            })
+            .hitTestBehavior(HitTestMode.None)
+          // 内层：贴着边缘更亮，给出"光从缝里透进来"的核心
+          Column()
+            .width('100%')
+            .height('100%')
+            .radialGradient({
+              center: ['0%', '50%'],
+              radius: '85%',
+              colors: [
+                [Theme.accentAlpha(0.62), 0],
+                [Theme.accentAlpha(0.40), 0.22],
+                [Theme.accentAlpha(0.18), 0.48],
+                [Theme.accentAlpha(0.05), 0.72],
+                [Theme.accentAlpha(0.0), 1]
+              ]
+            })
+            .hitTestBehavior(HitTestMode.None)
+        }
+        .width(110)
+        .height('100%')
+        .opacity(this.glowA)
+        .animation({ duration: 820, curve: Curve.EaseInOut })
+        // 2026-11-16 用户报「负一屏提示光效被首页大图遮住」：这层原先在 Stack **最底层**
+        // （为修「左边缘 110vp 内滑不动」），结果 hero 大图直接盖住它。
+        // 现在用 zIndex 提到内容之上；触摸靠 None 穿透（下面两个内层渐变也要 None ——
+        // `HitTestMode.None` 只作用于自身，子节点默认仍参与命中，
+        // 这正是当初「设了 None 还挡手势」的真因）。
+        .zIndex(3)
+        .hitTestBehavior(HitTestMode.None)
+
       if (this.loading) {
         Column({ space: 12 }) {
           LoadingProgress()
@@ -1021,18 +1127,48 @@ export struct HomeTab {
         // 下拉刷新：refresh 包住 List（Header 是悬浮层，不能包进去）。
         // refreshing 用 $$ 双向绑定，onRefreshing 里置 true 由 pullRefresh 收尾置 false。
         Refresh({ refreshing: $$this.pulling }) {
-          List() {
+          List({ scroller: this.sc }) {
           ListItem() {
-            HeroBanner({
-              items: this.heroList(),
-              onPlay: (item: MediaItem) => {
-                this.openPlayer(item);
-              },
-              onDetail: (item: MediaItem) => {
-                this.openDetail(item);
+            if (this.heroSkeleton) {
+              // 缓存首帧：不画任何色块（2026-11-16 用户：别留一大块丑的灰片），
+              // 但也不能是纯黑 —— 用和「启动加载连库」同一套背景（呼吸光团 + 浮尘），
+              // 让这块看起来本来就是背景的一部分。
+              Stack({ alignContent: Alignment.Center }) {
+                if (this.fx >= 1) {
+                  GlowOrb({
+                    color: Theme.ACCENT,
+                    diameter: this.fx >= 2 ? 320 : 240,
+                    alpha: 0.22,
+                    breath: true,
+                    period: 3600
+                  })
+                }
+                if (this.fx >= 2) {
+                  ParticleField({ count: 18, color: '#FFFFFF', alpha: 0.30, drift: 0.6 })
+                }
               }
-            })
+              .width('100%')
+              .height(Theme.HERO_H)
+            } else {
+              HeroBanner({
+                items: this.heroList(),
+                onPlay: (item: MediaItem) => {
+                  this.openPlayer(item);
+                },
+                onDetail: (item: MediaItem) => {
+                  this.openDetail(item);
+                }
+              })
+            }
           }
+          // 2026-11-16：整块 hero（大图 + 番号/厂牌/标题 + 按钮行）都不参与「右滑进负一屏」。
+          // 之前只在内部几个子节点上标记，实测仍会被 Swiper/压暗层截胡；直接在 ListItem 上标，
+          // 这一块从根上不参与首页的右滑判定。
+          .onTouch((ev: TouchEvent) => {
+            if (ev.type === TouchType.Down || ev.type === TouchType.Move) {
+              AppStorage.setOrCreate<number>('rowTouchAt', Date.now());
+            }
+          })
 
           // 2.6.1.61：原来那行「刷一刷」入口删了 —— 挪到负一屏（首页左滑进入），
           // 首页只保留最左侧那条会闪几次的光晕做提示（见 build() 里 GlowHint）。
@@ -1119,6 +1255,11 @@ export struct HomeTab {
           .onScrollIndex((first: number, last: number) => {
             markScroll();
           })
+          // 往下看收起底栏、往回划弹回来（2026-11-15，学 piliplus）。
+          // 用控制器的**绝对偏移**差分：`onScroll` 的参数是标量增量，判不了方向。
+          .onScroll((x: number, y: number) => {
+            NavBarWatch.onOffset(this.sc.currentOffset().yOffset);
+          })
         }
         .width('100%')
         .height('100%')
@@ -1136,22 +1277,15 @@ export struct HomeTab {
           .align(Alignment.TopStart)
           .backgroundColor('#000000')
           .opacity(this.glowA * 0.22)
-          .animation({ duration: 620, curve: Curve.EaseInOut })
+          .animation({ duration: 820, curve: Curve.EaseInOut })
           .hitTestBehavior(HitTestMode.None)
 
-        // 最左侧一根从顶到底的光晕：宽 8vp、峰值 0.42、三次呼吸（约 4 秒）
+        // 兜底点击区：只剩最左 12vp（原来 8vp 的光带也吃这块），点了能进负一屏；
+        // 再往右就完全交给列表，纵向滑动不再被拦。
         Column()
-          .width(8)
+          .width(12)
           .height('100%')
-          .align(Alignment.TopStart)
-          .linearGradient({
-            angle: 180,
-            colors: [['#00FFD37A', 0], ['#B3FFD37A', 0.35], ['#B3FFD37A', 0.65], ['#00FFD37A', 1]]
-          })
-          .blur(3)
-          .opacity(this.glowA)
-          .animation({ duration: 620, curve: Curve.EaseInOut })
-          // 光带本身也能点（8vp 宽，不影响别处）：滑动万一被仲裁掉，这里还有兜底入口
+          .backgroundColor(Color.Transparent)
           .onClick(() => {
             this.openShorts();
           })
@@ -1162,6 +1296,7 @@ export struct HomeTab {
     }
     .width('100%')
     .height('100%')
+.expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .backgroundColor(Theme.BG)
     // 内容区**右滑** = 进负一屏（用户 00:49 定的方向）。
     //
@@ -1235,7 +1370,16 @@ export struct HomeTab {
         AppStorage.setOrCreate<string>('minusCmd', 'cancel');
       }
     } else {
-      AppStorage.setOrCreate<number>('minusDx', 0);
+      // 2026-11-16：拉出一点又没拉够时，**必须补间回弹**。
+      // 原来这里直接把 minusDx 置 0，等于零帧归位 —— 表现就是「主页秒弹回、负一屏闪一下消失」。
+      // 只要这一划真的带动过负一屏，就走 cancel 让 Index 用 180ms 弹回去。
+      const movedRaw: number | undefined = AppStorage.get<number>('minusDx');
+      const moved: number = movedRaw === undefined || movedRaw === null ? 0 : movedRaw;
+      if (moved > 0) {
+        AppStorage.setOrCreate<string>('minusCmd', 'cancel');
+      } else {
+        AppStorage.setOrCreate<number>('minusDx', 0);
+      }
     }
   }
 

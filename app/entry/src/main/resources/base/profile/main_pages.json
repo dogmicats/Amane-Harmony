@@ -9,6 +9,7 @@
     "pages/HistoryPage",
     "pages/StatsPage",
     "pages/ReasonsPage",
+    "pages/MyContentPage",
     "pages/MyLikedShortsPage",
     "pages/YearReportPage",
     "pages/TierPage",

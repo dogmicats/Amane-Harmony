@@ -62,6 +62,23 @@ export class Theme {
    * 会被悬浮底栏和手势条盖住，点了没反应（收藏页的入库卡就踩过）。
    */
   static readonly BOTTOM_SAFE: number = 108;
+  /**
+   * 状态栏（系统时间/电量那条）高度，vp。
+   *
+   * `Index` 在拿到窗口后写进 AppStorage；**真全屏**（`setWindowLayoutFullScreen(true)`）下
+   * 内容会画到状态栏后面，顶栏必须自己让出这么多，否则标题被时钟压住。
+   * 读不到就 0（等于没有全屏，顶栏不需要让位）。
+   */
+  static topInset(): number {
+    const v: number | undefined = AppStorage.get<number>('amaneTopInset');
+    return v === undefined ? 0 : v;
+  }
+
+  /** 系统导航条（手势条）高度，vp；底栏要浮在它上面，底部留白也按它加。 */
+  static navInset(): number {
+    const v: number | undefined = AppStorage.get<number>('amaneNavInset');
+    return v === undefined ? 0 : v;
+  }
   /** 当前强调色：由 `applyPalette()` 改写，别在页面里写死十六进制。 */
   static ACCENT: string = '#8B6CFF';
   /** 渐变的第二色：`linearGradient` 的终点，别单独拿它当文字色。 */

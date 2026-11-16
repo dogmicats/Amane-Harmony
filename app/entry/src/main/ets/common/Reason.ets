@@ -808,122 +808,18 @@ function collect(item: MediaItem, index: number, c: BatchCtx): Cand[] {
     }
   }
 
-  // ── rank：这批里的相对位置 ─────────────────────────────────────────────
+  // ── rank：只写「这部片自己」的属性 ──────────────────────────────────
+  // 2026-11-16 用户：原来那套「这批 12 部里评分第 3 / 这批里最长」不像推荐语，
+  // 像在解释算法怎么挑的，全部去掉，不做任何跨批比较。
   if (sc > 0) {
-    if (sc === c.maxScore && c.n > 2) {
-      add(out, 'rank', 'top-score', `今天这批里分最高的`, `${sc.toFixed(1)} 分，这批第一`);
-    }
-    if (sc === c.minScore && c.n > 3 && c.maxScore - c.minScore > 0.5) {
-      add(out, 'rank', 'low-score', `这批里分最低，也翻到了`, `${sc.toFixed(1)} 分，垫底但被选中`);
-    }
-    let rank: number = 1;
-    for (let i = 0; i < c.scores.length; i++) {
-      if (c.scores[i] > sc) {
-        rank++;
-      }
-    }
-    add(out, 'rank', 'score-rank', `这批 ${c.n} 部里，评分第 ${rank}`);
-    if (sc >= 8 && c.avgScore > 0 && sc - c.avgScore >= 0.4) {
-      add(out, 'rank', 'above-avg', `比这批平均高 ${(sc - c.avgScore).toFixed(1)} 分`);
-    }
-    const above8: number = c.scores.filter((v: number) => v >= 8).length;
-    if (sc >= 8 && above8 === 1) {
-      add(out, 'rank', 'only-8', '这批里唯一上 8 分的');
-    }
+    add(out, 'rank', 'score', `${sc.toFixed(1)} 分`);
   }
-  if (rt > 0 && c.n > 2) {
-    if (rt === c.maxRuntime) {
-      add(out, 'rank', 'longest', `这批里最长，${rt} 分钟`, `${rt} 分钟，得挑个整晚`);
-    }
-    if (rt === c.minRuntime) {
-      add(out, 'rank', 'shortest', `这批里最短，${rt} 分钟`, `${rt} 分钟，最好塞进今晚的`);
-    }
-    let rr: number = 1;
-    for (let i = 0; i < c.runtimes.length; i++) {
-      if (c.runtimes[i] > rt) {
-        rr++;
-      }
-    }
-    add(out, 'rank', 'runtime-rank', `这批里时长第 ${rr}`);
+  if (rt > 0) {
+    add(out, 'rank', 'runtime', `${rt} 分钟`);
   }
-  if (rel !== undefined && c.n > 2) {
-    if (rel.y === c.minYear && c.maxYear - c.minYear > 0) {
-      add(out, 'rank', 'oldest', `这批里年份最早，${rel.y} 年`);
-    }
-    if (rel.y === c.maxYear && c.maxYear - c.minYear > 0) {
-      add(out, 'rank', 'newest', `这批里年份最晚，${rel.y} 年`);
-    }
-  }
-  if (c.maxScore > 0 && c.minScore > 0 && c.maxScore - c.minScore >= 1.5) {
-    add(out, 'rank', 'spread', `这批分差从 ${c.minScore.toFixed(1)} 到 ${c.maxScore.toFixed(1)}`);
-  }
-  if (c.maxYear - c.minYear >= 10) {
-    add(out, 'rank', 'year-span', `这批横跨 ${c.maxYear - c.minYear} 年`);
-  }
-
-  // ── batch：这批的共性与稀缺 ────────────────────────────────────────────
-  const uniqueTag: string = tags.length > 0 && c.tags.get(tags[0]) === 1 ? tags[0] : '';
-  if (uniqueTag.length > 0) {
-    add(out, 'batch', 'unique-tag', `这批里唯一带「${uniqueTag}」的`);
-  }
-  const sharedTag: string = topShared(c.tags);
-  if (sharedTag.length > 0) {
-    add(out, 'batch', 'shared-tag', `这批里有 ${c.tags.get(sharedTag)} 部都带「${sharedTag}」`);
-  }
-  if (item.series.length > 0) {
-    const k: number | undefined = c.series.get(item.series);
-    if (k !== undefined && k >= 2) {
-      add(out, 'batch', 'shared-series', `「${item.series}」今天占了 ${k} 张`, `这系列今天翻出 ${k} 部`);
-    } else if (k === 1) {
-      add(out, 'batch', 'only-series', `这批里唯一的「${item.series}」`);
-    }
-  }
-  if (item.studio.length > 0) {
-    const k: number | undefined = c.studios.get(item.studio);
-    if (k !== undefined && k >= 2) {
-      add(out, 'batch', 'shared-studio', `这批 ${k} 部都出自 ${item.studio}`);
-    }
-  }
-  if (acts.length > 0) {
-    const k: number | undefined = c.actors.get(acts[0]);
-    if (k !== undefined && k >= 2) {
-      add(out, 'batch', 'shared-actor', `${acts[0]}今天占了 ${k} 张`, `这位演员这批出现 ${k} 次`);
-    }
-  }
-  const pre: string = prefixOf(item.number);
-  if (pre.length > 0) {
-    const k: number | undefined = c.prefixes.get(pre);
-    if (k !== undefined && k >= 2) {
-      add(out, 'batch', 'shared-prefix', `这批里 ${k} 部都是 ${pre} 开头`);
-    }
-  }
-  if (c.unseen >= 2) {
-    add(out, 'batch', 'unseen-many', `这批 ${c.n} 部里，${c.unseen} 部你还没点开`);
-    if (c.unseen === 1 && pct === 0) {
-      add(out, 'batch', 'only-unseen', '这批里唯一还没点开的');
-    }
-  }
-  if (pct > 0 && c.n - c.unseen === 1) {
-    add(out, 'batch', 'only-seen', '这批里只有这部你看过');
-  }
-  if (r > 0 && c.rated === 1) {
-    add(out, 'batch', 'only-rated', '这批里只有这部你打过分');
-  }
-  if (c.minYear > 0 && c.maxYear > 0 && Math.floor(c.minYear / 10) === Math.floor(c.maxYear / 10)) {
-    add(out, 'batch', 'one-decade', `这一批清一色 ${decadeOf(c.minYear)}`);
-  }
-  if (tags.length > 2 && tags.length === c.maxTags) {
-    add(out, 'batch', 'most-tags', `身上挂了 ${tags.length} 个标签，这批最多`);
-  }
-  if (acts.length > 2 && acts.length === c.maxActors) {
-    add(out, 'batch', 'most-actors', `${acts.length} 位演员同台，这批里最热闹`);
-  }
-  if (marks.length === 0 && c.noMarks === 1) {
-    add(out, 'batch', 'only-clean', '干干净净，这批里唯一没标记的');
-  }
-  if (item.versions !== undefined && item.versions > 1) {
-    add(out, 'batch', 'versions', `库里有 ${item.versions} 个版本`);
-  }
+  // 番号前缀（原来在 batch 段里算的，那段删掉后要在这里补回来，后面 meta 还在用）
+  const dashAt: number = item.number.indexOf('-');
+  const pre: string = dashAt > 0 ? item.number.substring(0, dashAt) : '';
 
   // ── behavior：我和这部片已经发生过的事 ──────────────────────────────────
   if (pct === 0) {
@@ -1220,11 +1116,11 @@ function collect(item: MediaItem, index: number, c: BatchCtx): Cand[] {
   add(out, 'whim', 'whim-snark',
     '封面最安静的一部，未必最安分',
     '它不需要理由，它需要你点开',
-    '今天这批里，它最不显眼');
+    '看着就不是很起眼');
   add(out, 'whim', 'whim-honest',
     '算法？没有算法，就是手气',
     '翻到它是运气，不是品味',
-    `说不出理由，但它在第 ${index + 1} 张`);
+    '说不出理由，但就是想点它');
   add(out, 'whim', 'whim-poem',
     `${c.season}天的夜，适合 ${lenTxt} 的它`,
     `${c.weekday}晚上，留 ${lenTxt} 给自己`,
@@ -1498,7 +1394,14 @@ export class Reason {
     const lines: ReasonLine[] = [];
     let count: number = 0;
     for (let i = 0; i < items.length; i++) {
-      const raw: string = picks[i];
+      // 服务端理由优先（2026-11-15）：每日推荐现在是「先定理由再挑片」，
+      // 每部自带一句 reason_text（如「你给《X》5 星 · 同演员 A」）。
+      // 客户端这套是按「这 12 部里最高分 / 同系列」事后凑的，只能当兜底。
+      const srv: string = items[i].reason_text === undefined ? '' : `${items[i].reason_text}`;
+      let raw: string = picks[i];
+      if (srv.length > 0) {
+        raw = srv;
+      }
       const bar: number = raw.indexOf('｜');
       const main: string = bar >= 0 ? raw.substring(0, bar) : raw;
       const extra: string = bar >= 0 ? raw.substring(bar + 1) : '';

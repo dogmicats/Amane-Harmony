@@ -17,6 +17,26 @@
         "name": "ohos.permission.INTERNET"
       },
       {
+        // 智感握姿（2026-11-16，按华为官方文档 bpta-smart-reach）：
+        // 官方示例声明的是 DETECT_GESTURE（不是我先写的 ACTIVITY_MOTION）；
+        // holdingHandChanged 从 API 20 起、operatingHandChanged 从 API 15 起。
+        // 两个都声明：老版本走 operating，新版本走 holding。取不到时客户端静默降级。
+        "name": "ohos.permission.DETECT_GESTURE",
+        "reason": "$string:permission_gravity_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "inuse"
+        }
+      },
+      {
+        "name": "ohos.permission.ACTIVITY_MOTION",
+        "reason": "$string:permission_gravity_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "inuse"
+        }
+      },
+      {
         // 网络类型（2.5.7 离线缓存的「仅 WiFi 下载」）：要判断当前是不是 WiFi，
         // 才决定排队的下载要不要出队。normal 级，安装即授予，不弹窗。
         "name": "ohos.permission.GET_NETWORK_INFO"

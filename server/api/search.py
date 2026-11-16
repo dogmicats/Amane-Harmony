@@ -125,9 +125,19 @@ class SearchMixin(object):
         if entity_kinds:
             # 先按用户输入的原文问一次（保持原有行为）；拼音解析出中文名时再补问一次，
             # 这样「scg」能带出「搜查官」这个标签行，而不用核心自己去碰扩展的数据。
-            queries: list[str] = [raw_q]
+            # 2026-11-16：**俗称也要能带出实体行**。原来这里只问了原文和拼音名，
+            # 于是「人妻 → 已婚妇女」这类别名只在影片搜索里生效，联想/标签行里看不见 ——
+            # 用户搜「人妻」找不到「已婚妇女」这个标签，就会认为别名没生效。
+            alias_map: dict[str, str] = {}
+            for tok in tokens:
+                for kind, name in alias_targets(tok):
+                    if kind in entity_kinds and name and name not in alias_map:
+                        alias_map[name] = tok
+            queries: list[str] = list(alias_map.keys())
+            if raw_q not in queries:
+                queries.append(raw_q)
             for name in py_names:
-                if name and name != raw_q:
+                if name and name not in queries:
                     queries.append(name)
             merged: dict = {}
             for qy in queries:
@@ -151,6 +161,10 @@ class SearchMixin(object):
                 totals[kind] = int(bucket.get("total") or 0)
                 for hit in (bucket.get("items") or [])[:per]:
                     if isinstance(hit, dict) and int(hit.get("id") or 0) > 0:
+                        # 告诉客户端这一行是「凭俗称找出来的」（别名 target → 俗称）
+                        name = str(hit.get("name") or "")
+                        if name and name in alias_map:
+                            hit["via_alias"] = alias_map[name]
                         items.append(hit)
 
         self._json({
@@ -276,6 +290,10 @@ class SearchMixin(object):
                 have.setdefault(target, []).append({"alias": alias, "kind": kind})
         items: list[dict] = []
         for r in rows:
+            # 历史遗留：番号形态的词以前也会进这张表（2026-11-16 前）。读的时候一并滤掉，
+            # 不然用户还得自己一条条点「忽略」。
+            if looks_like_number(str(r["raw"] or "")) or looks_like_number(str(r["q"] or "")):
+                continue
             cands = alias_candidates(str(r["raw"] or r["q"]))
             for c in cands:
                 c["aliases"] = have.get(str(c["target"]), [])
@@ -314,22 +332,28 @@ class SearchMixin(object):
         客户端也可以一次拉全量自己映射（别名一共就几十条）。
         """
         merged: list[dict] = []
-        seen: set[tuple] = set()
-        builtin = cjk_tables().alias
-        for alias, pairs in builtin.items():
+        # 同一条（俗称+类型+真名）可能既在出厂表里、又被用户自己加过一遍。
+        # 2026-11-16 用户反馈「自己加的那条没显示在已有别名里」就是踩这个：
+        # 原来先收出厂、再收用户的写法会把用户的重复项当出厂吞掉（`source=user` 里就看不见）。
+        # 现在**用户那条优先**：他自己加的应该能在自己那张表里看到、也能删。
+        order: list[tuple] = []
+        prov: dict[tuple, str] = {}
+        for alias, pairs in cjk_tables().alias.items():
             for kind, target in pairs:
-                if (alias, kind, target) in seen:
-                    continue
-                seen.add((alias, kind, target))
-                merged.append({"alias": alias, "kind": kind, "target": target,
-                               "source": "builtin"})
+                key = (alias, kind, target)
+                if key not in prov:
+                    order.append(key)
+                    prov[key] = "builtin"
         for alias, pairs in extra_aliases().items():
             for kind, target in pairs:
-                if (alias, kind, target) in seen:
-                    continue
-                seen.add((alias, kind, target))
-                merged.append({"alias": alias, "kind": kind, "target": target,
-                               "source": "user"})
+                key = (alias, kind, target)
+                if key not in prov:
+                    order.append(key)
+                prov[key] = "user"
+        for key in order:
+            alias, kind, target = key
+            merged.append({"alias": alias, "kind": kind, "target": target,
+                           "source": prov[key]})
         counts = _alias_film_counts(merged)
         for item in merged:
             item["films"] = counts.get((item["kind"], item["target"]), 0)
@@ -337,6 +361,14 @@ class SearchMixin(object):
         if want_target:
             merged = [x for x in merged if str(x["target"]) == want_target]
         merged.sort(key=lambda x: (-int(x["films"]), x["alias"]))
+        # 出厂（内置）别名很多，默认不该和用户自己加的那些混在一张长列表里
+        # （2026-11-16 用户：留一个小入口让好奇的人能点进去看）。
+        # 所以这里回两个数，并支持 `?source=user|builtin` 分别取。
+        builtin_total = len([x for x in merged if x["source"] == "builtin"])
+        user_total = len([x for x in merged if x["source"] == "user"])
+        want_source = ((query.get("source") or [""])[0]).strip().lower()
+        if want_source in ("user", "builtin"):
+            merged = [x for x in merged if x["source"] == want_source]
         # 折叠别名（写法差异）不进这个列表：它有一千多条，全倒出来只会淹没人加的。
         # 但页面上要让人知道「有一部分已经自动处理了」，所以回个数字。
         try:
@@ -345,7 +377,8 @@ class SearchMixin(object):
                     "SELECT COUNT(*) FROM name_variant").fetchone()[0])
         except sqlite3.Error:
             variants = 0
-        self._json({"items": merged, "total": len(merged), "variants": variants})
+        self._json({"items": merged, "total": len(merged), "variants": variants,
+                    "builtin_total": builtin_total, "user_total": user_total})
 
     @route("GET", r"/api/user/search/expand")
     def expand(self, query, *_) -> None:

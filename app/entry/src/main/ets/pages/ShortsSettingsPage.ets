@@ -1,4 +1,6 @@
 import { httpGet, httpPost } from '../common/Http';
+import { PoolFilterCard } from '../view/PoolFilterCard';
+import { resetShortsCache } from '../view/ShortsView';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { router } from '@kit.ArkUI';
@@ -145,6 +147,20 @@ struct ShortsSettingsPage {
 
       Scroll() {
         Column({ space: 10 }) {
+          // 选片范围（2026-11-15 用户要求拆出来）：和顶部大图**共用同一套筛选实现**
+          // （PoolFilterCard），但存的是自己的一套偏好（shorts_pool_spec / shorts_pool）,
+          // 改这里不再影响顶部大图。
+          PoolFilterCard({
+            specKey: 'shorts_pool_spec',
+            presetKey: 'shorts_pool',
+            title: '刷一刷从哪儿挑',
+            hint: '只在符合这些条件的片里截片段；都不选 = 全库。和顶部大图各算各的。',
+            onChanged: () => {
+              // 范围变了：预取缓存必须作废，否则还拿着旧范围的片段在刷
+              resetShortsCache();
+            }
+          })
+
           // 开关
           Row({ space: 12 }) {
             Column({ space: 3 }) {

@@ -119,6 +119,19 @@ export class Store {
 
   private store: preferences.Preferences | undefined = undefined;
 
+  /**
+   * 有没有填过「连哪台服务器」（只看本地偏好，**不联网、不等待**）。
+   *
+   * 用途：启动第一秒就能判断 —— 一个地址都没有的人，转圈等连接失败是没有意义的，
+   * 直接送他去连接设置页（2026-11-16 用户要求）。
+   *
+   * 判定口径：局域网地址或外网地址任一非空。public 版 `DEFAULT_USER` 是空串，
+   * 所以新装用户第一次启动必然是 false；self 版预置了内网地址，必然是 true。
+   */
+  configured(): boolean {
+    return this.lanUser.length > 0 || this.wanUser.length > 0;
+  }
+
   init(context: common.UIAbilityContext): void {
     try {
       this.store = preferences.getPreferencesSync(context, { name: PREF_NAME });

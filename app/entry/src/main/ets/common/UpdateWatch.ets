@@ -83,6 +83,26 @@ export class UpdateWatch {
    * 只有 `Store` 已就绪（知道服务端地址与 token）才有意义；未就绪时延后重试一次 ——
    * 冷启动时 `Store.init()` 与这里是并行的，谁先谁后不确定。
    */
+  /**
+   * 把一次检测结果同步给「小黄点」。
+   *
+   * 原来只有 `quietCheck` 会 publish，手动点「重新检查」后页面显示「都是最新的」，
+   * 点却还亮着 —— 因为页面只更新了自己的状态。2026-11-15 用户实测发现，
+   * 所以把这段抽出来，手动检查与静默检查共用一份判据。
+   */
+  static applyResult(r: CheckResult): void {
+    if (!r.ok) {
+      return;
+    }
+    const clientVer: string = r.clientUpdatable ? r.clientLatest : '';
+    const serverVer: string = r.serverUpdatable ? r.serverLatest : '';
+    const hasAny: boolean = clientVer.length > 0 || serverVer.length > 0;
+    const muted: boolean = hasAny && UpdateWatch.mutedSig() === UpdateWatch.sigOf(clientVer, serverVer);
+    UpdateWatch.publish(hasAny && !muted && clientVer.length > 0,
+      hasAny && !muted && serverVer.length > 0, clientVer, serverVer);
+    Store.I.prefSetString(PREF_LAST, `${Date.now()}`);
+  }
+
   static async quietCheck(retry: boolean = true): Promise<void> {
     if (UpdateWatch.running) {
       return;
@@ -108,14 +128,9 @@ export class UpdateWatch {
       if (!r.ok) {
         return;
       }
-      Store.I.prefSetString(PREF_LAST, `${now}`);
-      const clientVer: string = r.clientUpdatable ? r.clientLatest : '';
-      const serverVer: string = r.serverUpdatable ? r.serverLatest : '';
-      const hasAny: boolean = clientVer.length > 0 || serverVer.length > 0;
-      const muted: boolean = hasAny && UpdateWatch.mutedSig() === UpdateWatch.sigOf(clientVer, serverVer);
-      UpdateWatch.publish(hasAny && !muted && clientVer.length > 0,
-        hasAny && !muted && serverVer.length > 0, clientVer, serverVer);
-      console.info(`[amane] update watch: client=${clientVer || '-'} server=${serverVer || '-'} muted=${muted}`);
+      UpdateWatch.applyResult(r);
+      console.info(`[amane] update watch: client=${r.clientUpdatable ? r.clientLatest : '-'} ` +
+        `server=${r.serverUpdatable ? r.serverLatest : '-'}`);
     } catch (err) {
       // 静默：这条路径不该让用户看到任何东西
       console.info('[amane] update watch skipped');

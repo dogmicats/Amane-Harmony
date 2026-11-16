@@ -1,6 +1,6 @@
 import { router, promptAction } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { httpGet } from '../common/Http';
+import { httpGet, httpPut } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { Personalize, HomeRowPref } from '../common/Personalize';
@@ -8,7 +8,7 @@ import { BuildConfig } from '../common/BuildConfig';
 import { HomeData, HomeRow } from '../common/Types';
 import { safeHome } from '../common/Safe';
 import { Reason } from '../common/Reason';
-import { resetShortsCache } from '../view/ShortsView';
+import { PoolFilterCard } from '../view/PoolFilterCard';
 
 /**
  * 首页内容（2.5.2）：哪几行显示、从上到下怎么排。
@@ -26,18 +26,6 @@ interface RowEntry {
   on: boolean;
 }
 
-/** 顶部大图的候选池选项。 */
-interface PoolOpt {
-  key: string;
-  label: string;
-}
-
-/** 媒体库 chip。 */
-interface LibChip {
-  id: number;
-  name: string;
-}
-
 @Entry
 @Component
 struct SettingsHomePage {
@@ -49,126 +37,53 @@ struct SettingsHomePage {
   @State reasonOn: boolean = true;
   /** 顶部大图候选池（自由条件，2026-11-14）：媒体库 + 状态 + 年份 + 标签 + 演员。 */
   @State heroPool: string = 'all';
-  @State libs: LibChip[] = [];
-  @State selLibs: number[] = [];
-  @State poolState: string = 'any';
-  @State poolYear: string = '';
-  @State poolTags: string = '';
-  @State poolActor: string = '';
-  /** 刷一刷（负一屏）是否也按这套范围（偏好 `shorts_pool_follow_hero`，默认开）。 */
-  @State shortsFollow: boolean = true;
+  /** 每日推荐取向（服务端 data/daily.json；taste / balanced / explore）。 */
+  @State dailyPreset: string = 'balanced';
+  @State dailyNote: string = '';
 
   aboutToAppear(): void {
     this.reasonOn = Reason.enabled();
-    this.heroPool = Store.I.prefString('hero_pool', 'all');
-    this.shortsFollow = Store.I.prefString('shorts_pool_follow_hero', '1') !== '0';
-    this.loadPoolSpec();
-    this.loadLibs();
+    this.loadDaily();
     this.load();
   }
 
-  /** 读回已保存的条件（偏好 `hero_pool_spec`，JSON）。 */
-  private loadPoolSpec(): void {
-    const raw: string = Store.I.prefString('hero_pool_spec', '');
-    if (raw.length === 0) {
-      return;
-    }
-    try {
-      const o = JSON.parse(raw) as Record<string, Object>;
-      const libs = o['libs'];
-      if (libs !== undefined && libs !== null) {
-        this.selLibs = (libs as number[]).slice();
-      }
-      this.poolState = String(o['state'] === undefined ? 'any' : o['state']);
-      const yf: string = String(o['year_from'] === undefined ? '' : o['year_from']);
-      this.poolYear = yf;
-      const tags = o['tags'];
-      this.poolTags = tags === undefined || tags === null ? '' : (tags as string[]).join(',');
-      this.poolActor = String(o['actor'] === undefined ? '' : o['actor']);
-    } catch (e) {
-      console.info('[amane] hero_pool_spec 解析失败');
-    }
+  /** 读回服务端当前取向（老服务端没有这个端点 → 保持默认，不打扰）。 */
+  private loadDaily(): void {
+    httpGet(`${Store.I.user}/api/user/daily`, Store.I.token)
+      .then((text: string) => {
+        const o = JSON.parse(text) as Record<string, Object>;
+        const p: string = String(o['preset'] === undefined ? '' : o['preset']);
+        if (p.length > 0) {
+          this.dailyPreset = p;
+        }
+      })
+      .catch((err: BusinessError) => {
+        console.info(`[amane] daily preset: ${err.code}`);
+      });
   }
 
-  private async loadLibs(): Promise<void> {
-    try {
-      const text: string = await httpGet(`${Store.I.user}/api/user/libraries`, Store.I.token);
-      const o = JSON.parse(text) as Record<string, Object>;
-      const arr = (o['items'] === undefined ? [] : o['items']) as Record<string, Object>[];
-      const out: LibChip[] = [];
-      for (let i = 0; i < arr.length; i++) {
-        out.push({
-          id: Number(arr[i]['id']) || 0,
-          name: String(arr[i]['name'] === undefined ? '' : arr[i]['name'])
-        });
-      }
-      this.libs = out;
-    } catch (e) {
-      console.info('[amane] load libs failed');
-    }
+  private setDaily(name: string): void {
+    this.dailyPreset = name;
+    httpPut(`${Store.I.user}/api/user/daily`, Store.I.token, JSON.stringify({ preset: name }))
+      .then(() => {
+        this.dailyNote = '已记下，回首页下拉一次就是新的一批';
+      })
+      .catch((err: BusinessError) => {
+        this.dailyNote = `没存上（${err.code}）`;
+      });
   }
 
-  private stateOptions(): PoolOpt[] {
-    return [
-      { key: 'any', label: '不限' },
-      { key: 'unwatched', label: '未观看' },
-      { key: 'watched', label: '看过' },
-      { key: 'fav', label: '已收藏' },
-      { key: 'rated', label: '我打 4 分以上' }
-    ];
-  }
-
-  private yearOptions(): PoolOpt[] {
-    return [
-      { key: '', label: '不限' },
-      { key: '2015', label: '2015 以后' },
-      { key: '2020', label: '2020 以后' },
-      { key: '2023', label: '2023 以后' }
-    ];
-  }
-
-  /** 存条件；首页下一次请求就带上（服务端池子进缓存 key，立刻生效）。 */
-  private applyPoolSpec(): void {
-    const spec: Record<string, Object> = {};
-    if (this.selLibs.length > 0) {
-      spec['libs'] = this.selLibs.slice();
-    }
-    if (this.poolState !== 'any') {
-      spec['state'] = this.poolState;
-    }
-    if (this.poolYear.length > 0) {
-      spec['year_from'] = Number(this.poolYear) || 0;
-    }
-    const tags: string[] = this.poolTags.split(/[,，]/).map((s: string) => s.trim())
-      .filter((s: string) => s.length > 0);
-    if (tags.length > 0) {
-      spec['tags'] = tags;
-    }
-    if (this.poolActor.trim().length > 0) {
-      spec['actor'] = this.poolActor.trim();
-    }
-    Store.I.prefSetString('hero_pool_spec', JSON.stringify(spec));
-    // 空条件要落回 `all`，不能落 `custom`：PoolParams 会把 `custom` 当预设发给服务端，
-    // 而预设表里没有它（服务端只能当「未知」退回全库）—— 语义上对，但请求里挂个假值很容易误导排查。
-    Store.I.prefSetString('hero_pool', Object.keys(spec).length === 0 ? 'all' : 'custom');
-    // 范围变了：负一屏的预取缓存要作废，否则还拿着旧范围的片段在刷
-    resetShortsCache();
-    promptAction.showToast({
-      message: Object.keys(spec).length === 0 ? '已清空：回到全库' : '条件已应用，回首页下拉刷新 / 再进负一屏生效',
-      duration: 1600
-    });
-  }
-
-  private clearPoolSpec(): void {
-    this.selLibs = [];
-    this.poolState = 'any';
-    this.poolYear = '';
-    this.poolTags = '';
-    this.poolActor = '';
-    Store.I.prefSetString('hero_pool_spec', '');
-    Store.I.prefSetString('hero_pool', 'all');
-    resetShortsCache();
-    promptAction.showToast({ message: '已恢复全库', duration: 1200 });
+  @Builder
+  DailyChip(key: string, label: string) {
+    Text(label)
+      .fontSize(12)
+      .fontColor(this.dailyPreset === key ? '#FFFFFF' : Theme.TEXT_DIM)
+      .padding({ left: 14, right: 14, top: 7, bottom: 7 })
+      .backgroundColor(this.dailyPreset === key ? Theme.ACCENT : Theme.CARD_HI)
+      .borderRadius(13)
+      .onClick(() => {
+        this.setDaily(key);
+      })
   }
 
   private async load(): Promise<void> {
@@ -198,7 +113,7 @@ struct SettingsHomePage {
   private baseEntries(home: HomeData): RowEntry[] {
     const out: RowEntry[] = [];
     if (BuildConfig.ENABLE_ACTORS) {
-      out.push({ key: 'cast', title: '共演筛选', desc: '特色入口：挑人找同台作品', on: true });
+      out.push({ key: 'cast', title: '找共演', desc: '特色入口：挑人找同台作品', on: true });
     }
     out.push({
       key: 'continue',
@@ -254,7 +169,7 @@ struct SettingsHomePage {
 
   private titleOf(key: string): string {
     if (key === 'cast') {
-      return '共演筛选';
+      return '找共演';
     }
     if (key === 'continue') {
       return '继续观看';
@@ -323,7 +238,7 @@ struct SettingsHomePage {
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
           .fontColor(Theme.TEXT)
-        Text('哪几行显示、从上到下怎么排；顶部大图取自哪里、刷一刷是否共用筛选范围')
+        Text('哪几行显示、从上到下怎么排；顶部大图取自哪里（刷一刷的范围在「设置 → 刷一刷」）')
           .fontSize(11)
           .fontColor(Theme.TEXT_FAINT)
       }
@@ -429,197 +344,18 @@ struct SettingsHomePage {
                 .borderRadius(12)
             }
 
-            // 大图候选池（2026-11-14 · 用户要「自由选择」）：
-            // 不再是固定几个预设，而是**媒体库多选 + 状态 + 年份 + 标签 + 演员**自由组合。
-            Column({ space: 12 }) {
-              Column({ space: 3 }) {
-                Text('顶部大图 / 刷一刷从哪儿挑')
-                  .fontSize(15)
-                  .fontColor(Theme.TEXT)
-                Text('按下面的条件组合出候选范围；都不选 = 全库。下拉刷新与负一屏都在这个范围内换')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .lineHeight(15)
+            // 候选范围编辑卡（2026-11-15 抽成组件）：实现与「刷一刷」共用，
+            // 但各自存自己的偏好 —— 这里只编辑顶部大图那一套（hero_pool_spec）。
+            PoolFilterCard({
+              specKey: 'hero_pool_spec',
+              presetKey: 'hero_pool',
+              title: '顶部大图从哪儿挑',
+              hint: '按下面的条件组合出候选范围；都不选 = 全库。刷一刷有自己的一套，在「设置 → 刷一刷」里。',
+              onChanged: () => {
+                // 范围变了：首页聚合缓存作废，回首页下拉即可看到新的一批
+                Store.I.prefSetString('home_pool_rev', `${Date.now()}`);
               }
-              .alignItems(HorizontalAlign.Start)
-              .width('100%')
-
-              // 媒体库（多选）
-              if (this.libs.length > 0) {
-                Column({ space: 6 }) {
-                  Text('媒体库（可多选）')
-                    .fontSize(11)
-                    .fontColor(Theme.TEXT_DIM)
-                  Flex({ wrap: FlexWrap.Wrap }) {
-                    ForEach(this.libs, (lib: LibChip) => {
-                      Text(lib.name)
-                        .fontSize(12)
-                        .fontColor(this.selLibs.indexOf(lib.id) >= 0 ? '#FFFFFF' : Theme.TEXT_DIM)
-                        .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-                        .backgroundColor(this.selLibs.indexOf(lib.id) >= 0 ? Theme.ACCENT : Theme.CARD_HI)
-                        .borderRadius(Theme.R_PILL)
-                        .border({
-                          width: 1,
-                          color: this.selLibs.indexOf(lib.id) >= 0
-                            ? Theme.accentAlpha(0.55) : Theme.STROKE
-                        })
-                        .margin({ right: 8, bottom: 8 })
-                        .onClick(() => {
-                          const i: number = this.selLibs.indexOf(lib.id);
-                          const next: number[] = this.selLibs.slice();
-                          if (i >= 0) {
-                            next.splice(i, 1);
-                          } else {
-                            next.push(lib.id);
-                          }
-                          this.selLibs = next;
-                        })
-                    }, (lib: LibChip) => `lib-${lib.id}-${this.selLibs.indexOf(lib.id)}`)
-                  }
-                }
-                .alignItems(HorizontalAlign.Start)
-                .width('100%')
-              }
-
-              // 状态
-              Column({ space: 6 }) {
-                Text('观看状态')
-                  .fontSize(11)
-                  .fontColor(Theme.TEXT_DIM)
-                Flex({ wrap: FlexWrap.Wrap }) {
-                  ForEach(this.stateOptions(), (opt: PoolOpt) => {
-                    Text(opt.label)
-                      .fontSize(12)
-                      .fontColor(this.poolState === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
-                      .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-                      .backgroundColor(this.poolState === opt.key ? Theme.ACCENT : Theme.CARD_HI)
-                      .borderRadius(Theme.R_PILL)
-                      .border({
-                        width: 1,
-                        color: this.poolState === opt.key ? Theme.accentAlpha(0.55) : Theme.STROKE
-                      })
-                      .margin({ right: 8, bottom: 8 })
-                      .onClick(() => {
-                        this.poolState = opt.key;
-                      })
-                  }, (opt: PoolOpt) => `st-${opt.key}-${this.poolState}`)
-                }
-              }
-              .alignItems(HorizontalAlign.Start)
-              .width('100%')
-
-              // 年份
-              Column({ space: 6 }) {
-                Text('发行年份')
-                  .fontSize(11)
-                  .fontColor(Theme.TEXT_DIM)
-                Flex({ wrap: FlexWrap.Wrap }) {
-                  ForEach(this.yearOptions(), (opt: PoolOpt) => {
-                    Text(opt.label)
-                      .fontSize(12)
-                      .fontColor(this.poolYear === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
-                      .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-                      .backgroundColor(this.poolYear === opt.key ? Theme.ACCENT : Theme.CARD_HI)
-                      .borderRadius(Theme.R_PILL)
-                      .border({
-                        width: 1,
-                        color: this.poolYear === opt.key ? Theme.accentAlpha(0.55) : Theme.STROKE
-                      })
-                      .margin({ right: 8, bottom: 8 })
-                      .onClick(() => {
-                        this.poolYear = opt.key;
-                      })
-                  }, (opt: PoolOpt) => `yr-${opt.key}-${this.poolYear}`)
-                }
-              }
-              .alignItems(HorizontalAlign.Start)
-              .width('100%')
-
-              // 标签 / 演员
-              Column({ space: 6 }) {
-                Text('标签（逗号分隔，命中任一）')
-                  .fontSize(11)
-                  .fontColor(Theme.TEXT_DIM)
-                TextInput({ text: this.poolTags, placeholder: '例如：中字,单体' })
-                  .height(38)
-                  .fontSize(13)
-                  .backgroundColor(Theme.CARD_HI)
-                  .borderRadius(Theme.R_IMG)
-                  .onChange((v: string) => {
-                    this.poolTags = v;
-                  })
-              }
-              .alignItems(HorizontalAlign.Start)
-              .width('100%')
-
-              Column({ space: 6 }) {
-                Text('演员（名字片段即可）')
-                  .fontSize(11)
-                  .fontColor(Theme.TEXT_DIM)
-                TextInput({ text: this.poolActor, placeholder: '例如：三上' })
-                  .height(38)
-                  .fontSize(13)
-                  .backgroundColor(Theme.CARD_HI)
-                  .borderRadius(Theme.R_IMG)
-                  .onChange((v: string) => {
-                    this.poolActor = v;
-                  })
-              }
-              .alignItems(HorizontalAlign.Start)
-              .width('100%')
-
-              Row({ space: 10 }) {
-                Button('应用条件')
-                  .height(38)
-                  .fontSize(14)
-                  .fontColor('#FFFFFF')
-                  .backgroundColor(Theme.ACCENT)
-                  .borderRadius(Theme.R_PILL)
-                  .layoutWeight(1)
-                  .onClick(() => {
-                    this.applyPoolSpec();
-                  })
-                Button('清空')
-                  .height(38)
-                  .fontSize(14)
-                  .fontColor(Theme.TEXT_DIM)
-                  .backgroundColor(Theme.CARD_HI)
-                  .borderRadius(Theme.R_PILL)
-                  .onClick(() => {
-                    this.clearPoolSpec();
-                  })
-              }
-              .width('100%')
-
-              // 刷一刷（负一屏）是否复用这套范围（2026-11-14 用户：可以的话直接复用）
-              Row({ space: 10 }) {
-                Column({ space: 3 }) {
-                  Text('刷一刷也用这个范围')
-                    .fontSize(13)
-                    .fontColor(Theme.TEXT)
-                  Text('开：负一屏只刷上面条件里的片；关：负一屏从全库随便刷')
-                    .fontSize(10)
-                    .fontColor(Theme.TEXT_FAINT)
-                    .lineHeight(15)
-                }
-                .alignItems(HorizontalAlign.Start)
-                .layoutWeight(1)
-                Toggle({ type: ToggleType.Switch, isOn: this.shortsFollow })
-                  .selectedColor(Theme.ACCENT)
-                  .onChange((on: boolean) => {
-                    this.shortsFollow = on;
-                    Store.I.prefSetString('shorts_pool_follow_hero', on ? '1' : '0');
-                    // 立即作废预取缓存：下次进负一屏就按新范围取
-                    resetShortsCache();
-                  })
-              }
-              .width('100%')
-            }
-            .width('100%')
-            .padding(14)
-            .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.R_CARD)
-            .border({ width: 1, color: Theme.STROKE })
+            })
 
             Column({ space: 1 }) {
               ForEach(this.entries, (e: RowEntry, index: number) => {
@@ -655,6 +391,39 @@ struct SettingsHomePage {
               .padding({ left: 14, right: 14, top: 12, bottom: 12 })
             }
             .width('100%')
+            .backgroundColor(Theme.CARD)
+            .borderRadius(14)
+
+            // 每日推荐的「取向」（2026-11-15）：只给三个方向，不列内部理由与比例 ——
+            // 理由类别会持续新增、配比也会跟着调，写死在界面上必然过时。
+            Column({ space: 8 }) {
+              Column({ space: 3 }) {
+                Text('每日推荐的取向')
+                  .fontSize(15)
+                  .fontColor(Theme.TEXT)
+                Text('每天的推荐是几种理由混着来的；这里只调「偏熟悉 / 偏新鲜」的方向')
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_FAINT)
+              }
+              .alignItems(HorizontalAlign.Start)
+              .width('100%')
+
+              Row({ space: 8 }) {
+                this.DailyChip('taste', '更懂我')
+                this.DailyChip('balanced', '均衡')
+                this.DailyChip('explore', '多惊喜')
+              }
+              .width('100%')
+
+              if (this.dailyNote.length > 0) {
+                Text(this.dailyNote)
+                  .fontSize(10)
+                  .fontColor(Theme.ACCENT)
+                  .width('100%')
+              }
+            }
+            .width('100%')
+            .padding(14)
             .backgroundColor(Theme.CARD)
             .borderRadius(14)
 

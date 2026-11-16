@@ -76,14 +76,58 @@ class HomeMixin(object):
         limit = int((query.get("limit") or ["20"])[0])
         self._json({"items": build_recommend(limit)})
 
+    @route("GET", r"/api/user/daily")
+    def daily_prefs(self, query, *_) -> None:
+        """每日推荐的「取向」（2026-11-15）。
+
+        只回三个取向 + 一句模糊说明 —— **不返回每个理由桶的配额**：
+        理由类别会持续新增、比例也会跟着变，把它写死在界面上会天天过时；
+        用户只要表达「更懂我 / 均衡 / 多惊喜」就够了。
+        """
+        self._json({
+            "preset": daily_preset(),
+            # 排障用：画像有多少料（客户端不显示）。taste/similar 全靠它，
+            # 全是 0 就说明「没评过分 / 没收藏过」，推荐会落到 top / fresh / explore。
+            "profile": {"seeds": len(_daily_profile()["seeds"]),
+                        "actors": len(_daily_profile()["actors"]),
+                        "tags": len(_daily_profile()["tags"])},
+            "presets": [
+                {"key": "taste", "label": "更懂我",
+                 "desc": "多一点你熟悉的口味"},
+                {"key": "balanced", "label": "均衡",
+                 "desc": "老口味和新发现各来一些"},
+                {"key": "explore", "label": "多惊喜",
+                 "desc": "多推你还没碰过的"},
+            ],
+        })
+
+    @route("PUT", r"/api/user/daily")
+    def daily_set(self, query, *_) -> None:
+        body = self._body()
+        name = str(body.get("preset") or "").strip()
+        try:
+            set_daily_preset(name)
+        except ValueError as exc:
+            return self._error(400, str(exc))
+        except OSError as exc:
+            return self._error(500, f"保存失败：{exc}")
+        # 换取向要让首页立刻重算（不然 5 分钟缓存里还是旧配方）
+        invalidate_item_caches()
+        self._json({"ok": True, "preset": name})
+
     @route("GET", r"/api/user/banners")
     def banners(self, query, *_) -> None:
-        """每日推荐横幅（只含真横图 + 真实比例）；给调试/客户端刷新留一个独立入口。"""
+        """每日推荐横幅（只含真横图 + 真实比例）；给调试/客户端刷新留一个独立入口。
+
+        `?day=YYYY-MM-DD`（2026-11-15）：看「某一天会推什么」，用来核对跨天有没有换新。
+        缺省 = 北京时间今天。
+        """
         try:
             limit = max(1, min(int((query.get("limit") or ["12"])[0]), 24))
         except ValueError:
             limit = 12
-        self._json({"items": build_banners(limit)})
+        day = _day_of((query.get("day") or [""])[0])
+        self._json({"day": day.isoformat(), "items": build_banners(limit, day=day)})
 
     @route("GET", r"/api/user/libraries")
     def libs(self, query, *_) -> None:

@@ -1,9 +1,10 @@
 import { Media, Player, PlayerConfig, PlayerState } from '@mpv-ohos/mpv-arkts';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
-import { display, window } from '@kit.ArkUI';
+import { curves, display, window } from '@kit.ArkUI';
 import { router } from '@kit.ArkUI';
 import { httpGet } from '../common/Http';
+import { GripSense, GripHand } from '../common/GripSense';
 import { Store } from '../common/Store';
 import { PoolParams } from '../common/PoolParams';
 import { Theme } from '../common/Theme';
@@ -203,6 +204,26 @@ export struct ShortsView {
    * seek 后要几帧到一秒才跟上），这段窗口里的 position 不能用来判「播完」。
    */
   private openedAt: number = 0;
+  /**
+   * 本条片段**已经显示过的最大进度**（片段内相对秒）。
+   *
+   * 治「进度条先跑到 2 秒、再退回 0 重新走」（2026-11-16 22:48 用户报）：
+   * 起播 3 秒内用墙钟兜底（mpv 的 position 还没从起点跟上），第 3 秒一到
+   * 切回 position —— 而那时 position 还在 0 附近，于是进度条**倒回 0** 再慢慢爬。
+   * 现在只允许前进：`relShown` 低于已显示的最大值就取最大值。
+   * 切条 / 用户 seek 时重置（否则往回拖进度条拖不动）。
+   */
+  private shownMax: number = 0;
+  /**
+   * 本条片段累计「真的在播」的墙钟秒数（暂停 / 缓冲时不计）。
+   *
+   * 为什么要单独累计而不是用 `now - openedAt`：mpv 换源后 `position` 从 0 慢慢爬，
+   * 只信 position 进度条会卡住（2026-11-16 用户：卡在 2 秒处）；但直接用开始时刻算墙钟，
+   * 暂停 10 秒再播时进度条会一口气跳 10 秒。所以只在 `playing && !buffering` 时累加。
+   */
+  private wallBase: number = 0;
+  /** 上一次 tick 的时刻（0 = 不在计时：暂停/缓冲中）。 */
+  private lastTick: number = 0;
   /** 正在程序化翻页（播完自动切）：期间别再触发第二次。 */
   private advancing: boolean = false;
   /** 加载态是否该显示（延迟 260ms，避免缓存命中时闪一下）。 */
@@ -214,11 +235,26 @@ export struct ShortsView {
    * 改完回刷一刷**立即生效**，不用重启 App。
    */
   @StorageProp('shortsPosterBg') posterBg: number = 1;
+  /** 适感握持：左手握持时把右侧那一列挪到左边（系统判不出来就 false）。 */
+  @State leftHanded: boolean = false;
+  private gripToken: number = -1;
 
   aboutToAppear(): void {
     this.likes = Store.I.prefString('shorts_likes', '')
       .split(',')
       .filter((k: string) => k.length > 0);
+    // 适感握持（2026-11-16）：左手握着就把头像/喜爱/静音这一列挪到左边，
+    // 右手就在右边。系统判不出来（老机器/没权限）就保持原来的右侧。
+    this.gripToken = GripSense.get().subscribe((h: GripHand) => {
+      const left: boolean = h === GripHand.LEFT;
+      if (left !== this.leftHanded) {
+        // 官方示例用的弹性曲线（curves.interpolatingSpring(0,1,170,17)），
+        // 比线性缓动更像「滑过去」而不是「跳过去」。
+        animateTo({ curve: curves.interpolatingSpring(0, 1, 170, 17) }, () => {
+          this.leftHanded = left;
+        });
+      }
+    });
     this.initPlayer();
     setTimeout(() => {
       this.loadingVisible = true;
@@ -227,6 +263,8 @@ export struct ShortsView {
   }
 
   aboutToDisappear(): void {
+    GripSense.get().unsubscribe(this.gripToken);
+    this.gripToken = -1;
     this.teardown();
   }
 
@@ -458,7 +496,9 @@ export struct ShortsView {
 
   /** 右侧栏的左上角坐标（vp）：右下角对齐，列宽 56、列高约 168、右边距 10、底部留 150。 */
   private colX(): number {
-    return this.screenW() - 66;
+    // 适感握持（2026-11-16）：左手握持时整列镜像到左边距 10vp，
+    // 右手/判不出来就是原来的右边距。位置变了用动画过渡，别让拇指下的按钮突然跳。
+    return this.leftHanded ? 10 : this.screenW() - 66;
   }
 
   private colY(): number {
@@ -563,6 +603,10 @@ export struct ShortsView {
     this.openedKey = key;
     this.openedAt = Date.now();
     this.ratio = 0;
+    // 换条：进度条从头开始，单调兜底的基准也要归零（否则新片段会顶着上一条的进度）
+    this.shownMax = 0;
+    this.wallBase = 0;
+    this.lastTick = 0;
     // 判据日志：`hilog -x | grep 'shorts open'` 能核对「显示的那页」和「实际开的片」是否一致
     console.info(`[amane] shorts open idx=${i} n=${it.number} start=${it.start} dur=${it.dur}`);
     try {
@@ -627,6 +671,19 @@ export struct ShortsView {
       }
       const span: number = it.dur > 0 ? it.dur : 10;
       const rel: number = st.position - it.start;
+      // 播放墙钟：只在「真的在播且没在缓冲」时累计（暂停不计，否则恢复播放会一次跳一大截）。
+      // seek 刚落下后的保护期也停表：那时 wallBase 已压到目标位置，若继续累加，
+      // 保护期一过进度条会比实际快 1 秒多（position 才刚到位）。
+      const nowMs: number = Date.now();
+      const inHold: boolean = nowMs < this.seekHoldUntil;
+      if (st.playing && !st.buffering && !inHold) {
+        if (this.lastTick > 0) {
+          this.wallBase += (nowMs - this.lastTick) / 1000;
+        }
+        this.lastTick = nowMs;
+      } else {
+        this.lastTick = 0;
+      }
       if (this.scrub) {
         // 拖进度条时用用户手的位置，别被 tick 拽回去（松手后 mpv 要几百毫秒才跟上）
         this.ratio = this.scrubRatio;
@@ -635,14 +692,22 @@ export struct ShortsView {
         // 拿它算 ratio 会让滑块「跳一下又弹回去」（真机 23:44 实测），保持乐观值不动。
       } else {
         let relShown: number = Math.max(0, Math.min(span, rel));
-        // 起播头几秒的「墙钟兜底」（2026-11-15 用户：片段都播了一会了进度条才动）。
-        // mpv 换源后 `state.position` 要一段时间才从起点跟上（画面已经在动、position 还停在
-        // start），这段时间 rel≈0，进度条就干等着 —— 这是那种「老 bug」的来源。
-        // 所以开场 3 秒内取「墙钟秒数」和「position 差」的大者：画面一动，条就动；
-        // 3 秒之后完全交回 position，暂停/缓冲时不会被墙钟越拖越远。
-        const since: number = (Date.now() - this.openedAt) / 1000;
-        if (since < 3 && relShown < since - 0.2) {
-          relShown = Math.min(span, since);
+        // 墙钟兜底（2026-11-15 立、2026-11-16 改成「持续顶」）：
+        // mpv 换源后 `state.position` 要从 0 慢慢爬上来（画面已经在动、position 还停在 start），
+        // 只信 position 就是「片段都播了一会了条才动」。
+        // 原来只顶 3 秒，第 3 秒切回 position 时它多半还没追上 —— 于是条从 3 秒**倒回 0**
+        // （用户报的「跑两秒退回 0」）；改成单调前进后又变成**卡在 2 秒**等 position 追上来。
+        // 现在改成：只要 position 落后实际播放墙钟，就一直用墙钟顶着（不设 3 秒天花板）；
+        // 墙钟只在 playing && !buffering 时累计，所以暂停/缓冲时条不会假走。
+        const wall: number = Math.min(span, this.wallBase);
+        if (relShown < wall - 0.35) {
+          relShown = wall;
+        }
+        // 兜底：无论如何不许回退（回退由 seek 造成，seek 会重置 shownMax / wallBase）
+        if (relShown < this.shownMax) {
+          relShown = this.shownMax;
+        } else {
+          this.shownMax = relShown;
         }
         this.ratio = Math.max(0, Math.min(1, relShown / span));
         this.clipPos = relShown;
@@ -1134,6 +1199,12 @@ export struct ShortsView {
     // 先落 UI，再发 seek：mpv 的 position 要几百毫秒才跟上，否则滑块会先弹回去一下
     this.ratio = r;
     this.clipPos = r * span;
+    // seek 是唯一允许「进度条往回走」的操作：把单调兜底的基准压到目标位置，
+    // 否则上面 feedState 的 shownMax 会把往回拖的动作挡住（拖不动）。
+    this.shownMax = r * span;
+    // 墙钟也从这个位置重新起算，否则 seek 之后进度条会被旧墙钟一把推回原处
+    this.wallBase = r * span;
+    this.lastTick = 0;
     const pl: Player | undefined = this.player;
     if (pl === undefined) {
       return;
@@ -1353,6 +1424,19 @@ export struct ShortsView {
     .width('100%')
     .height('100%')
     .backgroundColor('#000000')
+    // 适感握持兜底（2026-11-16）：系统不给握持手时，靠「手指常落在哪一侧」推断。
+    // 这里是整页最外层，任何一点触摸都会经过，取样最全。
+    .onTouch((ev: TouchEvent) => {
+      if (ev.type === TouchType.Down && ev.touches.length === 1) {
+        let w: number = 0;
+        try {
+          w = display.getDefaultDisplaySync().width;
+        } catch (e) {
+          w = 0;
+        }
+        GripSense.get().noteTouch(ev.touches[0].screenX, w);
+      }
+    })
     // 负一屏手感（2.6.1.68）：**右滑跟手**，滑过 96vp 才真的关。
     // 以前直接 router.back()，播的是系统「退出页面」动画，看着像退出 App 而不是回到隔壁一屏。
   }

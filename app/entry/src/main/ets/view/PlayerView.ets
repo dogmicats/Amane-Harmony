@@ -1,7 +1,7 @@
 import { router, window, PiPWindow } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { sensor } from '@kit.SensorServiceKit';
-import { AudioTrack, Media, Player, PlayerConfig, SubtitleTrack } from '@mpv-ohos/mpv-arkts';
+import { AudioTrack, Media, Player, PlayerConfig, SubtitleTrack , PlayerState} from '@mpv-ohos/mpv-arkts';
 import { httpGet, httpGetCached, httpPost, httpPut } from '../common/Http';
 import { savePickLocal } from '../common/FrameStore';
 import { Gallery } from '../common/Gallery';
@@ -21,6 +21,7 @@ import { BackgroundPlay } from '../common/BackgroundPlay';
 import { BackAudio } from '../common/BackAudio';
 import { PlayHandoff, PlaySession } from '../common/PlaySession';
 import { PlayerChrome } from '../view/PlayerChrome';
+
 
 const SPEEDS: number[] = [0.75, 1.0, 1.25, 1.5, 2.0];
 
@@ -543,7 +544,7 @@ export struct PlayerView {
     const p: Player | undefined = this.player;
     if (p !== undefined) {
       try {
-        const st = p.state;
+        const st: PlayerState | undefined = p.state;
         if (st !== undefined && st !== null && st.position > 0) {
           pos = st.position;
         }
@@ -1149,7 +1150,7 @@ export struct PlayerView {
       return;
     }
     try {
-      const st = this.player.state;
+      const st: PlayerState | undefined = this.player.state;
       if (st === undefined || st === null) {
         return;
       }
@@ -2396,7 +2397,7 @@ export struct PlayerView {
       return;
     }
     try {
-      const st = this.player.state;
+      const st: PlayerState | undefined = this.player.state;
       if (st === undefined || st === null) {
         this.toast('内核还没就绪');
         return;
@@ -2545,7 +2546,7 @@ export struct PlayerView {
     }
     let subInfo: string = '';
     try {
-      const st = p.state;
+      const st: PlayerState | undefined = p.state;
       const tracks = st === undefined || st === null ? undefined : st.tracks;
       const subs = tracks === undefined || tracks === null ? undefined : tracks.subs;
       const n: number = subs === undefined || subs === null ? 0 : subs.length;
@@ -2612,7 +2613,7 @@ export struct PlayerView {
     }
     try {
       const lib = p.native;
-      const st = p.state;
+      const st: PlayerState | undefined = p.state;
       const tracks = st === undefined || st === null ? undefined : st.tracks;
       const subs = tracks === undefined || tracks === null ? undefined : tracks.subs;
       const n: number = subs === undefined || subs === null ? 0 : subs.length;

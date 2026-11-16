@@ -7,23 +7,14 @@ import { Theme } from '../common/Theme';
 import { StatsInfo } from '../common/Types';
 import { BuildConfig } from '../common/BuildConfig';
 import { UpdateWatch } from '../common/UpdateWatch';
-
-/** Tier 图历史只取 total（副标题用），不解析条目。 */
-interface TierListData {
-  total: number;
-}
-
-interface TierListRes {
-  ok: boolean;
-  data: TierListData;
-}
+import { NavBarWatch } from '../common/NavBarWatch';
 
 @Component
 export struct ProfileTab {
   @Prop @Watch('onRefresh') refreshKey: number = 0;
+  /** 顶部状态栏高度（真全屏下顶栏要让出这么多，见 Index.readInsets）。 */
+  @StorageProp('amaneTopInset') topInset: number = 30;
   @State stats: StatsInfo = { favorites: 0, history: 0, finished: 0, library_items: 0 };
-  /** Tier 图存过几张（-1 = 还没问到；老服务端不问，保持 0 显示默认文案）。 */
-  @State tierCount: number = -1;
   @State serverLabel: string = '';
   @State appVersion: string = '';
   /**
@@ -34,6 +25,8 @@ export struct ProfileTab {
   @StorageProp('update_dot_server') dotServer: boolean = false;
   @StorageProp('update_ver_client') verClient: string = '';
   @StorageProp('update_ver_server') verServer: string = '';
+  /** 主滚动区的控制器：底栏自动收起要用绝对偏移判断方向（见 HomeTab 同名注释）。 */
+  private sc: Scroller = new Scroller();
 
   /** 版本号从包信息读，别手写，省得发版忘了改。 */
   private readVersion(): string {
@@ -66,66 +59,40 @@ export struct ProfileTab {
       const e = err as BusinessError;
       console.error(`[amane] stats: ${e.code} ${e.message}`);
     }
-    this.loadTierCount();
   }
 
-  /** 只取 total（limit=1），拿到几张够写菜单副标题了；老服务端 404 就保持 -1。 */
-  private async loadTierCount(): Promise<void> {
-    try {
-      const raw: string = await httpGet(
-        `${Store.I.user}/api/user/tier/snapshots?limit=1`, Store.I.token);
-      const res: TierListRes = JSON.parse(raw) as TierListRes;
-      if (res.data !== undefined && res.data !== null) {
-        this.tierCount = res.data.total === undefined || res.data.total === null
-          ? 0 : Number(res.data.total);
-      }
-    } catch (err) {
-      const e = err as BusinessError;
-      console.info(`[amane] tier count: ${e.code} ${e.message}`);
-      this.tierCount = -1;
-    }
-  }
-
-  /** kind 是静态值，数字在 builder 内部读 this.stats（按值传参不会刷新）。 */
-  private statValue(kind: string): string {
-    if (kind === 'favorites') {
-      return `${this.stats.favorites}`;
-    }
-    if (kind === 'history') {
-      return `${this.stats.history}`;
-    }
-    return `${this.stats.library_items}`;
-  }
-
+  /**
+   * 首屏那两格（观看记录 / 稍后再看）。
+   *
+   * 只有「观看记录」有数字（`stats.history`，和「我的内容」里那个「看过」是同一份数据）；
+   * 「稍后再看」没有计数接口，就写一句用途，别硬编一个数字。
+   */
   @Builder
-  StatCell(kind: string, label: string) {
-    Column({ space: 4 }) {
-      Text(this.statValue(kind))
-        .fontSize(19)
-        .fontWeight(FontWeight.Bold)
+  QuickCell(glyph: string, kind: string, title: string, action: () => void) {
+    Column({ space: 3 }) {
+      Text(glyph)
+        .fontSize(16)
+        .fontColor(Theme.ACCENT)
+      Text(title)
+        .fontSize(13)
+        .fontWeight(FontWeight.Medium)
         .fontColor(Theme.TEXT)
-      Text(label)
+      Text(kind === 'history' ? `${this.stats.history} 条 · 可续播` : '想看的先记一下')
         .fontSize(10)
         .fontColor(Theme.TEXT_FAINT)
     }
     .layoutWeight(1)
-    .height(58)
+    .height(84)
     .justifyContent(FlexAlign.Center)
+    .onClick(() => {
+      action();
+    })
   }
 
   /** 会变的 desc 也在这里拼，别从外面传值进来。 */
   private rowDesc(kind: string, fallback: string): string {
-    if (kind === 'history') {
-      return `${this.stats.history} 条，可续播`;
-    }
     if (kind === 'server') {
       return this.serverLabel;
-    }
-    if (kind === 'tier') {
-      if (this.tierCount > 0) {
-        return `存了 ${this.tierCount} 张，点开切换统计页展示哪张`;
-      }
-      return this.tierCount < 0 ? fallback : '还没存过，先从统计页生成一张';
     }
     return fallback;
   }
@@ -224,7 +191,7 @@ export struct ProfileTab {
   }
 
   build() {
-    Scroll() {
+    Scroll(this.sc) {
       Column({ space: 12 }) {
         Row() {
           Text('我的')
@@ -237,24 +204,23 @@ export struct ProfileTab {
           }
         }
         .width('100%')
-        .padding({ top: 8 })
+        .padding({ top: 8 + this.topInset })
 
-        // 三个数字并成一张卡（原来是三张独立卡：横向被两处 10 的缝切成三段，
-        // 还各自带一层背景，看起来像三个互不相关的东西）。数字与含义都没变。
+        // 2026-11-15 用户重排：原来这三个数字（收藏 / 看过 / 库内条目）搬进「我的内容」，
+        // 这个位置让给**每天都会点**的两项：观看记录、稍后再看。
+        // 数字口径与接口都没动，只是换了展示位置（在 MyContentPage 里）。
         Row() {
-          this.StatCell('favorites', '收藏')
+          this.QuickCell('▶', 'history', '观看记录', () => {
+            router.pushUrl({ url: 'pages/HistoryPage' });
+          })
           Divider()
             .vertical(true)
-            .height(26)
+            .height(38)
             .strokeWidth(1)
             .color(Theme.CARD_HI)
-          this.StatCell('history', '看过')
-          Divider()
-            .vertical(true)
-            .height(26)
-            .strokeWidth(1)
-            .color(Theme.CARD_HI)
-          this.StatCell('library', '库内条目')
+          this.QuickCell('◷', 'later', '稍后再看', () => {
+            router.pushUrl({ url: 'pages/WatchLaterPage' });
+          })
         }
         .width('100%')
         .backgroundColor(Theme.CARD)
@@ -263,33 +229,10 @@ export struct ProfileTab {
         .clip(true)
 
         Column({ space: 10 }) {
-          this.MenuRow('✎', '我的评价', '', 'comment', () => {
-            router.pushUrl({ url: 'pages/MyCommentsPage' });
-          })
-          this.MenuRow('⌗', '我的弹幕', '播放时发的时间点，点一条回到那里', 'comment', () => {
-            router.pushUrl({ url: 'pages/MyAnnotationsPage' });
-          })
-          this.MenuRow('◎', '我的截帧', '我截的关键帧：看、跳、删', 'comment', () => {
-            router.pushUrl({ url: 'pages/FramePicksPage' });
-          })
-          this.MenuRow('▶', '观看记录', '', 'history', () => {
-            router.pushUrl({ url: 'pages/HistoryPage' });
-          })
-          this.MenuRow('▦', '观看统计', '看多少、什么时候看、最热哪段、偏谁', 'static', () => {
-            router.pushUrl({ url: 'pages/StatsPage' });
-          })
-          // 2.5.4.7：入口直接进「从夯到拉」主页面（配置 + 当前图 + 历史 + 下载都在那一页）。
-          // 以前进的是 TierManagePage —— 那只是个历史列表，用户点进来根本看不到生成页。
-          this.MenuRow('▤', '从夯到拉', '按星级排的 Tier 图：生成、看图、下到相册', 'tier', () => {
-            router.pushUrl({ url: 'pages/TierPage' });
-          })
-          this.MenuRow('◷', '稍后再看', '想看的先记一下，回头再看', 'static', () => {
-            router.pushUrl({ url: 'pages/WatchLaterPage' });
-          })
-          // 2.6.2.20（用户 23:53）：刷一刷的「喜爱」单独一个入口。
-          // 措辞刻意避开「收藏」二字 —— 那是服务端的影片收藏，和这里不是一回事。
-          this.MenuRow('♡', '我的喜爱', '刷一刷里点过心的片段（和「收藏」无关）', 'static', () => {
-            router.pushUrl({ url: 'pages/MyLikedShortsPage' });
+          // 2026-11-15：评价 / 弹幕 / 截帧 / 统计 / 夯到拉 / 喜爱 + 三个数字统一收进这一页，
+          // 首屏只留高频入口。原来那 6 行是这一页最长的一段。
+          this.MenuRow('▦', '我的内容', '收藏、看过、库内条目 + 评价 / 弹幕 / 截帧 / 统计 / 夯到拉 / 喜爱', 'static', () => {
+            router.pushUrl({ url: 'pages/MyContentPage' });
           })
           this.MenuRow('▤', '网页管理', '刮削、入库、任务队列', 'static', () => {
             router.pushUrl({ url: 'pages/WebPage' });
@@ -329,8 +272,12 @@ export struct ProfileTab {
       .justifyContent(FlexAlign.Start)
     }
     .width('100%')
-    .height('100%')
-    .scrollBar(BarState.Off)
-    .backgroundColor(Theme.BG)
+      .height('100%')
+      .scrollBar(BarState.Off)
+      // 往下看收起底栏、往回划弹回来（2026-11-15，学 piliplus）
+      .onScroll((x: number, y: number) => {
+        NavBarWatch.onOffset(this.sc.currentOffset().yOffset);
+      })
+      .backgroundColor(Theme.BG)
   }
 }
