@@ -191,13 +191,26 @@ def boot_guard(cand: str) -> str:
 
 
 def boot_ok() -> None:
-    """服务真正起来了：清掉 pending 与失败计数，下次重启不再当成崩溃。"""
+    """服务真正起来了：清掉 pending 与失败计数，并把「正在重启」收尾成 done。
+
+    2026-11-17 补：以前没人写 done，App 轮询 upgrade/status 永远停在「restarting」，
+    用户以为没升完（实际已经跑在新代码上了）。只在版本对得上时收尾，避免普通重启乱写。
+    """
     for path in (PENDING, TRIES):
         try:
             if os.path.isfile(path):
                 os.remove(path)
         except OSError:
             pass
+    try:
+        st = state()
+        cur = str(st.get("state") or "")
+        want = str(st.get("to") or "")
+        if cur in ("downloading", "verifying", "switching", "restarting") and want:
+            if want == VERSION or _ver_tuple(VERSION) >= _ver_tuple(want):
+                write_state("done", f"已升级到 {VERSION}", str(st.get("from") or ""), VERSION)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _ver_tuple(v: str) -> tuple:
