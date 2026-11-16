@@ -28,3 +28,7 @@ __pycache__/
 .DS_Store
 
 # 本仓库的 BuildConfig.ets 是 public 通道生成物（全空），需要入库，故不忽略。
+
+# 服务端中文检索词表：随源码包一起发（升级后停用拼音会导致静默降级）
+!server/data/
+!server/data/*.tsv
