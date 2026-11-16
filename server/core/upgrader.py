@@ -327,6 +327,36 @@ def _has_code(d: str) -> bool:
     return any(n not in (".upgrading", ".pending") for n in os.listdir(d))
 
 
+def _ensure_cjk_tables() -> None:
+    """升级后补齐中文检索表：`<app>/data/*.tsv`（2.7.3 起按这个顺序找，见 core/logic.py）。
+
+    源码包里带 `server/data/*.tsv`，正常会一起搬进 `<app>/data`；这里兜底：万一包里没带，
+    从 `core/data` 复制、或从老部署的 data 目录借。都在缺失就只记一条日志，不阻断升级。
+    """
+    want = ("t2s.tsv", "jp2s.tsv", "pinyin.tsv", "alias.tsv")
+    dst_dir = os.path.join(APP_DIR, "data")
+    for src_dir in (os.path.join(APP_DIR, "core", "data"), os.path.join(APP_DIR, "server", "data")):
+        if not os.path.isdir(src_dir):
+            continue
+        try:
+            os.makedirs(dst_dir, exist_ok=True)
+        except OSError:
+            return
+        for name in want:
+            src = os.path.join(src_dir, name)
+            dst = os.path.join(dst_dir, name)
+            if os.path.isfile(src) and not os.path.isfile(dst):
+                try:
+                    shutil.copy2(src, dst)
+                except OSError as exc:
+                    log(f"WARN 复制词表 {name} 失败: {exc}")
+    try:
+        have = [n for n in want if os.path.isfile(os.path.join(dst_dir, n))]
+    except OSError:
+        have = []
+    if not have:
+        log("WARN 升级后没找到中文词表（简繁/拼音检索会降级）")
+
 def _swap(new_root: str) -> None:
     """把新代码换进 `<DATA_DIR>/app`。先标记再动，半路崩了启动时能 recovery。"""
     os.makedirs(APP_DIR, exist_ok=True)
@@ -335,11 +365,12 @@ def _swap(new_root: str) -> None:
     if _has_code(APP_DIR):
         # 已经有一份在跑（多次升级）：它才是「上一版」
         shutil.rmtree(APP_PREV, ignore_errors=True)
-        _move_contents(APP_DIR, APP_PREV, skip=(".upgrading", ".pending"))
+        _move_contents(APP_DIR, APP_PREV, skip=(".upgrading", ".pending", "data"))
     else:
         # 第一次升级：`app.prev` 放**镜像里的代码**，新版本起不来也能回去
         _snapshot_image_code()
     _move_contents(new_root, APP_DIR, skip=(".upgrading", ".pending"))
+    _ensure_cjk_tables()
     if not os.path.isfile(os.path.join(APP_DIR, ENTRY)):
         raise RuntimeError(f"切换后 {APP_DIR} 里没有 {ENTRY}")
     # .pending 留着：下次启动如果它还在，说明这份代码没起起来（见 boot_guard）
@@ -354,7 +385,7 @@ def _swap(new_root: str) -> None:
 def _rollback() -> str:
     if not os.path.isdir(APP_PREV):
         return "没有 app.prev 可回滚"
-    _move_contents(APP_DIR, os.path.join(APP_PREV, "_failed"), skip=(".upgrading",))
+    _move_contents(APP_DIR, os.path.join(APP_PREV, "_failed"), skip=(".upgrading", "data"))
     _move_contents(APP_PREV, APP_DIR)
     try:
         os.remove(MARKER)
