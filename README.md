@@ -32,105 +32,122 @@
 
 <p><sub>面向已有 Amane 媒体库的 HarmonyOS NEXT 手机用户，需部署旁挂服务并自行签名安装。<br><strong>客户端与旁挂服务请一并手动升级到 2.7.2</strong>（这一版是最后一次「两边都要手动」的更新）。<a href="docs/START.md">从零开始</a> · <a href="../../releases">下载</a></sub></p>
 
+## 快速开始
+
+**完全不懂怎么装？看 [从零开始（傻瓜版）](docs/START.md)** —— 每一步都写了「做什么 / 看到什么算成功 / 不对怎么办」，装服务、签名装 App、连库、以后怎么更新都在里面。
+
+已经知道自己在干什么的，按三步走：
+
+1. **部署旁挂服务**　在运行 Amane 的机器上 `cp deploy/.env.example .env`，填好 `AMANE_DATA` 与 `MEDIA_PATH_MAP`，再 `docker compose -f deploy/compose.example.yml up -d`。
+2. **安装客户端**　从 [Releases](../../releases) 下载 HAP，用你自己的证书签名后安装，或交给 Hokit 这类侧载工具。
+3. **连接媒体库**　「我的 → 连接设置」填 Amane 地址 `:8000`、用户服务地址 `:8770` 与 API token。
+
+详细步骤见 [部署指南](docs/DEPLOY.md) 与 [签名安装](docs/BUILD_HAP.md)；不想手写配置，就把部署指南开头那段话发给 AI 助手，它会用 `tools/agentctl.py` 带你部署并验证。
+
+### 2.7.2 之后怎么更新
+
+**这一次（升到 2.7.2）还是老办法**：服务端按上面三步重新部署一遍、手机装一次新包。原因是升级逻辑本身就在这一版里，
+旧服务端不认识它。
+
+**从 2.7.3 起就省事了**：
+
+1. 手机打开「我的 → 检查更新」，服务端有新版本时会出现**「升级服务器」**按钮，点一下自己下载、校验、切换、重启，全程有进度条。
+2. 升级包落在服务端的数据卷 `<数据目录>/app`，**原来的 compose 不用改**，重建容器也不会把升级冲掉；升级失败或连续两次起不来自动退回上一版。
+3. **手机端仍然要下载安装包自己装**——鸿蒙不允许应用商店外自动安装，这条改不了。
+
+前提两条：服务端能访问 `github.com`（下载升级包）；服务的数据目录可写（默认挂载就是可写，除非你自己改成了 `:ro`）。
+
 ## 有趣的功能
 
-<p>
-  <img src="docs/screenshots/cast-finder.png" height="460" alt="① 共演检索">
-</p>
-
-**① 共演检索**　想看导演 × 演员的合作、想看某几个人同台（男女、女女、男男都行）、还是就想找人多的大场面？一个筛选器全包：最多 6 位演员，「1 女 + 2 男」这种配比也能直接指定。<br><sub>离散人数多选 · 导演可包含可排除</sub>
-
-<p>
-  <img src="docs/screenshots/gacha.png" height="460" alt="② 抽卡">
-</p>
-
-**② 抽卡**　片荒、列表翻到麻木的时候别选了——整屏随机剧照瀑布流，看上哪张看哪张；从媒体库到收藏、从演员的全部作品到搜索结果，任意清单都能抽。<br><sub>不满意随时重抽 · 全站清单通用</sub>
-
-<p>
-  <img src="docs/screenshots/facets.png" height="460" alt="③ 分类体系">
-</p>
-
-**③ 分类体系**　Emby 连一个能翻的演员墙都没有——想看某个人的全部作品，得进设置翻 metadata 里的 people 文件夹自己导出来。标签管理更是混乱的鸡肋功能。这里演员、标签、系列、制片厂、导演都是能直接翻的墙，视图多变，保你好看。<br><sub>多类入口 · 优化布局 · 横幅生成 · 可隐藏、可收藏</sub>
-
-<p>
-  <img src="docs/screenshots/highlights-crop.png" height="460" alt="④ 亮点">
-</p>
-
-**④ 亮点**　自动生成带时间点的本片画面，点哪张从哪秒开始播。观看时随手截的帧，也能插进亮点。<br><sub>带时间点 · 点哪张从哪秒播</sub>
-
-<p>
-  <img src="docs/screenshots/frame-picks.png" height="460" alt="⑤ 截帧与回看">
-</p>
-
-**⑤ 截帧与回看**　后台管理列着你所有的截图，点一下直接空降你最爱的场景，再也不用盯着剧照拉进度条。<br><sub>截图集中管理 · 一点直达</sub>
-
-> **⑥ 播放体验**　用腻了旧 Emby 式播放器的古早操作逻辑？这里换成 B 站客户端那套：详情页原地起播，小窗 / 全屏 / 横屏随手切，退出记着进度；倍速、手势、亮度音量都在手边。<br><sub>原地起播 · 三态窗口 · 记住进度</sub>
-
-> **⑦ 弹幕与评价**　对整部片想锐评？看到一半想说点啥？评价留给整部片，弹幕留给那个瞬间；发过的都能回头查看、管理，点一下就回到详情页。<br><sub>飞行弹幕 · 样式可调 · 评价管理</sub>
-
-<p>
-  <img src="docs/screenshots/detail-age-crop.png" height="460" alt="⑧ 出演年龄">
-</p>
-
-**⑧ 出演年龄**　演员行标着出演本片时的岁数，点一下岁数就翻同龄的片，结果还能按女优 / 男优年龄排序。那年，她多大？<br><sub>出演岁数 · 同龄横跳 · 按年龄排序</sub>
-
-<p>
-  <img src="docs/screenshots/prefix.png" height="460" alt="⑨ 元数据价值最大化">
-</p>
-
-**⑨ 元数据价值最大化**　同一批元数据能干的活不少：系列按属性筛、制片厂按番号前缀连着翻、演员按年龄和身材当索引。想找的很好找，不知道看什么让抽卡推，看对眼的就一路看下去。<br><sub>系列属性 · 番号前缀 · 一路翻片</sub>
-
-> **⑩ 打分**　1–5 星，配菜、有意思、对味、反复、社保——JAV 也有自己的从夯到拉：一眼看出这部片在你心里什么位置，顺手还能留句锐评。<br><sub>五档评分 · 顺手锐评</sub>
-
-<p>
-  <img src="docs/screenshots/stats-crop.png" height="460" alt="⑪ 观看统计">
-</p>
-
-**⑪ 观看统计**　看过不少，回头却只记得几张海报？把这台设备记录的观看次数、时长、趋势和偏好放到一起，看看最近把时间花在了哪里。记录还少时会提醒「还在积累」，不用把空白当成结论。<br><sub>观看概览 · 趋势回看 · 偏好榜</sub>
-
-<p>
-  <img src="docs/screenshots/tier-board.png" height="460" alt="⑫ 从夯到拉">
-</p>
-
-**⑫ 从夯到拉**　打过的星，值得排出来看看。把个人评分生成五档座次图，筛一筛想放在一起比较的作品，再把这一刻的选择保存下来。以后口味变了，重新生成就是另一张记录。<br><sub>五档座次 · 条件筛选 · 导出图片</sub>
-
-<p>
-  <img src="docs/screenshots/search-alias-crop.png" height="460" alt="⑬ 搜索认俗称">
-</p>
-
-**⑬ 搜索认俗称**　名字记得住，写法却不一定记得准。拼音首字母、繁简写法和俗称一起帮你找；还没对应上的叫法，可以加入自己的别名，下次想起它时，用熟悉的名字继续找。<br><sub>拼音首字母 · 写法归一 · 别名维护</sub>
-
-<a id="shorts"></a>
-
-<p>
-  <img src="docs/screenshots/shorts-main.png" height="460" alt="⑭ 刷一刷">
-</p>
-
-**⑭ 刷一刷**　列表翻累了？首页往右一滑，看看自己的片库里还有什么没留意。一条一个片段，合口味就点个心，回头去「我的喜爱」接着看。<br><sub>右滑开刷 · 片段翻看 · 喜爱回看</sub>
-
-<p>
-  <img src="docs/screenshots/liked-list.png" height="460" alt="我的喜爱">
-</p>
-
-<sub>「我的喜爱」存的是你点过心的片段，点一条就能回到那个位置。</sub>
-
-<sub>面向符合条件的本地盘影片；点心只记在这台手机上，和正片收藏分开。</sub>
-
-<a id="home-scope"></a>
-
-<p>
-  <img src="docs/screenshots/home-scope.png" height="460" alt="⑮ 首页自己挑">
-</p>
-
-**⑮ 首页自己挑**　刚打开就想看看没看过的，还是专挑自己收藏的？把库、观看状态、年份、标签和演员条件组合好，首页按这个范围换一批。<br><sub>范围自己定 · 下拉换一批</sub>
-
-<p>
-  <img src="docs/screenshots/backup.png" height="460" alt="⑯ 备份与恢复">
-</p>
-
-**⑯ 备份与恢复**　攒了那么久的收藏、评分和清单，搬家也想带着走。先看匹配结果，再挑要导的记录。<br><sub>导入先预览 · 按类挑记录</sub>
-
-<sub>支持的类别以界面为准：收藏、评分、历史、稍后再看与清单；按番号匹配，没对上的记录要自己看一眼。</sub>
+<table>
+  <tr>
+    <td width="50%" align="center" valign="middle">
+      <img src="docs/screenshots/cast-finder.png" height="260" alt="① 共演检索">
+      <br>
+      <strong>① 共演检索</strong>　最多 6 位演员，「1 女 + 2 男」这种配比也能直接指定。
+    </td>
+    <td width="50%" align="center" valign="middle">
+      <img src="docs/screenshots/gacha.png" height="260" alt="② 抽卡">
+      <br>
+      <strong>② 抽卡</strong>　整屏随机剧照，从库到收藏，任意清单都能抽。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="middle">
+      <img src="docs/screenshots/facets.png" height="260" alt="③ 分类体系">
+      <br>
+      <strong>③ 分类体系</strong>　演员、标签、系列、制片厂、导演都是能直接翻的墙。
+    </td>
+    <td width="50%" align="center" valign="middle">
+      <img src="docs/screenshots/highlights-crop.png" height="260" alt="④ 亮点">
+      <br>
+      <strong>④ 亮点</strong>　带时间点的本片画面，点哪张从哪秒开始播。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="middle">
+      <img src="docs/screenshots/frame-picks.png" height="260" alt="⑤ 截帧与回看">
+      <br>
+      <strong>⑤ 截帧与回看</strong>　截图集中在一处，点一下空降那个场景。
+    </td>
+    <td width="50%" align="center" valign="middle">
+      <img src="docs/screenshots/detail-age-crop.png" height="260" alt="⑧ 出演年龄">
+      <br>
+      <strong>⑧ 出演年龄</strong>　点岁数就翻同龄的片，还能按女优 / 男优年龄排序。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="middle">
+      <img src="docs/screenshots/prefix.png" height="260" alt="⑨ 元数据">
+      <br>
+      <strong>⑨ 元数据</strong>　系列按属性筛，制片厂按番号前缀连着翻。
+    </td>
+    <td width="50%" align="center" valign="middle">
+      <img src="docs/screenshots/stats-crop.png" height="260" alt="⑪ 观看统计">
+      <br>
+      <strong>⑪ 观看统计</strong>　次数、时长、趋势和偏好放在一起看。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="middle">
+      <img src="docs/screenshots/tier-board.png" height="260" alt="⑫ 从夯到拉">
+      <br>
+      <strong>⑫ 从夯到拉</strong>　评分生成五档座次图，可筛选、可导出。
+    </td>
+    <td width="50%" align="center" valign="middle">
+      <img src="docs/screenshots/search-alias-crop.png" height="260" alt="⑬ 搜索认俗称">
+      <br>
+      <strong>⑬ 搜索认俗称</strong>　拼音首字母、繁简写法和俗称一起帮你找。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="middle">
+      <a id="shorts"></a>
+      <img src="docs/screenshots/shorts-main.png" height="260" alt="⑭ 刷一刷">
+      <br>
+      <strong>⑭ 刷一刷</strong>　首页右滑，一条一个片段，合口味就点个心。
+    </td>
+    <td width="50%" align="center" valign="middle">
+      <a id="home-scope"></a>
+      <img src="docs/screenshots/home-scope.png" height="260" alt="⑮ 首页自己挑">
+      <br>
+      <strong>⑮ 首页自己挑</strong>　库、状态、年份、标签、演员，组合成首页范围。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="middle">
+      <img src="docs/screenshots/backup.png" height="260" alt="⑯ 备份与恢复">
+      <br>
+      <strong>⑯ 备份与恢复</strong>　收藏评分清单能带走，导入先预览再挑。
+    </td>
+    <td width="50%" align="left" valign="middle">
+      <sub>没有配图的三项：<strong>⑥ 播放体验</strong> 原地起播、三态窗口、退出记进度；<strong>⑦ 弹幕与评价</strong> 评价留给整片、弹幕留给那一刻；<strong>⑩ 打分</strong> 1–5 星，从夯到拉，顺手留句锐评。</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2"><sub>「我的喜爱」存的是你点过心的片段，点一条就能回到那个位置；点心只记在这台手机上，和正片收藏分开。备份支持的类别以界面为准，按番号匹配，没对上的记录要自己看一眼。</sub></td>
+  </tr>
+</table>
 
 ## 完善的基础功能
 
@@ -171,31 +188,6 @@
 </details>
 
 - **外挂字幕**：同目录 / 手机导入 / URL / 在线搜索，记住每部片的选择；多种常见编码自动转 WebVTT。
-
-## 快速开始
-
-**完全不懂怎么装？看 [从零开始（傻瓜版）](docs/START.md)** —— 每一步都写了「做什么 / 看到什么算成功 / 不对怎么办」，装服务、签名装 App、连库、以后怎么更新都在里面。
-
-已经知道自己在干什么的，按三步走：
-
-1. **部署旁挂服务**　在运行 Amane 的机器上 `cp deploy/.env.example .env`，填好 `AMANE_DATA` 与 `MEDIA_PATH_MAP`，再 `docker compose -f deploy/compose.example.yml up -d`。
-2. **安装客户端**　从 [Releases](../../releases) 下载 HAP，用你自己的证书签名后安装，或交给 Hokit 这类侧载工具。
-3. **连接媒体库**　「我的 → 连接设置」填 Amane 地址 `:8000`、用户服务地址 `:8770` 与 API token。
-
-详细步骤见 [部署指南](docs/DEPLOY.md) 与 [签名安装](docs/BUILD_HAP.md)；不想手写配置，就把部署指南开头那段话发给 AI 助手，它会用 `tools/agentctl.py` 带你部署并验证。
-
-### 2.7.2 之后怎么更新
-
-**这一次（升到 2.7.2）还是老办法**：服务端按上面三步重新部署一遍、手机装一次新包。原因是升级逻辑本身就在这一版里，
-旧服务端不认识它。
-
-**从 2.7.3 起就省事了**：
-
-1. 手机打开「我的 → 检查更新」，服务端有新版本时会出现**「升级服务器」**按钮，点一下自己下载、校验、切换、重启，全程有进度条。
-2. 升级包落在服务端的数据卷 `<数据目录>/app`，**原来的 compose 不用改**，重建容器也不会把升级冲掉；升级失败或连续两次起不来自动退回上一版。
-3. **手机端仍然要下载安装包自己装**——鸿蒙不允许应用商店外自动安装，这条改不了。
-
-前提两条：服务端能访问 `github.com`（下载升级包）；服务的数据目录可写（默认挂载就是可写，除非你自己改成了 `:ro`）。
 
 ## 文档
 
