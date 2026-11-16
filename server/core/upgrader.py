@@ -148,6 +148,15 @@ def boot_guard(cand: str) -> str:
     pend = os.path.join(cand, ".pending")
     if not os.path.isfile(pend):
         return "ok"
+    # 自己就跑在这份候选代码里（`os.execv` 之后）→ 这次不是「没起起来」，别计数。
+    # 2026-11-17 实测事故：父进程 exec 后子进程再跑一遍本函数，`.pending` 还没被
+    # `boot_ok()` 清掉，同一次升级被记成两次失败，直接回滚 → 2.7.2 升 2.7.3 必然失败。
+    try:
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # cand 根
+        if os.path.abspath(here) == os.path.abspath(cand):
+            return "ok"
+    except OSError:
+        pass
     tries = 0
     try:
         with open(TRIES, encoding="utf-8") as fh:
