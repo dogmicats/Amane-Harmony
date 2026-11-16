@@ -1,8 +1,8 @@
-<p align="center">
+<p>
   <img src="assets/hero-banner.jpg" alt="Amane-Harmony" width="100%">
 </p>
 
-<p align="center">
+<p>
   <a href="https://github.com/dogmicats/Amane-Harmony/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/dogmicats/Amane-Harmony?style=flat-square&color=8b5cf6"></a>
   <img alt="HarmonyOS" src="https://img.shields.io/badge/HarmonyOS-native-536dfe?style=flat-square">
   <img alt="ArkTS" src="https://img.shields.io/badge/ArkTS-client-8b5cf6?style=flat-square">
@@ -11,14 +11,14 @@
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/dogmicats/Amane-Harmony?style=flat-square"></a>
 </p>
 
-<p align="center">
+<p>
   <strong>发现下一部好片，<br>留住每一次精彩。</strong><br>
   想找谁就认真找，没主意就刷一刷；看对眼的，从详情看到精彩，再留给下一次重逢。
 </p>
 
-<p align="center"><sub>共演检索 · 随机抽卡 · 丰富详情 · 记录回看</sub></p>
+<p><sub>共演检索 · 随机抽卡 · 丰富详情 · 记录回看</sub></p>
 
-<p align="center"><sub><strong>2.7.2</strong>　刷一刷的手感修好了 · 服务端能在 App 里一键升级<br><strong>这一版要手动更新一次</strong>：服务端重新部署、手机装新包，之后才走半自动。</sub></p>
+<p><sub><strong>2.7.2</strong>　刷一刷的手感修好了 · 服务端能在 App 里一键升级<br><strong>这一版要手动更新一次</strong>：服务端重新部署、手机装新包，之后才走半自动。</sub></p>
 
 > 把自己的 Amane 媒体库带到 HarmonyOS。沿着演员与共演找片，让随机剧照带来惊喜；打开详情了解阵容、选择版本，再把精彩画面、评分和观看记录留下来。2.7.0 让首页往右滑就能翻自己的片段，首页范围也能自己组合；2.7.2 把刷一刷的手感修了，并让服务端以后能在 App 里升级。
 
@@ -30,86 +30,105 @@
 
 > 截图取自作者自建媒体库；封面、横幅与剧照已打码，演员头像保留原样。
 
-<p align="center"><sub>面向已有 Amane 媒体库的 HarmonyOS NEXT 手机用户，需部署旁挂服务并自行签名安装。<br><strong>客户端与旁挂服务请一并手动升级到 2.7.2</strong>（这一版是最后一次「两边都要手动」的更新）。<a href="docs/START.md">从零开始</a> · <a href="../../releases">下载</a></sub></p>
+<p><sub>面向已有 Amane 媒体库的 HarmonyOS NEXT 手机用户，需部署旁挂服务并自行签名安装。<br><strong>客户端与旁挂服务请一并手动升级到 2.7.2</strong>（这一版是最后一次「两边都要手动」的更新）。<a href="docs/START.md">从零开始</a> · <a href="../../releases">下载</a></sub></p>
 
 ## 有趣的功能
 
-<table>
-  <tr>
-    <td width="33%" align="center" valign="top">
-      <img src="docs/screenshots/cast-finder.png" width="210"><br>
-      <strong>① 共演检索</strong>
-    </td>
-    <td width="33%" align="center" valign="top">
-      <img src="docs/screenshots/gacha.png" width="210"><br>
-      <strong>② 抽卡</strong>
-    </td>
-    <td width="33%" align="center" valign="top">
-      <img src="docs/screenshots/facets.png" width="210"><br>
-      <strong>③ 分类体系</strong>
-    </td>
-  </tr>
-</table>
+<p>
+  <img src="docs/screenshots/cast-finder.png" height="460" alt="① 共演检索">
+</p>
 
-① **共演检索**　想看导演 × 演员的合作、想看某几个人同台（男女、女女、男男都行）、还是就想找人多的大场面？一个筛选器全包：最多 6 位演员，「1 女 + 2 男」这种配比也能直接指定。<br><strong>离散人数多选 · 导演可包含可排除</strong>
+**① 共演检索**　想看导演 × 演员的合作、想看某几个人同台（男女、女女、男男都行）、还是就想找人多的大场面？一个筛选器全包：最多 6 位演员，「1 女 + 2 男」这种配比也能直接指定。<br><sub>离散人数多选 · 导演可包含可排除</sub>
 
-② **抽卡**　片荒、列表翻到麻木的时候别选了——整屏随机剧照瀑布流，看上哪张看哪张；从媒体库到收藏、从演员的全部作品到搜索结果，任意清单都能抽。<br><strong>不满意随时重抽 · 全站清单通用</strong>
+<p>
+  <img src="docs/screenshots/gacha.png" height="460" alt="② 抽卡">
+</p>
 
-③ **分类体系**　Emby 连一个能翻的演员墙都没有——想看某个人的全部作品，得进设置翻 metadata 里的 people 文件夹自己导出来。标签管理更是混乱的鸡肋功能。这里演员、标签、系列、制片厂、导演都是能直接翻的墙，视图多变，保你好看。<br><strong>多类入口 · 优化布局 · 横幅生成 · 可隐藏、可收藏</strong>
+**② 抽卡**　片荒、列表翻到麻木的时候别选了——整屏随机剧照瀑布流，看上哪张看哪张；从媒体库到收藏、从演员的全部作品到搜索结果，任意清单都能抽。<br><sub>不满意随时重抽 · 全站清单通用</sub>
 
-<p><img src="docs/screenshots/highlights-crop.png" width="460"></p>
+<p>
+  <img src="docs/screenshots/facets.png" height="460" alt="③ 分类体系">
+</p>
 
-④ **亮点**　自动生成带时间点的本片画面，点哪张从哪秒开始播。观看时随手截的帧，也能插进亮点。
+**③ 分类体系**　Emby 连一个能翻的演员墙都没有——想看某个人的全部作品，得进设置翻 metadata 里的 people 文件夹自己导出来。标签管理更是混乱的鸡肋功能。这里演员、标签、系列、制片厂、导演都是能直接翻的墙，视图多变，保你好看。<br><sub>多类入口 · 优化布局 · 横幅生成 · 可隐藏、可收藏</sub>
 
-**截帧与回看**　后台管理列着你所有的截图，点一下直接空降你最爱的场景，再也不用盯着剧照拉进度条。
+<p>
+  <img src="docs/screenshots/highlights-crop.png" height="460" alt="④ 亮点">
+</p>
 
-⑤ **播放体验**　用腻了旧 Emby 式播放器的古早操作逻辑？这里换成 B 站客户端那套：详情页原地起播，小窗 / 全屏 / 横屏随手切，退出记着进度；倍速、手势、亮度音量都在手边。<br><strong>原地起播 · 三态窗口 · 记住进度</strong>
+**④ 亮点**　自动生成带时间点的本片画面，点哪张从哪秒开始播。观看时随手截的帧，也能插进亮点。<br><sub>带时间点 · 点哪张从哪秒播</sub>
 
-⑥ **弹幕与评价**　对整部片想锐评？看到一半想说点啥？评价留给整部片，弹幕留给那个瞬间；发过的都能回头查看、管理，点一下就回到详情页。<br><strong>飞行弹幕 · 样式可调 · 评价管理</strong>
+<p>
+  <img src="docs/screenshots/frame-picks.png" height="460" alt="⑤ 截帧与回看">
+</p>
 
-<p><img src="docs/screenshots/detail-age-crop.png" width="460"></p>
+**⑤ 截帧与回看**　后台管理列着你所有的截图，点一下直接空降你最爱的场景，再也不用盯着剧照拉进度条。<br><sub>截图集中管理 · 一点直达</sub>
 
-⑦ **出演年龄**　演员行标着出演本片时的岁数，点一下岁数就翻同龄的片，结果还能按女优 / 男优年龄排序。那年，她多大？
+> **⑥ 播放体验**　用腻了旧 Emby 式播放器的古早操作逻辑？这里换成 B 站客户端那套：详情页原地起播，小窗 / 全屏 / 横屏随手切，退出记着进度；倍速、手势、亮度音量都在手边。<br><sub>原地起播 · 三态窗口 · 记住进度</sub>
 
-<p><img src="docs/screenshots/prefix.png" width="460"></p>
+> **⑦ 弹幕与评价**　对整部片想锐评？看到一半想说点啥？评价留给整部片，弹幕留给那个瞬间；发过的都能回头查看、管理，点一下就回到详情页。<br><sub>飞行弹幕 · 样式可调 · 评价管理</sub>
 
-⑧ **元数据价值最大化**　同一批元数据能干的活不少：系列按属性筛、制片厂按番号前缀连着翻、演员按年龄和身材当索引。想找的很好找，不知道看什么让抽卡推，看对眼的就一路看下去。<br><strong>系列属性 · 番号前缀 · 一路翻片</strong>
+<p>
+  <img src="docs/screenshots/detail-age-crop.png" height="460" alt="⑧ 出演年龄">
+</p>
 
-⑨ **打分**　1–5 星，配菜、有意思、对味、反复、社保——JAV 也有自己的从夯到拉：一眼看出这部片在你心里什么位置，顺手还能留句锐评。
+**⑧ 出演年龄**　演员行标着出演本片时的岁数，点一下岁数就翻同龄的片，结果还能按女优 / 男优年龄排序。那年，她多大？<br><sub>出演岁数 · 同龄横跳 · 按年龄排序</sub>
 
-<p><img src="docs/screenshots/stats-crop.png" width="520"></p>
+<p>
+  <img src="docs/screenshots/prefix.png" height="460" alt="⑨ 元数据价值最大化">
+</p>
 
-⑩ **观看统计**　看过不少，回头却只记得几张海报？把这台设备记录的观看次数、时长、趋势和偏好放到一起，看看最近把时间花在了哪里。记录还少时会提醒「还在积累」，不用把空白当成结论。<br><strong>观看概览 · 趋势回看 · 偏好榜</strong>
+**⑨ 元数据价值最大化**　同一批元数据能干的活不少：系列按属性筛、制片厂按番号前缀连着翻、演员按年龄和身材当索引。想找的很好找，不知道看什么让抽卡推，看对眼的就一路看下去。<br><sub>系列属性 · 番号前缀 · 一路翻片</sub>
 
-<p><img src="docs/screenshots/tier-board.png" width="460"></p>
+> **⑩ 打分**　1–5 星，配菜、有意思、对味、反复、社保——JAV 也有自己的从夯到拉：一眼看出这部片在你心里什么位置，顺手还能留句锐评。<br><sub>五档评分 · 顺手锐评</sub>
 
-⑪ **从夯到拉**　打过的星，值得排出来看看。把个人评分生成五档座次图，筛一筛想放在一起比较的作品，再把这一刻的选择保存下来。以后口味变了，重新生成就是另一张记录。<br><strong>五档座次 · 条件筛选 · 导出图片</strong>
+<p>
+  <img src="docs/screenshots/stats-crop.png" height="460" alt="⑪ 观看统计">
+</p>
 
-<p><img src="docs/screenshots/search-alias-crop.png" width="460"></p>
+**⑪ 观看统计**　看过不少，回头却只记得几张海报？把这台设备记录的观看次数、时长、趋势和偏好放到一起，看看最近把时间花在了哪里。记录还少时会提醒「还在积累」，不用把空白当成结论。<br><sub>观看概览 · 趋势回看 · 偏好榜</sub>
 
-⑫ **搜索认俗称**　名字记得住，写法却不一定记得准。拼音首字母、繁简写法和俗称一起帮你找；还没对应上的叫法，可以加入自己的别名，下次想起它时，用熟悉的名字继续找。<br><strong>拼音首字母 · 写法归一 · 别名维护</strong>
+<p>
+  <img src="docs/screenshots/tier-board.png" height="460" alt="⑫ 从夯到拉">
+</p>
+
+**⑫ 从夯到拉**　打过的星，值得排出来看看。把个人评分生成五档座次图，筛一筛想放在一起比较的作品，再把这一刻的选择保存下来。以后口味变了，重新生成就是另一张记录。<br><sub>五档座次 · 条件筛选 · 导出图片</sub>
+
+<p>
+  <img src="docs/screenshots/search-alias-crop.png" height="460" alt="⑬ 搜索认俗称">
+</p>
+
+**⑬ 搜索认俗称**　名字记得住，写法却不一定记得准。拼音首字母、繁简写法和俗称一起帮你找；还没对应上的叫法，可以加入自己的别名，下次想起它时，用熟悉的名字继续找。<br><sub>拼音首字母 · 写法归一 · 别名维护</sub>
 
 <a id="shorts"></a>
 
-<p><img src="docs/screenshots/shorts-main.png" width="460"></p>
+<p>
+  <img src="docs/screenshots/shorts-main.png" height="460" alt="⑭ 刷一刷">
+</p>
 
-⑬ **刷一刷**　列表翻累了？首页往右一滑，看看自己的片库里还有什么没留意。一条一个片段，合口味就点个心，回头去「我的喜爱」接着看。<br><strong>右滑开刷 · 片段翻看 · 喜爱回看</strong>
+**⑭ 刷一刷**　列表翻累了？首页往右一滑，看看自己的片库里还有什么没留意。一条一个片段，合口味就点个心，回头去「我的喜爱」接着看。<br><sub>右滑开刷 · 片段翻看 · 喜爱回看</sub>
 
-<sub>面向符合条件的本地盘影片；点心只记在这台手机上，和正片收藏分开。</sub>
-
-<p><img src="docs/screenshots/liked-list.png" width="460"></p>
+<p>
+  <img src="docs/screenshots/liked-list.png" height="460" alt="我的喜爱">
+</p>
 
 <sub>「我的喜爱」存的是你点过心的片段，点一条就能回到那个位置。</sub>
 
+<sub>面向符合条件的本地盘影片；点心只记在这台手机上，和正片收藏分开。</sub>
+
 <a id="home-scope"></a>
 
-<p><img src="docs/screenshots/home-scope.png" width="460"></p>
+<p>
+  <img src="docs/screenshots/home-scope.png" height="460" alt="⑮ 首页自己挑">
+</p>
 
-⑭ **首页自己挑**　刚打开就想看看没看过的，还是专挑自己收藏的？把库、观看状态、年份、标签和演员条件组合好，首页按这个范围换一批。<br><strong>范围自己定 · 下拉换一批</strong>
+**⑮ 首页自己挑**　刚打开就想看看没看过的，还是专挑自己收藏的？把库、观看状态、年份、标签和演员条件组合好，首页按这个范围换一批。<br><sub>范围自己定 · 下拉换一批</sub>
 
-<p><img src="docs/screenshots/backup.png" width="460"></p>
+<p>
+  <img src="docs/screenshots/backup.png" height="460" alt="⑯ 备份与恢复">
+</p>
 
-⑮ **备份与恢复**　攒了那么久的收藏、评分和清单，搬家也想带着走。先看匹配结果，再挑要导的记录。<br><strong>导入先预览 · 按类挑记录</strong>
+**⑯ 备份与恢复**　攒了那么久的收藏、评分和清单，搬家也想带着走。先看匹配结果，再挑要导的记录。<br><sub>导入先预览 · 按类挑记录</sub>
 
 <sub>支持的类别以界面为准：收藏、评分、历史、稍后再看与清单；按番号匹配，没对上的记录要自己看一眼。</sub>
 
@@ -141,7 +160,7 @@
 <details>
 <summary>想看看它怎么播得顺？展开看播放链路</summary>
 
-<p align="center"><img src="assets/architecture.png" width="100%" alt="系统架构"></p>
+<p><img src="assets/architecture.png" width="100%" alt="系统架构"></p>
 
 - **块缓存**：读过的块留在内存（默认 320MB），拖动回看不回源。
 - **并行预取**：提前读后续分段，网盘与冷区的首包更快。
