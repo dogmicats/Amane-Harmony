@@ -1,10 +1,12 @@
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpDelete, httpGet } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { DetailParams } from '../common/Types';
 import { clock } from '../common/Util';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /**
  * 我的弹幕（R23 汇总页，两级）。
@@ -336,9 +338,11 @@ struct MyAnnotationsPage {
         .layoutWeight(1)
         Text('从头播')
           .fontSize(11)
-          .fontColor('#FFFFFF')
+          .fontColor(Theme.ACCENT)
           .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          .backgroundColor(Theme.ACCENT)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+          .backgroundColor(Theme.accentAlpha(0.30))
+          .border({ width: 1, color: Theme.accentAlpha(0.55) })
           .borderRadius(10)
           .onClick(() => {
             const g: AnnoGroup | undefined = this.detailGroup();
@@ -420,26 +424,23 @@ struct MyAnnotationsPage {
     .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
   }
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
       Row({ space: 10 }) {
-        Text('‹')
-          .fontSize(24)
-          .fontColor(Theme.TEXT)
-          .width(30)
-          .height(34)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
+        // 五十九改：裸字返回 → 基底返回胶囊（34 / 12 / 20）。
+        // 它的 onTap 与别的页不同：详情态先退回列表，列表态才退页 —— 逻辑原样搬进来。
+        GlassBack({
+          mat: true,
+          onTap: () => {
             if (this.detailMid > 0) {
               this.detailMid = 0;
             } else {
               router.back();
             }
-          })
-        Text(this.detailMid > 0 ? '影片弹幕' : '我的弹幕')
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.TEXT)
+          }
+        })
+        PageTitle({ text: this.detailMid > 0 ? '影片弹幕' : '我的弹幕', fs: 18 })
         Blank()
         Text(this.detailMid > 0
           ? `${this.detailGroup() === undefined ? 0 : this.detailGroup()!.items.length} 条`
@@ -447,57 +448,105 @@ struct MyAnnotationsPage {
           .fontSize(11)
           .fontColor(Theme.TEXT_FAINT)
       }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 8 })
-
-      if (this.note.length > 0) {
-        Text(this.note)
-          .fontSize(10)
-          .fontColor(Theme.ACCENT)
-          .padding({ left: Theme.PAGE_PAD, bottom: 4 })
-          .width('100%')
-      }
-
-      if (this.loading) {
-        Column() {
-          LoadingProgress()
-            .width(30)
-            .height(30)
-            .color(Theme.ACCENT)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.groups.length === 0) {
-        Column({ space: 8 }) {
-          Text('还没有弹幕')
-            .fontSize(14)
-            .fontColor(Theme.TEXT_DIM)
-          Text('播放时点底栏的「弹幕」，发一句，下次播到那里会自己飘出来')
-            .fontSize(11)
-            .fontColor(Theme.TEXT_FAINT)
-            .textAlign(TextAlign.Center)
-            .padding({ left: 40, right: 40 })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.detailMid > 0) {
-        this.DetailView()
-      } else {
-        List({ space: 10 }) {
-          ForEach(this.groups, (g: AnnoGroup) => {
-            ListItem() {
-              this.FilmItemView(g)
-            }
-          }, (g: AnnoGroup) => `g-${g.metadata_id}`)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
-        .scrollBar(BarState.Off)
-      }
+      .padding({ left: 8, right: Theme.PAGE_PAD })
     }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
+
+  @StorageProp('amaneTopInset') topInset: number = 30;
+
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column() {
+
+  // 六十改：让出浮层标题栏的高度
+  Blank().height(this.barH())
+
+        if (this.note.length > 0) {
+          Text(this.note)
+            .fontSize(10)
+            .fontColor(Theme.ACCENT)
+            .padding({ left: Theme.PAGE_PAD, bottom: 4 })
+            .width('100%')
+        }
+
+        if (this.loading) {
+          Column() {
+            LoadingProgress()
+              .width(30)
+              .height(30)
+              .color(Theme.ACCENT)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.groups.length === 0) {
+          Column({ space: 8 }) {
+            Text('还没有弹幕')
+              .fontSize(14)
+              .fontColor(Theme.TEXT_DIM)
+            Text('播放时点底栏的「弹幕」，发一句，下次播到那里会自己飘出来')
+              .fontSize(11)
+              .fontColor(Theme.TEXT_FAINT)
+              .textAlign(TextAlign.Center)
+              .padding({ left: 40, right: 40 })
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.detailMid > 0) {
+          this.DetailView()
+        } else {
+          List({ space: 10 }) {
+            ForEach(this.groups, (g: AnnoGroup) => {
+              ListItem() {
+                this.FilmItemView(g)
+              }
+            }, (g: AnnoGroup) => `g-${g.metadata_id}`)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+          .scrollBar(BarState.Off)
+        }
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
+    }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

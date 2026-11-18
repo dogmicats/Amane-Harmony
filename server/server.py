@@ -1224,8 +1224,8 @@ def _prefer_data_app() -> None:
     data = os.environ.get("DATA_DIR", "/data")
     cand = os.path.join(data, "app")
     entry = os.path.join(cand, "server.py")
-    # 已经 exec 进这份代码了：`.pending` 要等 listen 成功才清，这里再数一次就成了
-    # 「同一次升级记两次失败」→ 立刻回滚（2026-11-17 实测：2.7.2 升 2.7.3 必然失败）。
+    # 已经 exec 进这份代码了：`.pending` 要等 main() 里 listen 成功才清，
+    # 这时再数一次就变成「同一次升级记两次失败」→ 直接回滚（2026-11-17 实测事故）。
     if os.environ.get("AMANE_DATA_APP_ACTIVE") == cand:
         return
     if not os.path.isfile(entry):
@@ -1239,6 +1239,7 @@ def _prefer_data_app() -> None:
             return
         os.chdir(cand)
         sys.path.insert(0, cand)
+        # 打了这个标记，exec 之后的新进程就不会把 `.pending` 再数一次（见函数开头）
         os.environ["AMANE_DATA_APP_ACTIVE"] = cand
         log(f"改用数据卷里的代码：{cand}")
         os.execv(sys.executable, [sys.executable, entry] + sys.argv[1:])

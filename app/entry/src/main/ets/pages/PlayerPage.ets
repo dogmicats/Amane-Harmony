@@ -209,6 +209,9 @@ struct PlayerPage {
   }
 
   private enterFullscreen(): void {
+    // 播放页独占方向（2026-11-17）：告诉 Index 别再按负一屏/首页那套改方向，
+    // 否则播放中途来一次 AUTO_ROTATION，系统会按传感器重判、有几率直接翻回竖屏。
+    AppStorage.setOrCreate<boolean>('playerActive', true);
     window.getLastWindow(getContext(this)).then((win: window.Window) => {
       this.win = win;
       win.setPreferredOrientation(window.Orientation.LANDSCAPE);
@@ -248,9 +251,12 @@ struct PlayerPage {
 
   private exitFullscreen(): void {
     if (this.win === undefined) {
+      AppStorage.setOrCreate<boolean>('playerActive', false);
       return;
     }
     this.win.setPreferredOrientation(window.Orientation.PORTRAIT);
+    // 先锁回竖屏，再交还方向控制权（顺序反了会出现「刚交还就被系统转一下」的闪动）
+    AppStorage.setOrCreate<boolean>('playerActive', false);
     this.win.setWindowLayoutFullScreen(false);
     this.win.setWindowSystemBarEnable(['status', 'navigation']);
     // 退出播放页：把常亮还回去，否则页面关了屏幕还一直亮着

@@ -1,4 +1,5 @@
 import { router, promptAction, componentSnapshot } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { image } from '@kit.ImageKit';
 import { common } from '@kit.AbilityKit';
@@ -6,6 +7,7 @@ import { httpGet, httpPost, httpDelete } from '../common/Http';
 import { Gallery } from '../common/Gallery';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /**
  * 从夯到拉 · Tier 图（2.5.5 重做）。
@@ -647,42 +649,6 @@ struct TierPage {
 
   // ---- 视图 ------------------------------------------------------------
 
-  @Builder
-  Header() {
-    Row({ space: 10 }) {
-      Text('‹')
-        .fontSize(24)
-        .fontColor(Theme.TEXT)
-        .width(30)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          router.back();
-        })
-      Column({ space: 2 }) {
-        Text('从夯到拉')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
-        Text('按你的星级拍的座次')
-          .fontSize(11)
-          .fontColor(Theme.TEXT_FAINT)
-      }
-      .alignItems(HorizontalAlign.Start)
-      Blank()
-      Text(this.exporting ? '…' : '导出')
-        .fontSize(11)
-        .fontColor(this.st === ST_OK ? Theme.ON_ACCENT : Theme.TEXT_FAINT)
-        .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-        .backgroundColor(this.st === ST_OK ? Theme.ACCENT : Theme.CARD_HI)
-        .borderRadius(13)
-        .onClick(() => {
-          this.exportPng('tier-current');
-        })
-    }
-    .width('100%')
-    .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 8 })
-  }
 
   @Builder
   KindChip(k: string) {
@@ -1258,36 +1224,112 @@ struct TierPage {
     .alignItems(HorizontalAlign.Start)
   }
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
-      this.Header()
+      Row({ space: 10 }) {
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
+          }
+        })
+        Column({ space: 2 }) {
+          PageTitle({ text: '从夯到拉', fs: 18 })
+          Text('按你的星级拍的座次')
+            .fontSize(11)
+            .fontColor(Theme.TEXT_FAINT)
+        }
+        .alignItems(HorizontalAlign.Start)
+        Blank()
+        Text(this.exporting ? '…' : '导出')
+          .fontSize(11)
+          .fontColor(this.st === ST_OK ? Theme.ON_ACCENT : Theme.TEXT_FAINT)
+          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+          .backgroundColor(this.st === ST_OK ? Theme.ACCENT : Theme.CARD_HI)
+          .borderRadius(13)
+          .onClick(() => {
+            this.exportPng('tier-current');
+          })
+      }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
+      .width('100%')
+      .padding({ left: 8, right: Theme.PAGE_PAD })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
 
-      Scroll() {
-        Column({ space: 12 }) {
-          this.ConfigPanel()
-          this.CurrentBlock()
-          this.HistoryBlock()
+  @StorageProp('amaneTopInset') topInset: number = 30;
 
-          if (this.hint.length > 0) {
-            Text(this.hint)
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column() {
+
+        Scroll() {
+          Column({ space: 12 }) {
+
+          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
+          // 材质才有颜色可采样。
+          Blank().height(this.barH())
+            this.ConfigPanel()
+            this.CurrentBlock()
+            this.HistoryBlock()
+
+            if (this.hint.length > 0) {
+              Text(this.hint)
+                .fontSize(9)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+            }
+
+            Text('每次生成都会存一张快照：之后改评分不会改已存的老图，要更新就再点一次生成。')
               .fontSize(9)
               .fontColor(Theme.TEXT_FAINT)
               .width('100%')
+              .padding({ bottom: 24 })
           }
-
-          Text('每次生成都会存一张快照：之后改评分不会改已存的老图，要更新就再点一次生成。')
-            .fontSize(9)
-            .fontColor(Theme.TEXT_FAINT)
-            .width('100%')
-            .padding({ bottom: 24 })
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
         }
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
       }
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

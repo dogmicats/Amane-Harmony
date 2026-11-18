@@ -1,4 +1,4 @@
-import { router } from '@kit.ArkUI';
+import { curves, router } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet, httpGetCached, cachedBody } from '../common/Http';
 import { Store } from '../common/Store';
@@ -26,6 +26,8 @@ import {
   YEAR_OPTIONS
 } from '../view/BrowseGrid';
 import { MarkBadges } from '../view/MarkBadges';
+import { GlassGlyph, GlassCapsule, GlassBox, GlassIcon, PageTitle } from '../view/GlassKit';
+import { ImmersiveGlass } from '../common/ImmersiveGlass';
 
 /** 收藏页顶部的一个分类标签。 */
 interface FavSeg {
@@ -63,9 +65,13 @@ export struct FavoritesTab {
   @Prop @Watch('onRefresh') refreshKey: number = 0;
   /** 顶部状态栏高度（真全屏下顶栏要让出这么多，见 Index.readInsets）。 */
   @StorageProp('amaneTopInset') topInset: number = 30;
+  /** 顶栏材质档位（四十一改）：与媒体库顶栏同一来源，两条栏不能一厚一薄。 */
+  @StorageProp('amaneGlass') glassLevel: number = 2;
   @State items: MediaItem[] = [];
   /** 收藏网格的控制器：底栏自动收起要用绝对偏移判方向（见 common/NavBarWatch）。 */
   private sc: Scroller = new Scroller();
+  /** 导航栈（四十四改）：整页套 Navigation 只为了拿到标题栏这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
   /** 剧照/演员/导演/标签/系列 这几段共用的滚动控制器。 */
   private scSeg: Scroller = new Scroller();
   @State loading: boolean = true;
@@ -97,6 +103,8 @@ export struct FavoritesTab {
   @State fAgeGender: string = 'female';
   /** 当前分段：film / still / actor / director / tag / series。 */
   @State seg: string = 'film';
+  /** 页内搜索是否展开（四十六改）：展开时第二行变成玻璃输入框。 */
+  @State searchOn: boolean = false;
   /** 上半屏横滑（2026-11-15）：Index 拦下翻页后写 `fav|<dir>|<时间戳>` 到这里。 */
   @StorageProp('inPageSwipe') @Watch('onInPageSwipe') inPageSwipe: string = '';
   private lastSwipe: string = '';
@@ -344,19 +352,48 @@ export struct FavoritesTab {
 
   @Builder
   Header() {
-    Row() {
-      Text('我的收藏')
-        .fontSize(20)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(Theme.TEXT)
+    Row({ space: 8 }) {
+      // ★ 四十四改：左上角这一颗的**规范** ★
+      // 「位置和大小参考媒体库这一颗」= 20 号 / Bold / 白 / 暗投影，装在 46 高的玻璃胶囊里。
+      // 收藏页现在整页也在 Navigation 标题栏里，所以这颗胶囊是真的系统材质（`mat: true`）。
+      GlassBox({ radius: 23, padH: 14, padV: 9, mat: true }) {
+        PageTitle({ text: '我的收藏' })
+      }
       Blank()
       if (this.seg === 'film') {
-        Text(`${this.items.length} 部`)
-          .fontSize(11)
-          .fontColor(Theme.TEXT_FAINT)
-          .margin({ right: 8 })
+        // ★ 四十五改：排序 / 筛选 / 抽卡 = 右上角三颗小胶囊 ★
+        // 用户：「把排序筛选和抽卡做成三个小胶囊放到右上角就好」——
+        // 它们原来长在内容区（排序/筛选是 ListToolbar 一条、抽卡在标题行），
+        // 那几条不透明的底把海报挡在下面，影片段永远做不到真全屏。
+        GlassCapsule({
+          label: `⇅ ${this.sortLabel()}`,
+          fs: 12,
+          padH: 11,
+          padV: 7,
+          radius: 12,
+          // 100 才装得下「最近收藏」四个字（82 会截成「最近…」，01:01 真机看到过）
+          maxW: 100,
+          // 五十五改：标题栏里的胶囊必须是**系统材质**（之前漏了 mat，一直走的是兜底模糊）
+          mat: true,
+          onTap: () => {
+            this.showSort = true;
+          }
+        })
+        GlassCapsule({
+          label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+          active: this.filterCount() > 0,
+          fs: 12,
+          padH: 11,
+          padV: 7,
+          radius: 12,
+          mat: true,
+          onTap: () => {
+            this.showFilter = true;
+          }
+        })
         if (BuildConfig.ENABLE_GACHA) {
           GachaSwitch({
+            mat: true,
             on: this.gachaOn,
             onToggle: (v: boolean) => {
               this.gachaOn = v;
@@ -365,114 +402,285 @@ export struct FavoritesTab {
         }
       }
       if (this.isEntitySeg()) {
-        // 视图切换回到右上角，单独一块玻璃；不占下面横条的位置
-        Row({ space: 2 }) {
-          this.ViewIcon(false, '☰')
-          this.ViewIcon(true, '▦')
-        }
-        .height(40)
-        .padding({ left: 4, right: 4 })
-        .backgroundColor('#1FFFFFFF')
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-        .border({ width: 1, color: Theme.STROKE_HI })
-        .borderRadius(Theme.R_PILL)
+        // 四十八改：两颗视图按钮合成**一颗胶囊**（左右并排），点哪里都切换
+        this.ViewSwitch()
       }
     }
     .width('100%')
-    .padding({ top: 6 + this.topInset })
+    .height(46)
+    .alignItems(VerticalAlign.Center)
   }
 
+  /**
+   * 视图切换（四十八改）：**一颗**胶囊里并排放「大行 / 格子」，点胶囊任意位置 = 换成另一种视图。
+   *
+   * 四十九改：里面两个符号从**字形**（☰ / ▦）换成**矢量图标**（`ic_view_row` / `ic_view_grid`）。
+   * 原因就是用户看到的那句「两个图标高度不一致，也没对齐」—— 字形是按 baseline 排的，
+   * `☰` 和 `▦` 在 em 框里占的高度和位置都不一样，行盒居中之后墨迹中心天然错开，
+   * 之前给「‹ ›」那对标点做的事（`translate` 硬挪）在这里行不通：两个符号错的方向和量都不同。
+   * 换成两个 24×24 viewBox 的 SVG、同一个 16×16 盒子，盒子对齐 = 墨迹必然对齐，
+   * 颜色交给 `fillColor`（与底栏 tab 图标同一套做法）。
+   */
   @Builder
-  ViewIcon(grid: boolean, glyph: string) {
-    Text(glyph)
-      .fontSize(15)
-      .fontColor(this.favGrid === grid ? '#FFFFFF' : Theme.TEXT_FAINT)
-      .width(34)
+  ViewSwitch() {
+    GlassBox({ radius: 17, padH: 11, padV: 0, mat: true, onTap: () => this.toggleView() }) {
+      Row({ space: 10 }) {
+        Image($r('app.media.ic_view_row'))
+          .width(16)
+          .height(16)
+          .objectFit(ImageFit.Contain)
+          .fillColor(this.favGrid ? '#66FFFFFF' : Theme.ACCENT)
+          .draggable(false)
+        Image($r('app.media.ic_view_grid'))
+          .width(16)
+          .height(16)
+          .objectFit(ImageFit.Contain)
+          .fillColor(this.favGrid ? Theme.ACCENT : '#66FFFFFF')
+          .draggable(false)
+      }
       .height(34)
-      .textAlign(TextAlign.Center)
-      .backgroundColor(this.favGrid === grid ? Theme.ACCENT : Color.Transparent)
-      .borderRadius(12)
-      .onClick(() => {
-        this.favGrid = grid;
-        Store.I.prefSetString(PREF_FAV_VIEW, grid ? 'grid' : 'row');
-      })
+      .alignItems(VerticalAlign.Center)
+    }
+  }
+
+  /** 换一种视图（☰ 大行 ⇄ ▦ 三列），并记住选择。 */
+  private toggleView(): void {
+    this.favGrid = !this.favGrid;
+    Store.I.prefSetString(PREF_FAV_VIEW, this.favGrid ? 'grid' : 'row');
+  }
+
+  /** 分类横条的滚动内容：文字直接长在玻璃上（与媒体库那颗「全部」同一条判据，不再套小胶囊）。 */
+  @Builder
+  SegmentScroll() {
+    Scroll() {
+      // 四十八/四十九改：字号 13 → 14 → **15**，间距按剩余宽度分配 —— 用户两次都嫌
+      // 「只加间隔不加字号」。右边内边距 14 → 22：胶囊是圆角（半径 21），
+      // 「系列」贴着 14 的时候笔画已经压进圆角里了。
+      Row({ space: 22 }) {
+        ForEach(this.segs(), (s: FavSeg) => {
+          Text(s.label)
+            .fontSize(15)
+            .fontWeight(this.seg === s.key ? FontWeight.Medium : FontWeight.Normal)
+            .fontColor(this.seg === s.key ? Theme.ACCENT : '#C4FFFFFF')
+            // 与顶栏文字同一条可读性判据：亮海报压上来时白字要有自己的暗边
+            .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
+            .onClick(() => {
+              if (this.seg !== s.key) {
+                // 换段就把页内搜索收起来 / 清空关键词（四十六·四十七改）：
+                // 各段的关键词通道不同（影片走服务端，其余是本地过滤），
+                // 带着上一个词切过去会让人以为「这一段只有这几个」。
+                if (this.searchOn) {
+                  this.searchOn = false;
+                }
+                if (this.keyword.length > 0) {
+                  this.keyword = '';
+                }
+                this.seg = s.key;
+              }
+            })
+        }, (s: FavSeg) => `seg-${s.key}`)
+      }
+      // 右边 22：让「系列」离圆角远一点（14 时笔画已经咬进弧线里了）
+      .padding({ left: 14, right: 22 })
+      .height(42)
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .layoutWeight(1)
+    .align(Alignment.Start)
   }
 
   /** 分类横条：**一整条**玻璃，从影片到系列一行排开（与影片段的筛选条同宽）。 */
   @Builder
   Capsule() {
+    // 四十四改：这条现在真的挂在标题栏里 → 用**系统材质**（之前只能在内容区用兜底配方）。
+    // 文字直接贴玻璃、选中用主题色字（与媒体库那颗「全部」同一判据），胶囊里不再套小胶囊。
     Row() {
-      Scroll() {
-        Row({ space: 4 }) {
-          ForEach(this.segs(), (s: FavSeg) => {
-            Text(s.label)
-              .fontSize(13)
-              .fontWeight(this.seg === s.key ? FontWeight.Medium : FontWeight.Normal)
-              .fontColor(this.seg === s.key ? '#FFFFFF' : Theme.TEXT_DIM)
-              .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-              .backgroundColor(this.seg === s.key ? Theme.ACCENT : Color.Transparent)
-              .borderRadius(16)
-              .onClick(() => {
-                if (this.seg !== s.key) {
-                  this.seg = s.key;
-                }
-              })
-          }, (s: FavSeg) => `seg-${s.key}`)
-        }
-        .padding({ left: 5, right: 5 })
-      }
-      .scrollable(ScrollDirection.Horizontal)
-      .scrollBar(BarState.Off)
-      .layoutWeight(1)
-      .align(Alignment.Start)
+      this.SegmentScroll()
     }
     .width('100%')
     .height(42)
-    .backgroundColor('#1FFFFFFF')
-    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-    .border({ width: 1, color: Theme.STROKE_HI })
     .borderRadius(Theme.R_PILL)
+    .systemMaterial(ImmersiveGlass.materialFor(this.glassLevel))
+    .clip(true)
   }
 
   /**
-   * 顶栏：标题与视图开关一行（都不占横条位置），分类条一整条铺开。
+   * 顶栏 = **两行**（四十四 / 四十五改），整块放进 Navigation 标题栏。
    *
-   * 整页内容从这块区域下面穿过（见 build 里把留白放进 Scroll），玻璃才有东西可糊；
-   * 标题靠一层很淡的向下渐变压住背景，保持可读。
+   * 第二行（四十五改）：分段条**缩短**，右边补一颗搜索胶囊 ——
+   * 用户：「这一栏右边有个空白，刚好……每一页都需要一个搜索功能，把胶囊缩短，右边放一个搜索胶囊」。
+   * 剧照段不需要搜索，那一行就是整条铺满。
+   * 两行间距 8 → 4：分段条再贴近标题一点，读作同一组控件。
    */
   @Builder
   TopBar() {
-    Column({ space: 8 }) {
+    Column({ space: 4 }) {
       this.Header()
-      this.Capsule()
-      // 清单条（2026-11-16）：紧贴分类胶囊下方、同一材质，读作「影片」这一项的子菜单；
-      // 原来它挂在内容区顶部（在搜索框上面），既抢视觉重心，又像独立一块功能。
-      if (this.seg === 'film' && BuildConfig.ENABLE_COLLECTIONS) {
-        CollectionsBar({
-          variant: 'strip',
-          multi: true,
-          currents: this.collectionKeys,
-          current: this.collectionKeys.length === 1 ? this.collectionKeys[0] : '',
-          showManage: true,
-          onPickMulti: (keys: string[]) => {
-            this.collectionKeys = keys;
-            this.load();
-          },
-          onPick: (key: string) => {
-            this.collectionKeys = key.length === 0 ? [] : [key];
-            this.load();
+
+      // ★ 五十二改：两行里只有第二行会「变」——分段条 ⇄ 搜索栏 ★
+      // 每个状态各自是一个 Row，`.transition` 挂在这个 Row 上（只有真正被
+      // 创建/销毁的节点才能做过渡，挂在常驻的外层 Row 上是没效果的）。
+      // 展开：88% → 100% 的弹性放大 + 淡入；收起：反向。曲线用官方 Spatialization 的弹簧。
+      if (this.searchOn) {
+        Row({ space: 8 }) {
+          Row() {
+            KeywordBox({
+              placeholder: this.searchHint(),
+              bare: true,
+              onCommit: (kw: string) => {
+                const next: string = kw.trim();
+                if (next === this.keyword) {
+                  return;
+                }
+                this.keyword = next;
+                // 影片段走服务端（browse 的 keyword）；其余段是本地过滤，
+                // 值一变 `@Prop @Watch` 就会自己重算，不需要重新请求。
+                if (this.seg === 'film') {
+                  this.load();
+                }
+              }
+            })
           }
-        })
+          .layoutWeight(1)
+          .height(42)
+          .borderRadius(Theme.R_PILL)
+          .systemMaterial(ImmersiveGlass.materialFor(this.glassLevel))
+          .clip(true)
+          .padding({ left: 8, right: 8 })
+
+          GlassCapsule({
+            label: '取消',
+            fs: 12,
+            padH: 11,
+            padV: 7,
+            radius: 12,
+            onTap: () => {
+              this.closeSearch();
+            }
+          })
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+        .transition(TransitionEffect.OPACITY
+          .combine(TransitionEffect.scale({ x: 0.88, y: 0.88 }))
+          .animation({ duration: 260, curve: curves.interpolatingSpring(0, 1, 288, 26) }))
+      } else {
+        Row({ space: 8 }) {
+          // 分段条：真材质（标题栏里），文字贴玻璃
+          Row() {
+            this.SegmentScroll()
+          }
+          .layoutWeight(1)
+          .height(42)
+          .borderRadius(Theme.R_PILL)
+          .systemMaterial(ImmersiveGlass.materialFor(this.glassLevel))
+          .clip(true)
+
+          // 搜索：除剧照段外都支持页内过滤（影片走服务端 keyword，其余段本地过滤）
+          if (this.canSearchHere()) {
+            GlassIcon({
+              icon: $r('app.media.ic_search'),
+              iconSize: 18,
+              boxW: 42,
+              boxH: 42,
+              radius: 21,
+              mat: true,
+              onTap: () => {
+                this.openSearch();
+              }
+            })
+          }
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+        // 收起时这一行缩回去（放大到 106% 再淡出）：读起来像被搜索栏吞掉，而不是突然消失
+        .transition(TransitionEffect.OPACITY
+          .combine(TransitionEffect.scale({ x: 1.06, y: 1.06 }))
+          .animation({ duration: 200, curve: Curve.Friction }))
       }
     }
     .width('100%')
-    // 底部不给空隙（2026-11-16 用户：胶囊与搜索栏之间不要这么大间隙，紧贴着就好）——
-    // 预留高度 headerH 也同步减掉这 8，见 HEADER_H_COLLECTIONS。
-    .padding({ left: 14, right: 14, top: 2, bottom: 2 })
-    .linearGradient({
-      angle: 180,
-      colors: [['#CC000000', 0.0], ['#4D000000', 0.6], ['#00000000', 1.0]]
-    })
+    // 第五十改：top 8 → 0。基准页（媒体库）那颗胶囊的顶边就在状态栏下沿（y = topInset），
+    // 这里原来多给 8vp，整块比基准低 8 —— 用户一眼看出来「高度上没有对齐」。
+    .padding({ left: 14, right: 14, top: 0 })
+  }
+
+  /** 这个分段能不能做页内搜索（四十七改：除剧照外都能）。 */
+  private canSearchHere(): boolean {
+    return this.seg !== 'still';
+  }
+
+  /** 搜索框的提示语（按分段说人话）。 */
+  private searchHint(): string {
+    if (this.seg === 'film') {
+      return '在收藏里搜索番号 / 标题 / 演员';
+    }
+    if (this.seg === 'actor') {
+      return '搜索收藏的演员';
+    }
+    if (this.seg === 'tag') {
+      return '搜索收藏的标签';
+    }
+    if (this.seg === 'series') {
+      return '搜索收藏的系列';
+    }
+    if (this.seg === 'director') {
+      return '搜索收藏的导演';
+    }
+    return '在收藏里搜索';
+  }
+
+  /** 退出页内搜索：清词、重载、把分段条换回来。 */
+  private closeSearch(): void {
+    this.getUIContext().animateTo(
+      { duration: 240, curve: curves.interpolatingSpring(0, 1, 288, 30) }, () => {
+        this.searchOn = false;
+      });
+    if (this.keyword.length > 0) {
+      this.keyword = '';
+      // 影片段的服务端结果要重拉；其它段只靠 @Prop 重算
+      if (this.seg === 'film') {
+        this.load();
+      }
+    }
+  }
+
+  /** 展开页内搜索（五十二改）：状态变更包在 animateTo 里，配 `transition` 才有过渡。 */
+  private openSearch(): void {
+    this.getUIContext().animateTo(
+      { duration: 260, curve: curves.interpolatingSpring(0, 1, 288, 26) }, () => {
+        this.searchOn = true;
+      });
+  }
+
+  /**
+   * 标题栏配置：高度 = 状态栏 + 8 + 46 + 8 + 42。
+   * 写成有返回类型的方法（内联对象字面量会触发 arkts-no-untyped-obj-literals）。
+   */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleShell()
+      },
+      height: this.barH()
+    };
+  }
+
+  /** 标题栏外壳：只让出状态栏，玻璃由里面的标题胶囊与分段条自己挂材质。 */
+  @Builder
+  TitleShell() {
+    Column() {
+      this.TopBar()
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
+
+  /** 顶栏实际占的高度（内容要让开这么多，见 build）：46 + 4 + 42 = 92。 */
+  private barH(): number {
+    return this.topInset + 92;
   }
 
   private sortLabel(): string {
@@ -500,6 +708,36 @@ export struct FavoritesTab {
       sheetHeight: '72%',
       tabInset: TAB_SAFE
     }) {
+      // ★ 四十五改：清单（收藏夹）搬进筛选抽屉 ★
+      // 用户：「把那个清单胶囊放到筛选的抽屉里」。它本来就是个筛选器，放抽屉里
+      // 既省一层界面，也把影片段的首屏让出来（不再有那条常驻的清单条）。
+      // 直接复用 `CollectionsBar`（strip + multi）：多选 AND、可管理，行为一点没变。
+      if (BuildConfig.ENABLE_COLLECTIONS) {
+        Column({ space: 8 }) {
+          Text('清单')
+            .fontSize(11)
+            .fontColor(Theme.TEXT_FAINT)
+            .width('100%')
+          CollectionsBar({
+            variant: 'strip',
+            multi: true,
+            currents: this.collectionKeys,
+            current: this.collectionKeys.length === 1 ? this.collectionKeys[0] : '',
+            showManage: true,
+            onPickMulti: (keys: string[]) => {
+              this.collectionKeys = keys;
+              this.load();
+            },
+            onPick: (key: string) => {
+              this.collectionKeys = key.length === 0 ? [] : [key];
+              this.load();
+            }
+          })
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+      }
+
       ChipGroup({
         title: '马赛克', options: MOSAIC_OPTIONS, current: this.fMosaic,
         onPick: (key: string) => {
@@ -616,38 +854,15 @@ export struct FavoritesTab {
 
   @Builder
   FilmContent() {
-    // 关键词：只在当前清单里再缩一层，服务端按相关性排（越精准越靠前）
-    Row() {
-      KeywordBox({
-        placeholder: '搜索番号 / 标题 / 演员',
-        onCommit: (kw: string) => {
-          const next: string = kw.trim();
-          if (next === this.keyword) {
-            return;
-          }
-          this.keyword = next;
-          this.load();
-        }
-      })
-    }
-    .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 10 })
-
-    // 排序 + 筛选收进底部抽屉（原来两行 chip 常驻，一屏剩下的地方不多）
-    ListToolbar({
-      label: this.keyword.length > 0
-        ? `「${this.keyword}」${this.items.length} 部`
-        : `${this.items.length} 部`,
-      sortLabel: this.sortLabel(),
-      filterCount: this.filterCount(),
-      showFilter: true,
-      onSort: () => {
-        this.showSort = true;
-      },
-      onFilter: () => {
-        this.showFilter = true;
-      }
-    })
+    // ★ 四十五改：这一屏只剩网格本身 ★
+    //
+    // 用户：「下面的影片没有做到真全屏，它被排序、筛选和搜索这几个模块的黑底拦住了」。
+    // 那三样现在都搬走了：
+    //   · 排序 / 筛选 / 抽卡 → 右上角三颗小胶囊（`Header`）；
+    //   · 清单（`CollectionsBar`）→ 筛选抽屉里；
+    //   · 关键词搜索 → 顶栏第二行那颗搜索胶囊（打开搜索页）。
+    // 所以影片段现在是**满屏**：第一排靠网格自己的 padding 让位（会随滚动走），
+    // 一滚动海报就钻进两行玻璃底下，玻璃才真有东西可采样。
 
     if (this.gachaOn) {
       // 抽卡墙自己滚（2026-11-16 改成瀑布流：一次一批、触底继续）；这里只给高度和左右留白。
@@ -740,8 +955,10 @@ export struct FavoritesTab {
       }))
       .columnsGap(10)
       .rowsGap(14)
-      // 底部要同时避开悬浮 Tab 栏和左下角的入库圆环
-      .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 128 })
+      // 底部要同时避开悬浮 Tab 栏和左下角的入库圆环；
+      // 顶部让位放在**网格自己的 padding** 里（四十五改）：它会随内容滚走，
+      // 海报才能钻进两行玻璃底下 —— 放在外层 Column 就是死留白，永远做不到真全屏。
+      .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6, bottom: 128 })
       .layoutWeight(1)
       .scrollBar(BarState.Off)
       // 往下看收起底栏、往回划弹回来（2026-11-15）：绝对偏移差分，见 common/NavBarWatch
@@ -752,13 +969,16 @@ export struct FavoritesTab {
   }
 
   build() {
+    // ★ 四十四改：整页套一层 Navigation ★
+    // 与首页/媒体库同一个理由 —— 顶上那两行要落在**标题栏**里，沉浸材质才出像素。
+    // 内容树的层次没动，只是外面多了一层壳；标题栏用 barStyle STACK，内容从它底下穿过去。
+    Navigation(this.navStack) {
     Stack({ alignContent: Alignment.BottomStart }) {
       Stack({ alignContent: Alignment.TopStart }) {
-        // 内容整体从玻璃顶栏下面穿过（顶部预留 HEADER_H），滚动时才有「沉浸」感
+        // 内容整体从玻璃顶栏下面穿过（顶部让出 barH），滚动时才有「沉浸」感
         Column() {
           if (this.seg === 'film') {
-            // 影片段的筛选行是静止的，没法从板子下穿过，只能用等高的空位让开
-            Blank().height(this.headerH())
+            // 四十五改：影片段改**满屏**（顶部让位在网格自己的 padding 里，随滚动走）
             this.FilmContent()
           } else {
             // 剧照瀑布流自带随机（/stills/liked?order=random），下拉就换一批（2.5.7.19）；
@@ -772,18 +992,19 @@ export struct FavoritesTab {
                     })
                   } else if (this.seg === 'actor') {
                     FavoriteActorsView({
-                      refreshKey: this.refreshKey + this.pullKey, grid: this.favGrid
+                      refreshKey: this.refreshKey + this.pullKey, grid: this.favGrid,
+                      keyword: this.keyword
                     })
                   } else {
                     FavoriteFacetsView({
                       kind: this.seg, refreshKey: this.refreshKey + this.pullKey,
-                      grid: this.favGrid
+                      grid: this.favGrid, keyword: this.keyword
                     })
                   }
                 }
                 .width('100%')
                 // 留白放在滚动内容里（不是外层），图才会滑到板子底下，玻璃才有东西可糊
-                .padding({ top: this.headerH() + 4, bottom: Theme.BOTTOM_SAFE + 48 })
+                .padding({ top: this.barH() + 10, bottom: Theme.BOTTOM_SAFE + 48 })
               }
               .width('100%')
               .height('100%')
@@ -807,9 +1028,6 @@ export struct FavoritesTab {
         }
         .width('100%')
         .height('100%')
-
-        // 顶栏：渐变遮罩 + 与底栏同款的玻璃胶囊
-        this.TopBar()
       }
       .width('100%')
       .height('100%')
@@ -852,6 +1070,16 @@ export struct FavoritesTab {
         }
       }
     }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(Theme.BG)
+    }
+    // 四十四改：Navigation 壳（与首页/媒体库同构）。标题栏浮在内容之上 ——
+    // 分段条与标题胶囊都在里面，所以它们是真材质；海报滚动时会从两行玻璃底下穿过。
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

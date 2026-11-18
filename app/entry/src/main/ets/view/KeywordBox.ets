@@ -15,6 +15,14 @@ import { Theme } from '../common/Theme';
 @Component
 export struct KeywordBox {
   @Prop placeholder: string = '搜索';
+  /**
+   * 裸装（2026-11-18 四十六改）：只画图标 + 输入框 + 清除，不画自己的底和边框。
+   *
+   * 收藏页把页内搜索搬进 Navigation 标题栏后，外面那层是**玻璃条**（真材质），
+   * 再套一个 `Theme.CARD` 的实色框就是「玻璃里嵌一块塑料」。裸装之后输入框
+   * 直接长在玻璃上，与媒体库那颗「全部」同一条判据。
+   */
+  @Prop bare: boolean = false;
   /** 防抖后回调；清空时立即回调空串。 */
   onCommit: (kw: string) => void = () => {};
   @State private text: string = '';
@@ -55,7 +63,8 @@ export struct KeywordBox {
     Row({ space: 4 }) {
       Text('⌕')
         .fontSize(15)
-        .fontColor(this.text.length > 0 ? Theme.ACCENT : Theme.TEXT_FAINT)
+        // 裸装时提亮一档（五十一改）：玻璃底 + 纯黑背景上，FAINT 那颗图标几乎看不见
+        .fontColor(this.text.length > 0 ? Theme.ACCENT : (this.bare ? Theme.TEXT_DIM : Theme.TEXT_FAINT))
         .margin({ left: 4 })
 
       // 用 $$ 双向绑定：受控写法（text: this.text + onChange 回写）在部分版本会
@@ -65,7 +74,7 @@ export struct KeywordBox {
         .height(36)
         .fontSize(13)
         .fontColor(Theme.TEXT)
-        .placeholderColor(Theme.TEXT_FAINT)
+        .placeholderColor(this.bare ? Theme.TEXT_DIM : Theme.TEXT_FAINT)
         .placeholderFont({ size: 12 })
         .backgroundColor(Color.Transparent)
         .padding({ left: 2, right: 2 })
@@ -90,10 +99,10 @@ export struct KeywordBox {
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
-    .backgroundColor(Theme.CARD)
-    .borderRadius(10)
+    .backgroundColor(this.bare ? Color.Transparent : Theme.CARD)
+    .borderRadius(this.bare ? 0 : 10)
     .border({
-      width: this.text.length > 0 ? 1 : 0,
+      width: this.bare ? 0 : (this.text.length > 0 ? 1 : 0),
       color: Theme.ACCENT
     })
   }

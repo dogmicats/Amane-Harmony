@@ -152,6 +152,42 @@ def _hook_scope(scope: str, query: dict):
     return where, (list(args) if isinstance(args, (list, tuple)) else [])
 
 
+def _hook_extra(scope: str, query: dict):
+    """问各扩展「这个 scope 还要追加哪些筛选条件」（2026-11-18 六十一改）。
+
+    与 `_hook_scope` 的分工：
+      · `_hook_scope` 回答「这个 scope **是什么**」（归某个扩展独有的范围，例如共演结果）；
+      · `_hook_extra` 回答「在这个范围里**还要筛什么**」（核心的媒体筛选：库 / 画质 /
+        字幕 / 年份 / 评分 / 状态…）。
+
+    为什么内置 scope 也要走一遍钩子：抽卡墙必须和列表页同一个筛选语义。列表是
+    `browse?libs=1,2&mosaic=CRACKED&sub=1…`，抽卡是 `stills?scope=library&id=1…`。
+    旧版只按 scope 抽，于是「筛选完再抽卡还是全库」—— 用户报的就是这个。
+
+    返回 None = 没有附加条件（不筛的页面 / 老客户端），行为与以前**逐字节一致**。
+
+    ★ 为什么不新增一个 scope（例如 `scope=media`）：
+      新增 scope 在老服务端上是 400「不支持的 scope」，整个抽卡墙直接空掉；
+      而「多带几个查询参数」在老服务端上是被安静忽略的 —— 最坏也只是退回全库抽。
+      这是拿血换来的：`libs` 那次就是「参数被静默丢弃」，但至少页面还能用。
+    """
+    fn = getattr(A, "call_hook", None)
+    if fn is None:
+        return None
+    try:
+        res = fn("stills_extra", scope, query)
+    except Exception as exc:  # noqa: BLE001
+        A.log(f"WARN stills 附加筛选 {scope} 失败: {exc}")
+        return None
+    if not isinstance(res, dict):
+        return None
+    where = res.get("where")
+    if not isinstance(where, str) or not where.strip():
+        return None
+    args = res.get("args")
+    return where, (list(args) if isinstance(args, (list, tuple)) else [])
+
+
 def _lane_urls(raw) -> list[str]:
     """extrafanart_urls 是「分组 → URL 列表」的字典（历史数据也有纯数组）。"""
     try:
@@ -177,6 +213,12 @@ def stills(handler, query, *_):
         if built is None:
             return handler._error(400, f"scope={scope} 需要有效的 id")
         where, args = built
+        # ★ 六十一改：内置 scope 也把「附加筛选」AND 上来 —— 抽卡与列表同一套条件。
+        #   没传筛选参数时 `_hook_extra` 返回 None，这一段等于不存在。
+        extra = _hook_extra(scope, query)
+        if extra is not None:
+            where = "(" + where + ") AND " + extra[0]
+            args = list(args) + list(extra[1])
     else:
         hooked = _hook_scope(scope, query)
         if hooked is None:

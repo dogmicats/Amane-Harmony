@@ -1,9 +1,11 @@
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpDelete, httpGet, httpPut } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { DetailParams } from '../common/Types';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /** 我写过的一条评价（GET /api/user/mycomments，片名与海报由服务端补齐）。 */
 interface MyComment {
@@ -207,149 +209,192 @@ struct MyCommentsPage {
     })
   }
 
-  build() {
-    Stack({ alignContent: Alignment.TopStart }) {
-      Column() {
+  @Builder
+  TitleBar() {
+    Column() {
         Row({ space: 10 }) {
-          Text('‹')
-            .fontSize(24)
-            .fontColor(Theme.TEXT)
-            .width(30)
-            .height(34)
-            .textAlign(TextAlign.Center)
-            .onClick(() => {
-              router.back();
-            })
-          Text('我的评价')
-            .fontSize(17)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(Theme.TEXT)
+          GlassBack({
+            mat: true,
+            onTap: () => {
+            router.back();
+            }
+          })
+          PageTitle({ text: '我的评价', fs: 18 })
           Blank()
           Text(this.note.length > 0 ? this.note : `${this.items.length} 条`)
             .fontSize(11)
             .fontColor(this.note.length > 0 ? Theme.TEXT_DIM : Theme.TEXT_FAINT)
         }
+        .height(46)
+        .alignItems(VerticalAlign.Center)
         .width('100%')
-        .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 8 })
+        .padding({ left: 8, right: Theme.PAGE_PAD })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
 
-        if (this.loading) {
-          Column() {
-            LoadingProgress()
-              .width(26)
-              .height(26)
-              .color(Theme.ACCENT)
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else if (this.items.length === 0) {
-          Column({ space: 8 }) {
-            Text('还没写过评价')
-              .fontSize(14)
-              .fontColor(Theme.TEXT_DIM)
-            Text('在影片详情页点「写评价」，写过的都会出现在这里')
-              .fontSize(11)
-              .fontColor(Theme.TEXT_FAINT)
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else {
-          List({ space: 10 }) {
-            ForEach(this.items, (c: MyComment) => {
-              ListItem() {
-                Row({ space: 10 }) {
-                  Image(Store.I.img(c.poster))
-                    .width(52)
-                    .height(72)
-                    .objectFit(ImageFit.Cover)
-                    .backgroundColor(Theme.CARD)
-                    .borderRadius(8)
-                    .alt($r('app.media.placeholder'))
+  @StorageProp('amaneTopInset') topInset: number = 30;
 
-                  Column({ space: 4 }) {
-                    Text(c.number.length > 0 ? c.number : c.title)
-                      .fontSize(12)
-                      .fontColor(Theme.ACCENT)
-                    Text(this.preview(c.body))
-                      .fontSize(12)
-                      .fontColor(Theme.TEXT_DIM)
-                      .maxLines(2)
-                      .textOverflow({ overflow: TextOverflow.Ellipsis })
-                      .width('100%')
-                    Row({ space: 6 }) {
-                      Text(c.created_at.length >= 10 ? c.created_at.substring(0, 10) : c.created_at)
-                        .fontSize(9)
-                        .fontColor(Theme.TEXT_FAINT)
-                      Blank()
-                      Text('改')
-                        .fontSize(10)
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Stack({ alignContent: Alignment.TopStart }) {
+        Column() {
+
+  // 六十改：让出浮层标题栏的高度
+  Blank().height(this.barH())
+
+          if (this.loading) {
+            Column() {
+              LoadingProgress()
+                .width(26)
+                .height(26)
+                .color(Theme.ACCENT)
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .justifyContent(FlexAlign.Center)
+          } else if (this.items.length === 0) {
+            Column({ space: 8 }) {
+              Text('还没写过评价')
+                .fontSize(14)
+                .fontColor(Theme.TEXT_DIM)
+              Text('在影片详情页点「写评价」，写过的都会出现在这里')
+                .fontSize(11)
+                .fontColor(Theme.TEXT_FAINT)
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .justifyContent(FlexAlign.Center)
+          } else {
+            List({ space: 10 }) {
+              ForEach(this.items, (c: MyComment) => {
+                ListItem() {
+                  Row({ space: 10 }) {
+                    Image(Store.I.img(c.poster))
+                      .width(52)
+                      .height(72)
+                      .objectFit(ImageFit.Cover)
+                      .backgroundColor(Theme.CARD)
+                      .borderRadius(8)
+                      .alt($r('app.media.placeholder'))
+
+                    Column({ space: 4 }) {
+                      Text(c.number.length > 0 ? c.number : c.title)
+                        .fontSize(12)
                         .fontColor(Theme.ACCENT)
-                        .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-                        .backgroundColor(Theme.CARD_HI)
-                        .borderRadius(7)
-                        .onClick(() => {
-                          this.editingId = c.id;
-                          this.draft = c.body;
-                        })
-                      Text('删')
-                        .fontSize(10)
-                        .fontColor(Theme.DANGER)
-                        .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-                        .backgroundColor(Theme.CARD_HI)
-                        .borderRadius(7)
+                      Text(this.preview(c.body))
+                        .fontSize(12)
+                        .fontColor(Theme.TEXT_DIM)
+                        .maxLines(2)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                        .width('100%')
+                      Row({ space: 6 }) {
+                        Text(c.created_at.length >= 10 ? c.created_at.substring(0, 10) : c.created_at)
+                          .fontSize(9)
+                          .fontColor(Theme.TEXT_FAINT)
+                        Blank()
+                        Text('改')
+                          .fontSize(10)
+                          .fontColor(Theme.ACCENT)
+                          .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                          .backgroundColor(Theme.CARD_HI)
+                          .borderRadius(7)
+                          .onClick(() => {
+                            this.editingId = c.id;
+                            this.draft = c.body;
+                          })
+                        Text('删')
+                          .fontSize(10)
+                          .fontColor(Theme.DANGER)
+                          .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                          .backgroundColor(Theme.CARD_HI)
+                          .borderRadius(7)
+                          .onClick(() => {
+                            this.askDelete(c);
+                          })
+                      }
+                      .width('100%')
+                    }
+                    .alignItems(HorizontalAlign.Start)
+                    .layoutWeight(1)
+                  }
+                  .width('100%')
+                  .padding(10)
+                  .backgroundColor(Theme.CARD)
+                  .borderRadius(11)
+                  .border({ width: 1, color: Theme.ACCENT_SOFT })
+                  .onClick(() => {
+                    this.open(c);
+                  })
+                }
+                // 左滑删除：和观看记录、入库管理一致
+                .swipeAction({
+                  end: {
+                    builder: () => {
+                      Text('删除')
+                        .fontSize(13)
+                        .fontColor('#FFFFFF')
+                        .width(68)
+                        .height('100%')
+                        .textAlign(TextAlign.Center)
+                        .backgroundColor(Theme.DANGER)
+                        .borderRadius(11)
                         .onClick(() => {
                           this.askDelete(c);
                         })
                     }
-                    .width('100%')
                   }
-                  .alignItems(HorizontalAlign.Start)
-                  .layoutWeight(1)
-                }
-                .width('100%')
-                .padding(10)
-                .backgroundColor(Theme.CARD)
-                .borderRadius(11)
-                .border({ width: 1, color: Theme.ACCENT_SOFT })
-                .onClick(() => {
-                  this.open(c);
                 })
-              }
-              // 左滑删除：和观看记录、入库管理一致
-              .swipeAction({
-                end: {
-                  builder: () => {
-                    Text('删除')
-                      .fontSize(13)
-                      .fontColor('#FFFFFF')
-                      .width(68)
-                      .height('100%')
-                      .textAlign(TextAlign.Center)
-                      .backgroundColor(Theme.DANGER)
-                      .borderRadius(11)
-                      .onClick(() => {
-                        this.askDelete(c);
-                      })
-                  }
-                }
-              })
-            }, (c: MyComment) => `mc-${c.id}`)
+              }, (c: MyComment) => `mc-${c.id}`)
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+            .scrollBar(BarState.Off)
+            .edgeEffect(EdgeEffect.Spring)
           }
-          .width('100%')
-          .layoutWeight(1)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
-          .scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.Spring)
+        }
+        .width('100%')
+        .height('100%')
+
+        if (this.editingId > 0) {
+          this.EditSheet()
         }
       }
       .width('100%')
       .height('100%')
-
-      if (this.editingId > 0) {
-        this.EditSheet()
-      }
+      .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

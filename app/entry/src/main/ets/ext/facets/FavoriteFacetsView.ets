@@ -26,8 +26,15 @@ export struct FavoriteFacetsView {
   @Prop @Watch('onRefresh') refreshKey: number = 0;
   /** true = 3 列简版；false = 横版大行。 */
   @Prop grid: boolean = false;
+  /**
+   * 页内关键词（2026-11-18 四十七改）：本地过滤，语义与清单页的关键词框一致 ——
+   * 「在当前列表里缩小范围」。导演/标签/系列 共用这一份实现。
+   */
+  @Prop @Watch('onKeyword') keyword: string = '';
 
   @State entities: FavEntity[] = [];
+  /** 未过滤的全量（`entities` 是过滤后的视图）。 */
+  private raw: FavEntity[] = [];
   @State loading: boolean = true;
   @State note: string = '';
 
@@ -37,11 +44,32 @@ export struct FavoriteFacetsView {
 
   onKindChange(): void {
     this.entities = [];
+    this.raw = [];
     this.load();
   }
 
   onRefresh(): void {
     this.load();
+  }
+
+  onKeyword(): void {
+    this.applyKeyword();
+  }
+
+  /** 按名称过滤（大小写不敏感，中文直接包含匹配）。 */
+  private applyKeyword(): void {
+    const kw: string = this.keyword.trim().toLowerCase();
+    if (kw.length === 0) {
+      this.entities = this.raw;
+      return;
+    }
+    const out: FavEntity[] = [];
+    for (let i = 0; i < this.raw.length; i++) {
+      if (this.raw[i].name.toLowerCase().indexOf(kw) >= 0) {
+        out.push(this.raw[i]);
+      }
+    }
+    this.entities = out;
   }
 
   private async load(): Promise<void> {
@@ -71,7 +99,8 @@ export struct FavoriteFacetsView {
           badges: this.facetBadges(f)
         });
       }
-      this.entities = out;
+      this.raw = out;
+      this.applyKeyword();
       this.note = '';
     } catch (err) {
       const e = err as BusinessError;
@@ -126,6 +155,14 @@ export struct FavoriteFacetsView {
       }
     }
     this.entities = rest;
+    // 全量里也去掉（四十七改）：否则下次关键词过滤会把它又捞回来
+    const restRaw: FavEntity[] = [];
+    for (let i = 0; i < this.raw.length; i++) {
+      if (this.raw[i].id !== e.id) {
+        restRaw.push(this.raw[i]);
+      }
+    }
+    this.raw = restRaw;
     try {
       await httpPost(`${Store.I.user}/api/user/facets/${this.kind}/${e.id}/favorite`,
         Store.I.token, JSON.stringify({ favorite: false }));
@@ -153,10 +190,14 @@ export struct FavoriteFacetsView {
       .justifyContent(FlexAlign.Center)
     } else if (this.entities.length === 0) {
       Column({ space: 10 }) {
-        Text('♥')
+        Text(this.keyword.length > 0 ? '◇' : '♥')
           .fontSize(30)
           .fontColor(Theme.TEXT_FAINT)
-        Text(this.note.length > 0 ? this.note : `还没有收藏的${facetLabel(this.kind)}`)
+        Text(this.note.length > 0
+          ? this.note
+          : (this.keyword.length > 0
+            ? `没有找到「${this.keyword}」`
+            : `还没有收藏的${facetLabel(this.kind)}`))
           .fontSize(13)
           .fontColor(Theme.TEXT_DIM)
         if (this.note.length === 0) {

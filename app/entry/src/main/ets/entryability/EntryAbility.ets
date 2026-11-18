@@ -82,11 +82,13 @@ export default class EntryAbility extends UIAbility {
     try {
       const mainWindow: window.Window = windowStage.getMainWindowSync();
       mainWindow.setWindowBackgroundColor('#0B0B0F');
-      // 重力感应全局生效（用户第 4 条）：整个 App 都跟着手机转，
-      // 播放页只是把某些形态额外锁一下（见 PlayerView.applyWindowMode）。
-      // 以前只有播放页会改方向，退出播放后窗口停在横屏、主页又是竖屏布局，
-      // 就成了「横着的主页 + 怎么转都不回来」。
-      mainWindow.setPreferredOrientation(window.Orientation.AUTO_ROTATION);
+      // ── 方向：全局锁竖屏，只有播放器例外（2026-11-18 用户：「横屏界面没专门调试过，
+      // 先禁止除了播放器以外的所有横屏」）──
+      // 以前全局是 AUTO_ROTATION（整个 App 跟重力转），但除播放页外的界面（首页/媒体库/
+      // 负一屏/短剧/设置等）从没按横屏调过版式，转过去就会压扁、错位。现在默认锁 PORTRAIT；
+      // 播放页进入时由 PlayerView.applyWindowMode 自己切 LANDSCAPE/AUTO，退出时切回 PORTRAIT，
+      // 那条路径不动 —— 所以「只有播放器能横屏」。等各页横屏版式调好再放开这里。
+      mainWindow.setPreferredOrientation(window.Orientation.PORTRAIT);
       // ── 系统栏透明，跟应用融为一体（2026-11-16 用户：上下还有黑边，要像 hosplayer 那样）──
       // 两根系统栏的底色做成全透明，背后露出窗口背景（#0B0B0F），和 App 深色底一致。
       mainWindow.setWindowSystemBarProperties({

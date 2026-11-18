@@ -16,22 +16,21 @@
   想找谁就认真找，没主意就刷一刷；看对眼的，从详情看到精彩，再留给下一次重逢。
 </p>
 
-<p><sub>共演检索 · 随机抽卡 · 丰富详情 · 记录回看</sub></p>
+<p><sub>共演甄选 · 筛选抽卡 · 丰富详情 · 记录回看</sub></p>
 
-<p><sub><strong>2.7.3</strong>　界面铺到屏幕边缘 · 底栏会自己让位 · 抽卡能一直滑 · 「我的」更短了<br>服务端已经能在 App 里升级：手机装包，服务器在「检查更新」里点一下。</sub></p>
+<p><sub><strong>2.8.0</strong>　六个页面，一套新界面 · 甄选能圈范围 · 抽卡只抽筛出来的片子<br>服务端自升级更稳，中文检索词表随包提供；手机端仍需自己签名装包。</sub></p>
 
-> 把自己的 Amane 媒体库带到 HarmonyOS。沿着演员与共演找片，让随机剧照带来惊喜；打开详情了解阵容、选择版本，再把精彩画面、评分和观看记录留下来。2.7.0 让首页往右滑就能翻自己的片段；2.7.2 修好了刷一刷的手感，并让服务端能在 App 里升级；2.7.3 把界面推到屏幕边缘，底栏会自己让位。
+> 把自己的 Amane 媒体库带到 HarmonyOS NEXT。沿着演员与甄选找片，让剧照抽卡带来惊喜；打开详情了解阵容、选择版本，再把精彩画面、评分和观看记录留下来。2.7.2 起服务端能在 App 里点一下升级；2.8.0 把六个 Tab 和所有二级页换成同一套玻璃顶栏，海报铺到屏幕边。
 
 > [!IMPORTANT]
-> **2.7.2版本实装了半自动更新，不再需要反复手动pull，只需要在客户端检查更新，点击更新按钮即可。但必须手动升级到2.7.2才能使用此功能。** 服务端按「快速开始」重新部署一遍、手机装一次新包；
-> 装好之后「检查更新」里就会出现「升级服务器」按钮，以后**服务端**的更新在 App 里点一下就行
-> （手机端仍需下载安装包自己装 —— 鸿蒙不允许应用商店外自动安装）。
-> 旧版本没有这套逻辑，**不能**指望它自己升上来。
-> 已经在 2.7.2 及以上：这次的服务端更新可以在 App 里直接点，不用再动 docker。
+> **服务端低于 2.7.2 时，先手动升一次到 2.7.2 或更新版本。** 升级逻辑本身在这一版里，旧服务端不认识它；装好新包之后，「我的 → 检查更新」才会出现「升级服务器」按钮。
+> 已经在 2.7.2 及以上：服务端的更新在 App 里点一下就行，下载、校验、切换、重启都有进度；失败或连续两次起不来会退回上一版。
+> 手机端仍需下载安装包自己装 —— 鸿蒙不允许应用商店外自动安装。
+> 2.8.0 一并带上了此前服务端自升级的修补；旧版升级时误拷数据卷、词表丢失的问题不会再出现。
 
 > 截图取自作者自建媒体库；封面、横幅与剧照已打码，演员头像保留原样。
 
-<p><sub>面向已有 Amane 媒体库的 HarmonyOS NEXT 手机用户，需部署旁挂服务并自行签名安装。<br><strong>客户端升级到 2.7.3</strong>；服务端若已在 2.7.2 之上，可直接在「检查更新」里升级。<a href="docs/START.md">从零开始</a> · <a href="../../releases">下载</a></sub></p>
+<p><sub>面向已有 Amane 媒体库的 HarmonyOS NEXT 手机用户，需部署旁挂服务并自行签名安装。<br><strong>客户端与服务端配套到 2.8.0</strong>；只升手机、保留旧服务端时，多库甄选会受限。<a href="docs/START.md">从零开始</a> · <a href="../../releases">下载</a></sub></p>
 
 ## 快速开始
 
@@ -40,109 +39,110 @@
 已经知道自己在干什么的，按三步走：
 
 1. **部署旁挂服务**　在运行 Amane 的机器上 `cp deploy/.env.example .env`，填好 `AMANE_DATA` 与 `MEDIA_PATH_MAP`，再 `docker compose -f deploy/compose.example.yml up -d`。
-2. **安装客户端**　从 [Releases](../../releases) 下载 HAP，用你自己的证书签名后安装，或交给 Hokit 这类侧载工具。
+2. **安装客户端**　从 [Releases](../../releases) 下载 `Amane-2.8.0-unsigned.hap`，用你自己的证书签名后安装，或交给 Hokit 这类侧载工具。
 3. **连接媒体库**　「我的 → 连接设置」填 Amane 地址 `:8000`、用户服务地址 `:8770` 与 API token。
 
 详细步骤见 [部署指南](docs/DEPLOY.md) 与 [签名安装](docs/BUILD_HAP.md)；不想手写配置，就把部署指南开头那段话发给 AI 助手，它会用 `tools/agentctl.py` 带你部署并验证。
 
 ### 以后怎么更新
 
-**服务端**：手机打开「我的 → 检查更新」，有新版本时会出现**「升级服务器」**按钮，点一下自己下载、校验、切换、重启，全程有进度条。
-升级包落在服务端的数据卷 `<数据目录>/app`，**原来的 compose 不用改**，重建容器也不会把升级冲掉；失败或连续两次起不来自动退回上一版。
+**服务端**：手机打开「我的 → 检查更新」，有新版本时点「升级服务器」。升级包落在服务端数据卷 `<数据目录>/app`，原来的 compose 不用改，重建容器也不会冲掉；失败或连续两次起不来自动退回上一版。
 
-**手机端**：仍然要下载安装包自己装 —— 鸿蒙不允许应用商店外自动安装，这条改不了。
+**手机端**：下载安装包自己装 —— 鸿蒙不允许应用商店外自动安装。
 
-前提三条：服务端能访问 `github.com`（下载升级包）；数据目录可写（默认挂载就是可写）；服务端至少是 2.7.2（这套逻辑是那一版才有的，更早的版本只能按上面三步手动升一次）。
+前提三条：服务端能访问 `github.com`；数据目录可写；服务端至少 2.7.2。低于 2.7.2 请先按 [升级服务端](docs/UPGRADE.md) 手动升一次。
 
 ## 有趣的功能
 
 <table>
   <tr>
-    <td width="50%" align="center" valign="middle">
-      <img src="docs/screenshots/cast-finder.png" height="260" alt="① 共演检索">
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/01-ui.png" width="100%" alt="六个页面一套新界面">
       <br>
-      <strong>① 共演检索</strong>　最多 6 位演员，「1 女 + 2 男」这种配比也能直接指定。
+      <strong>① 六个页面，一套新界面</strong>　顶栏与返回键统一成玻璃胶囊，海报铺到状态栏底下，底栏滑走又滑回来。
     </td>
-    <td width="50%" align="center" valign="middle">
-      <img src="docs/screenshots/gacha.png" height="260" alt="② 抽卡">
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/02-selection.png" width="100%" alt="甄选抽屉">
       <br>
-      <strong>② 抽卡</strong>　整屏随机剧照，从库到收藏，任意清单都能抽。
+      <strong>② 甄选先圈范围</strong>　找共演与高级筛选合在一起：演员、标签、系列、制片商一起下条件，结果里还能再搜。
     </td>
   </tr>
   <tr>
-    <td width="50%" align="center" valign="middle">
-      <img src="docs/screenshots/facets.png" height="260" alt="③ 分类体系">
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/03-gacha.png" width="100%" alt="筛选后抽卡">
       <br>
-      <strong>③ 分类体系</strong>　演员、标签、系列、制片厂、导演都是能直接翻的墙。
+      <strong>③ 抽卡跟着筛选走</strong>　筛出来的片子就是卡池；画质、字幕、年份、评分、状态都算，多库只抽两边共有的。
     </td>
-    <td width="50%" align="center" valign="middle">
-      <img src="docs/screenshots/highlights-crop.png" height="260" alt="④ 亮点">
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/04-actors.png" width="100%" alt="演员墙">
       <br>
-      <strong>④ 亮点</strong>　带时间点的本片画面，点哪张从哪秒开始播。
+      <strong>④ 演员墙</strong>　从熟悉的人一路翻到作品，按身材、年龄、作品数挑；点开能看别名、写真与出演年龄。
     </td>
   </tr>
   <tr>
-    <td width="50%" align="center" valign="middle">
-      <img src="docs/screenshots/frame-picks.png" height="260" alt="⑤ 截帧与回看">
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/05-facets.png" width="100%" alt="分类体系">
       <br>
-      <strong>⑤ 截帧与回看</strong>　截图集中在一处，点一下空降那个场景。
+      <strong>⑤ 分类体系</strong>　标签、系列、导演、制片商都能翻；番号前缀、系列属性、收藏隐藏在同一套版式里。
     </td>
-    <td width="50%" align="center" valign="middle">
-      <img src="docs/screenshots/detail-age-crop.png" height="260" alt="⑧ 出演年龄">
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/06-highlights.png" width="100%" alt="时间点亮点">
       <br>
-      <strong>⑧ 出演年龄</strong>　点岁数就翻同龄的片，还能按女优 / 男优年龄排序。
+      <strong>⑥ 亮点</strong>　详情页那几条自己的画面带时间点，点哪张从哪秒开始播；网盘片首次打开会现场抽帧。
     </td>
   </tr>
   <tr>
-    <td width="50%" align="center" valign="middle">
-      <img src="docs/screenshots/prefix.png" height="260" alt="⑨ 元数据">
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/07-age.png" width="100%" alt="出演年龄">
       <br>
-      <strong>⑨ 元数据</strong>　系列按属性筛，制片厂按番号前缀连着翻。
+      <strong>⑦ 出演年龄</strong>　演员行直接标「出演 N 岁」，点一下翻同龄片，女优 / 男优都能排。
     </td>
-    <td width="50%" align="center" valign="middle">
-      <img src="docs/screenshots/stats-crop.png" height="260" alt="⑪ 观看统计">
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/08-meta.png" width="100%" alt="番号前缀">
       <br>
-      <strong>⑪ 观看统计</strong>　次数、时长、趋势和偏好放在一起看。
+      <strong>⑧ 元数据</strong>　系列按属性筛，制片厂按番号前缀连着翻；片名、标签和封面在手机上就能改。
     </td>
   </tr>
   <tr>
-    <td width="50%" align="center" valign="middle">
-      <img src="docs/screenshots/tier-board.png" height="260" alt="⑫ 从夯到拉">
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/09-stats.png" width="100%" alt="观看统计">
       <br>
-      <strong>⑫ 从夯到拉</strong>　评分生成五档座次图，可筛选、可导出。
+      <strong>⑨ 观看统计</strong>　次数、时长、趋势和偏好放一起看；样本少时明说「还在积累」，不拿 0 骗人。
     </td>
-    <td width="50%" align="center" valign="middle">
-      <img src="docs/screenshots/search-alias-crop.png" height="260" alt="⑬ 搜索认俗称">
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/10-tier.png" width="100%" alt="从夯到拉">
       <br>
-      <strong>⑬ 搜索认俗称</strong>　拼音首字母、繁简写法和俗称一起帮你找。
+      <strong>⑩ 从夯到拉</strong>　星级排成五档座次，按内容、时间、性别筛，也能导出成图。
     </td>
   </tr>
   <tr>
-    <td width="50%" align="center" valign="middle">
-      <a id="shorts"></a>
-      <img src="docs/screenshots/shorts-main.png" height="260" alt="⑭ 刷一刷">
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/11-search.png" width="100%" alt="俗称搜索">
       <br>
-      <strong>⑭ 刷一刷</strong>　首页右滑，一条一个片段，合口味就点个心。
+      <strong>⑪ 搜索认俗称</strong>　拼音、繁简、日文写法和俗称一起找；搜不到的词进「待处理」，点一下就成了别名。
     </td>
-    <td width="50%" align="center" valign="middle">
-      <a id="home-scope"></a>
-      <img src="docs/screenshots/home-scope.png" height="260" alt="⑮ 首页自己挑">
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/12-shorts.png" width="100%" alt="刷一刷">
       <br>
-      <strong>⑮ 首页自己挑</strong>　库、状态、年份、标签、演员，组合成首页范围。
+      <strong>⑫ 刷一刷</strong>　首页右滑，一条一个片段，点心留住那一下。「我的喜爱」只存本机，和正片收藏分开。
     </td>
   </tr>
   <tr>
-    <td width="50%" align="center" valign="middle">
-      <img src="docs/screenshots/backup.png" height="260" alt="⑯ 备份与恢复">
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/13-home-scope.png" width="100%" alt="首页范围">
       <br>
-      <strong>⑯ 备份与恢复</strong>　收藏评分清单能带走，导入先预览再挑。
+      <strong>⑬ 首页自己挑</strong>　库、状态、年份、标签、演员组合成首页范围，打开先看自己挑的那几行。
     </td>
-    <td width="50%" align="left" valign="middle">
-      <sub>没有配图的三项：<strong>⑥ 播放体验</strong> 原地起播、三态窗口、退出记进度；<strong>⑦ 弹幕与评价</strong> 评价留给整片、弹幕留给那一刻；<strong>⑩ 打分</strong> 1–5 星，从夯到拉，顺手留句锐评。</sub>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/14-backup.png" width="100%" alt="备份与恢复">
+      <br>
+      <strong>⑭ 备份与恢复</strong>　收藏评分清单能带走，导入先预览再挑；线上记录按番号匹配。
     </td>
   </tr>
   <tr>
-    <td colspan="2"><sub>「我的喜爱」存的是你点过心的片段，点一条就能回到那个位置；点心只记在这台手机上，和正片收藏分开。备份支持的类别以界面为准，按番号匹配，没对上的记录要自己看一眼。</sub></td>
+    <td colspan="2" valign="top">
+      <sub>没有配图的三项：<strong>⑮ 播放体验</strong> 原地起播、三态窗口、退出记进度；<strong>⑯ 弹幕与评价</strong> 评价留给整片，弹幕留给那一刻；<strong>⑰ 打分</strong> 1–5 星，从夯到拉，顺手留句锐评。</sub>
+    </td>
   </tr>
 </table>
 
@@ -150,22 +150,20 @@
 
 <table>
   <tr>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/home.png" width="120"><br><strong>首页</strong><br><sub>想放啥放啥</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/library-250.png" width="120"><br><strong>媒体库</strong><br><sub>7 种排序 · 抽卡</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/actors.png" width="120"><br><strong>演员</strong><br><sub>身材 · 年龄 · 收藏</sub></td>
-    <td width="25%" align="center" valign="top"><img src="docs/screenshots/detail.png" width="120"><br><strong>详情</strong><br><sub>一切信息 · 大众点评</sub></td>
+    <td width="25%" valign="top"><img src="docs/screenshots/cards/t01-home.png" width="100%" alt="首页"><br><strong>首页</strong><br><sub>想放啥放啥</sub></td>
+    <td width="25%" valign="top"><img src="docs/screenshots/cards/t02-library.png" width="100%" alt="媒体库"><br><strong>媒体库</strong><br><sub>多库 · 抽卡</sub></td>
+    <td width="25%" valign="top"><img src="docs/screenshots/cards/t03-actors.png" width="100%" alt="演员"><br><strong>演员</strong><br><sub>身材 · 年龄</sub></td>
+    <td width="25%" valign="top"><img src="docs/screenshots/cards/t04-detail.png" width="100%" alt="详情"><br><strong>详情</strong><br><sub>阵容 · 版本</sub></td>
   </tr>
   <tr>
-    <td align="center" valign="top"><img src="docs/screenshots/detail-stills.png" width="120"><br><strong>剧照</strong><br><sub>喜欢就收起来</sub></td>
-    <td align="center" valign="top"><img src="docs/screenshots/filter-sheet.png" width="120"><br><strong>筛选</strong><br><sub>想怎么筛就怎么筛</sub></td>
-    <td align="center" valign="top"><img src="docs/screenshots/search.png" width="120"><br><strong>搜索</strong><br><sub>联想 · 别名 · 拼音繁体</sub></td>
-    <td align="center" valign="top"><img src="docs/screenshots/player-settings.png" width="120"><br><strong>播放器</strong><br><sub>内置 mpv · 倍速 · 手势</sub></td>
+    <td valign="top"><img src="docs/screenshots/cards/t05-stills.png" width="100%" alt="剧照"><br><strong>剧照</strong><br><sub>喜欢就收起来</sub></td>
+    <td valign="top"><img src="docs/screenshots/cards/t06-filter.png" width="100%" alt="筛选"><br><strong>筛选</strong><br><sub>想怎么筛就怎么筛</sub></td>
+    <td valign="top"><img src="docs/screenshots/cards/t07-search.png" width="100%" alt="搜索"><br><strong>搜索</strong><br><sub>联想 · 别名</sub></td>
+    <td valign="top"><img src="docs/screenshots/cards/t08-player.png" width="100%" alt="播放器"><br><strong>播放器</strong><br><sub>mpv · 倍速</sub></td>
   </tr>
 </table>
 
-<sub>演员墙按身材和年龄挑：从娇小到丰满、从人妻到 JK，总有一款对味；想挑奶狗或大叔也不是不行。</sub>
-
-想看的先放进**稍后再看**，喜欢的分进自己的**清单**；这次没看完，下次接着看。
+<sub>想看的先放进**稍后再看**，喜欢的分进自己的**清单**；这次没看完，下次接着看。</sub>
 
 <sub>多清单 · 稍后再看 · 自建标签与系列 · 手机编辑信息 · 8 套主题 · 列数可调 · 首页编排 · 空间管理 · 检查更新 · 设置分块 · 全矢量图标 · 导出日志</sub>
 
@@ -190,7 +188,7 @@
 
 功能细节、逐项配置、排障都在 **[Wiki](https://github.com/dogmicats/Amane-Harmony/wiki)**。
 
-- 第一次装：[部署指南](docs/DEPLOY.md) · [签名安装](docs/BUILD_HAP.md)
+- 第一次装：[部署指南](docs/DEPLOY.md) · [签名安装](docs/BUILD_HAP.md) · [从零开始](docs/START.md)
 - 已经有旧版：[升级服务端](docs/UPGRADE.md)（含一段可以直接发给 AI 助手的提示词）
 - 使用与排错：[字幕](docs/SUBTITLES.md) · [兼容性](docs/COMPATIBILITY.md) · [排障](docs/TROUBLESHOOTING.md) · [非鸿蒙设备](docs/ANDROID.md)
 - 维护与贡献：[README 设计规范](docs/DESIGN.md) · [AI 助手约定](AGENTS.md)

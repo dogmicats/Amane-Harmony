@@ -1,9 +1,11 @@
 import { common } from '@kit.AbilityKit';
 import { BusinessError, batteryInfo } from '@kit.BasicServicesKit';
-import { router, uiMaterial, display, window, curves } from '@kit.ArkUI';
+import { router, uiMaterial, display, window, curves, UIContext } from '@kit.ArkUI';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { Personalize } from '../common/Personalize';
+import { ImmersiveGlass } from '../common/ImmersiveGlass';
+import { EdgeLight } from '../common/EdgeLight';
 import { NavBarWatch } from '../common/NavBarWatch';
 import { uploadCrashLog } from '../common/CrashReporter';
 import { HomeTab } from './HomeTab';
@@ -26,6 +28,13 @@ struct Index {
   @State currentTab: number = 0;
   /** 底栏玻璃不透明度（0–1）：外观页的滑杆写这个键，这里重建材质。 */
   @StorageProp('amaneTabBarAlpha') tabBarAlpha: number = 0;
+  /**
+   * 顶栏 / 底栏小胶囊共用的材质档位（0 无 / 1 弱 / 2 强 / 3 极限）。
+   *
+   * 四十改：底栏的**选中高亮**也改成系统材质了，档位跟顶栏那四块玻璃同一来源 ——
+   * 用户在外观设置里换一档，两条栏一起变，不会出现「顶上薄、底下厚」。
+   */
+  @StorageProp('amaneGlass') glassLevel: number = 2;
   /** 全屏落地后只强制重排一次（见 `readInsets`）。 */
   private layoutRefreshed: boolean = false;
   // ── 底栏「按压光斑」（2026-11-16 用户点名要 hosplayer 那种）────────────────
@@ -36,6 +45,23 @@ struct Index {
   /** 光斑不透明度：按下 0.62，抬手淡出到 0。 */
   @State pressA: number = 0;
   private pressTimer: number = -1;
+  // ── 底栏「切换流光」（2026-11-17 三十三改）──────────────────────────────
+  /**
+   * 高光起点相对「当前选中项」的横向偏移（vp）。
+   *
+   * 切换时先把它设成 `(上一个 - 当前) × 一格`，让光**在新位置出生在旧位置上**，
+   * 下一帧用 `animateTo` 归零 —— 看上去就是一束光从旧 tab 滑到新 tab。
+   * 整个底栏任何时刻只有一束光，不存在两块交叉淡化。
+   *
+   * 为什么必须用显式 `animateTo` 而不是节点上的隐式 `.animation()`：
+   * 实测隐式动画对**刚刚创建**的节点不生效（节点第一次出值就是终值），
+   * 光的位移会在一帧内跳完，等于没动。
+   */
+  @State travel: number = 0;
+  /** 流光尾的偏移。和 `travel` 同源，但补间更慢 —— 自动慢半拍，就拖出了一道光尾。 */
+  @State travelTail: number = 0;
+  /** 这次切换要不要在光出生时起跑（见 `startFlow`）。 */
+  private flowArmed: boolean = false;
   /** 还没填服务器地址（启动第一秒就能判出来，见 boot()）。 */
   @State needSetup: boolean = false;
   /** 最近一次按下的屏幕 Y（px）与时刻：用来判断这次翻页是不是「上半屏起手」的横滑。 */
@@ -119,6 +145,13 @@ struct Index {
     // 主题色 / 列数要赶在第一次 build 之前生效；放在 try 外面，
     // 万一上面读偏好抛错，这里仍会按默认值把 AppStorage 铺好（不至于白屏）。
     Personalize.init();
+    // 顶栏材质档位（2026-11-17 五改）：查设备算力 → 解析出档位 → 写 AppStorage。
+    // 必须在第一次 build 之前跑完，否则媒体库顶栏会先按默认档渲染一帧再跳档。
+    ImmersiveGlass.init();
+    // 现场判据（2026-11-17 二十八改）：底栏材质到底有没有被系统接受，先看这一行。
+    // supported=false 时 `tabBarMaterial()` 会返回 undefined，底栏退回「无材质的透明条」。
+    console.info(`[amane] tabbar material supported=${ImmersiveGlass.supported} ` +
+      `level=${ImmersiveGlass.deviceLevel} ${ImmersiveGlass.appStateLabel()}`);
     // 刷一刷留白铺什么（2.6.2.19）：本机偏好 → AppStorage，ShortsView 用 @StorageProp 读。
     // 放在第一次 build 之前铺好，进来才不用先闪一下海报再变黑。
     AppStorage.setOrCreate<number>('shortsPosterBg',
@@ -139,24 +172,30 @@ struct Index {
   }
 
   /**
-   * 负一屏锁竖屏、退出后恢复全局自动旋转（2026-11-15 用户：「负一屏不应该有横屏效果」）。
+   * 方向：全局锁竖屏（2026-11-18 用户：「先禁止除了播放器以外的所有横屏」）。
    *
-   * 为什么锁：负一屏是 9:16 竖版短视频的版式（画面 + 底部信息层 + 右侧操作列），
-   * 转成横屏只会把画面压成中间一条、信息层错位。
-   * 首页/媒体库那些是竖排列表，本来就能横过来用，所以只锁负一屏打开的那段时间。
+   * 以前负一屏打开锁竖屏、收起恢复 AUTO_ROTATION；现在除播放页外的界面都没按横屏调过，
+   * 所以收起后也锁竖屏，不再放开。全局默认见 EntryAbility（PORTRAIT）。
    *
-   * 跟手叠层下没有「翻到第几页」这个概念，判据是 `minusOpen`：
-   * 叠层一吸附打开就锁竖屏，收回去就放开（拖动途中不切，避免边拖边转的诡异观感）。
+   * 播放中一律跳过：播放器由 PlayerView 自己切 LANDSCAPE/AUTO/PORTRAIT，
+   * 首页若在播放期间被调一次（负一屏在播放页底下收起时会走到），
+   * 会把系统方向重判一次 → 手上观看角度被判成竖就翻转（2026-11-17 修的横屏翻竖屏）。
+   *
+   * open 参数保留（调用点传 minusOpen），只是现在开和关都锁 PORTRAIT。
    */
   private applyOrientation(open: boolean): void {
     const w = this.win;
     if (w === undefined) {
       return;
     }
-    const want: window.Orientation = open
-      ? window.Orientation.PORTRAIT
-      : window.Orientation.AUTO_ROTATION;
-    w.setPreferredOrientation(want).catch((err: BusinessError) => {
+    const playing: boolean | undefined = AppStorage.get<boolean>('playerActive');
+    if (playing === true) {
+      console.info('[amane] orientation: 播放中，跳过首页的方向设置');
+      return;
+    }
+    // 非播放页一律竖屏；open 现在是历史参数（0=主页收起 / 1=负一屏打开），只记进日志便于排查。
+    console.info(`[amane] orientation: lock portrait (minusOpen=${open})`);
+    w.setPreferredOrientation(window.Orientation.PORTRAIT).catch((err: BusinessError) => {
       console.info(`[amane] orientation: ${err.code} ${err.message}`);
     });
   }
@@ -294,6 +333,28 @@ struct Index {
       // 选中项背后垫一团柔光（不呼吸：底栏常驻，呼吸光会一直在余光里闪）。
       // 玻璃胶囊本身不动，光只从胶囊边上溢出来一点，配合系统沉浸材质才像「亮着的灯」。
       Stack({ alignContent: Alignment.Center }) {
+        // ① 流光尾（最底层）：**一圈在消散的光环**，不是一块色斑（三十四改）。
+        //    径向渐变从中心透明 → 0.7 处才有颜色 → 边缘归零：中心一个像素都不画，
+        //    所以它不会把高亮中间糊住，跑动时看起来就是「一圈光甩在后面」。
+        //    补间比主光慢一倍，天然落后半拍，不需要第二个状态去驱动。
+        if (this.currentTab === index) {
+          Column()
+            .width(96)
+            .height(46)
+            .borderRadius(23)
+            .radialGradient({
+              center: ['50%', '50%'],
+              radius: '50%',
+              colors: [
+                [Theme.accentAlpha(0.0), 0],
+                [Theme.accentAlpha(0.10), 0.55],
+                [Theme.accentAlpha(0.18), 0.82],
+                [Theme.accentAlpha(0.0), 1]
+              ]
+            })
+            .translate({ x: this.travelTail })
+            .hitTestBehavior(HitTestMode.None)
+        }
         // ★ 按压光斑（2026-11-16 用户点名要 hosplayer 那种）★
         // 手指按住某个 tab 时，底栏内部长出一团**纯白**圆形光，按得越久越大；
         // 抬手后在 220ms 内淡出。画在选中柔光**下面**，所以切换时是"从手指下透出来"，
@@ -316,56 +377,85 @@ struct Index {
             .opacity(this.pressA)
             .hitTestBehavior(HitTestMode.None)
         }
-        if (this.currentTab === index && this.fx >= 1) {
-          GlowOrb({
-            color: Theme.ACCENT,
-            diameter: this.fx >= 2 ? 88 : 72,
-            alpha: this.fx >= 2 ? 0.30 : 0.18,
-            breath: false
-          })
-        }
-        // 选中项做成一块玻璃胶囊：半透明白底 + 0.5 高光描边，压在毛玻璃底栏上。
+        // ② 高光本体（柔光 + 玻璃胶囊）：**整组跟着 `travel` 一起滑**
         //
-        // ★ 果冻滑动（2026-11-16 用户：高亮切换不要"消失+出现"，要像果冻滑过去）★
-        // 做法：每个 item 都**常驻**一个胶囊，位置按 `(currentTab - index)` 偏移
-        // （偏移量 = 相邻 tab 的中心距），不透明度只在 delta=0 时为 1。
-        // 切换时旧项偏移一格并淡出、新项从一格外滑回 + 淡入 —— 两段动画叠在一起，
-        // 看上去就是一个胶囊滑过去；配上 spring 曲线就是"果冻"。
-        Stack({ alignContent: Alignment.Center }) {
-          Column()
-            .width(56)
-            .height(44)
-            .borderRadius(16)
-            .backgroundColor(Theme.accentAlpha(0.18))
-            .border({ width: 0.5, color: Theme.accentAlpha(0.32) })
-            .translate({ x: this.tabSlideDx(index) })
-            // 只靠位移 + 淡入淡出，**不再缩放**（2026-11-16 用户：边缘太明显、像"弹消失再弹出来"，
-            // 缩放是那个"弹"的来源）。两段叠加时看起来是一块底色在滑，不是两个框在闪。
-            .opacity(this.tabSlideOn(index) ? 1 : 0)
-            .animation({
-              duration: 300,
-              curve: curves.interpolatingSpring(0.72, 1, 340, 26)
-            })
-            .hitTestBehavior(HitTestMode.None)
-
-          Column({ space: 3 }) {
-            Image(icon)
-              .width(22)
-              .height(22)
-              .objectFit(ImageFit.Contain)
-              // 未选中也要看得清：原来用 TEXT_FAINT(#6C6C78) 在深底上几乎糊成一团，
-              // 提到接近白的灰（选中才用紫色）
-              .fillColor(this.currentTab === index ? Theme.ACCENT : Theme.TAB_IDLE)
-            Text(label)
-              .fontSize(10)
-              .fontColor(this.currentTab === index ? Theme.TEXT : Theme.TAB_IDLE)
+        // ★ 切换流光（2026-11-17 三十三改，替换掉原来的「果冻」）★
+        // 原来的做法是每个 item 各常驻一个胶囊、靠 `opacity` 交叉淡化 —— 两团半透明
+        // 叠在一起，看上去只是「旧的暗下去、新的亮起来」，没有位移，所以不像光在跑。
+        // 现在整个底栏**任何时刻只有一束光**：切到哪一项，光就在那一项里重新出生，
+        // 出生位置 = 上一项的位置（`travel`），下一帧归零，位移交给隐式动画补间。
+        // 配合 300ms 的弹簧 + 那条慢半拍的流光尾，读起来就是「高光从这一页流到下一页」。
+        if (this.currentTab === index) {
+          Stack({ alignContent: Alignment.Center }) {
+            // ★ 2026-11-18 四十改：高亮本体从「自绘边缘光」换成**系统沉浸材质** ★
+            //
+            // 用户：「底栏高亮也换成系统材质。」
+            //
+            // 之前是一块 10% 主题色底 + `EdgeLight` 自绘光圈 —— 顶栏四块已经是官方的
+            // `systemMaterial`（材质自己画底色/边/折射/光），底栏这束还是自绘的，两条栏
+            // 就还是两套语言：一条有折射，一条只有一圈渐变线。
+            //
+            // 为什么这里能用材质：底栏是 `Tabs(barPosition: End)` 的 TabBar，
+            // 正是官方列出的第二个落点（第一个是 Navigation 标题栏）。顶栏那四块挂在
+            // 标题栏 builder 里、效果出得来，就是这个原因；同理挂在 tabBar builder 里也成立。
+            //
+            // 选中色走材质的 `materialColor`（不是 backgroundColor）：材质一生效，系统会把
+            // backgroundColor 复位成透明 —— 靠底色表达选中在这条路上一律无效。
+            if (this.barSpotMaterial() !== undefined) {
+              Column()
+                .width(56)
+                .height(44)
+                .borderRadius(16)
+                .systemMaterial(this.barSpotMaterial())
+                // 材质是方的矩形，圆角要靠 clip 裁出来
+                .clip(true)
+            } else {
+              // 兜底（档位=无 / 设备不支持材质）：退回「淡主题色底 + 自绘边缘光」，
+              // 否则这一档下底栏会变成「选中项什么都没有」。
+              Column()
+                .width(56)
+                .height(44)
+                .borderRadius(16)
+                .backgroundColor(Theme.accentAlpha(0.10))
+              // ★ 边缘光（三十四改）★ 和顶栏那几块玻璃用的是**同一个组件**：
+              //   外圈一道头发丝亮边 → 紧贴一道暗线 → 4vp 内衬微光 → 中心零。
+              EdgeLight({
+                radius: 16,
+                tint: Theme.ACCENT,
+                level: 1,
+                ring: 0.52,
+                bloom: 0.12,
+                bloomW: 3,
+                sheen: 0.22
+              })
+            }
           }
           .width(56)
           .height(44)
-          .justifyContent(FlexAlign.Center)
+          .translate({ x: this.travel })
+          .hitTestBehavior(HitTestMode.None)
+          // 高光刚一出生就起跑：此刻它的当前值还是 `travel`（旧 tab 的位置），
+          // 下面这个 animateTo 把它补间到 0，于是光从旧位置滑到新位置。
+          .onAppear(() => {
+            this.startFlow();
+          })
+        }
+
+        Column({ space: 3 }) {
+          Image(icon)
+            .width(22)
+            .height(22)
+            .objectFit(ImageFit.Contain)
+            // 未选中也要看得清：原来用 TEXT_FAINT(#6C6C78) 在深底上几乎糊成一团，
+            // 提到接近白的灰（选中才用紫色）
+            .fillColor(this.currentTab === index ? Theme.ACCENT : Theme.TAB_IDLE)
+          Text(label)
+            .fontSize(10)
+            .fontColor(this.currentTab === index ? Theme.TEXT : Theme.TAB_IDLE)
         }
         .width(56)
         .height(44)
+        .justifyContent(FlexAlign.Center)
       }
       .width(56)
       .height(44)
@@ -381,6 +471,37 @@ struct Index {
         this.endPressGlow();
       }
     })
+  }
+
+  /**
+   * 起跑：把高光从「旧 tab 的位置」补间回自身位置（2026-11-17 三十三改）。
+   *
+   * 由高光节点的 `onAppear` 调用 —— **不能**用固定延时的 `setTimeout`：
+   * 节点什么时候渲染出来是不确定的，赌早了（光还没出生）`travel` 已经归零，
+   * 屏幕上就只剩「凭空出现在目标位置」，也就是原来那个"没有流过去"的观感。
+   *
+   * 两条 animateTo 同源不同时长：主线 340 的弹簧，光尾 300 弹簧但质量更小 → 慢半拍，
+   * 视觉上就是主光在前面跑、身后拖一道淡淡的余光。
+   */
+  private startFlow(): void {
+    if (!this.flowArmed) {
+      return;
+    }
+    this.flowArmed = false;
+    const ui: UIContext = this.getUIContext();
+    // 三十四改：高光从「实心色块」变成「一圈边缘光」，动画也要跟着换脾气。
+    //
+    // 色块可以弹（重心在整块面积上，弹一下像果冻）；一圈光弹就不对了 —— 光没有质量，
+    // 它应该**滑过去然后停住**。所以主线把阻尼提到接近临界（30，约为 0.93 阻尼比），
+    // 刚度 260（周期 ≈ 390ms）：几乎没有回弹，落地就静。
+    ui.animateTo({ curve: curves.interpolatingSpring(0, 1, 260, 30) }, () => {
+      this.travel = 0;
+    });
+    // 光尾质量给到 1.8、刚度 190：周期 ≈ 610ms，比主线慢一截，落后约 150ms 才跟上。
+    // 它本来就比主光更宽更淡，慢这一点刚好读成「一道余光甩在身后」，而不是第二个高光。
+    ui.animateTo({ curve: curves.interpolatingSpring(0, 1.8, 190, 34) }, () => {
+      this.travelTail = 0;
+    });
   }
 
   /** 按住底栏某一项：光斑从 40vp 长到 150vp，按下时间越长越大（hosplayer 那种）。 */
@@ -422,26 +543,6 @@ struct Index {
       clearInterval(this.pressTimer);
       this.pressTimer = -1;
     }
-  }
-
-  /**
-   * 果冻滑动：这个 item 的胶囊相对自己位置的横向偏移（vp）。
-   *
-   * `currentTab - index` 是"隔了几格"，乘上相邻 tab 的中心距就是一格的距离。
-   * 只取 ±1（更远的不画），这样切换时旧胶囊滑出一格、新胶囊从一格外滑回来。
-   */
-  private tabSlideDx(index: number): number {
-    const delta: number = this.currentTab - index;
-    const step: number = this.tabCenterStep();
-    if (delta === 0) {
-      return 0;
-    }
-    return delta > 0 ? step : -step;
-  }
-
-  /** 这一项的胶囊要不要显示（只有当前项；相邻项在动画过程中会短暂可见）。 */
-  private tabSlideOn(index: number): boolean {
-    return this.currentTab === index;
   }
 
   /**
@@ -534,12 +635,7 @@ struct Index {
       // 展开时按手势条实际高度上抬（读不到高度就退回 12）。
       barSideMargin: this.navHidden ? 215 : 16,
       barBottomMargin: this.navHidden ? 0 : this.barBottomGap(),
-      systemMaterial: new uiMaterial.ImmersiveMaterial({
-        style: uiMaterial.ImmersiveStyle.REGULAR,
-        // 不透明度由「设置 → 外观」里的滑杆决定（2026-11-16 用户要的可调接口），
-        // 默认 0.24 = 原来的 #3D000000，所以不调的人看到的效果和以前完全一样。
-        materialColor: this.tabBarMaterialColor()
-      })
+      systemMaterial: this.tabBarMaterial()
     })
     .animation({ duration: 260, curve: Curve.Friction })
     // 横滑切页交回 Tabs 原生处理（2.6.2.11 复原）：
@@ -563,9 +659,14 @@ struct Index {
       if (this.swipeDownAt <= 0 || Date.now() - this.swipeDownAt > 1500) {
         return true;
       }
-      const half: number = px2vp(display.getDefaultDisplaySync().height) / 2;
-      if (this.swipeDownY >= half) {
-        return true;                     // 下半屏起手 = 原来的换页，放行
+      // ★ 上 3 : 下 2（2026-11-18 四十九改）★
+      // 原来是「五五开」。但媒体库/收藏这两页的标题栏已经是**两行**（各 100vp 上下），
+      // 连同状态栏一共吃掉屏幕上部很大一截；再说手指起手一般在画面中间偏上，
+      // 按一半分，很多人习惯性落在下缘就被判成「换页」。往下放到六成，
+      // 上半屏（页内切换）覆盖到常看区域，底下的海报区仍然归 Tabs 换页。
+      const split: number = px2vp(display.getDefaultDisplaySync().height) * 0.6;
+      if (this.swipeDownY >= split) {
+        return true;                     // 下 2/5 起手 = 原来的换页，放行
       }
       const key: string = this.tabKey(currentIndex);
       if (key.length === 0) {
@@ -577,6 +678,18 @@ struct Index {
       return false;                      // 取消翻页，页面自己切
     })
     .onChange((index: number) => {
+      const prev: number = this.currentTab;
+      // ★ 切换流光（三十三改）：先把光的出生点摆到**上一个** tab 的位置，
+      //   下一帧归零 —— 位移由节点上的隐式动画补间，看上去就是光从旧页流到新页。
+      //   必须分两帧：同一帧里设完又归零，框架只会看到最终值 0，什么都不会动。
+      if (prev !== index) {
+        const dx: number = (prev - index) * this.tabCenterStep();
+        this.travel = dx;
+        this.travelTail = dx;
+        // 真正的补间交给 `startFlow()`：它在高光节点**出现的那一刻**触发，
+        // 不靠固定延时去赌「节点有没有渲染完」（赌早=光还没出生就归零，等于没动）。
+        this.flowArmed = true;
+      }
       this.currentTab = index;
       // 换 tab 一律把底栏放出来：新页面的滚动位置是新的，留着收起会显得「导航不见了」
       NavBarWatch.reset();
@@ -723,6 +836,70 @@ struct Index {
     .onTouch((ev: TouchEvent) => {
       this.trackMinus(ev);
     })
+  }
+
+  /**
+   * 底栏的**系统沉浸材质**（2026-11-17 二十八改：照官方 `FloatingTabBarStyle.systemMaterial` 写）。
+   *
+   * 为什么这次能成而顶栏不能：
+   * 官方《开启沉浸光感》原文只有两个位置吃材质 —— Navigation/NavDestination 的**标题栏**，
+   * 以及「横向 Tabs 中 barPosition 为 **BarPosition.End** 的底部 TabBar」。我们这条底栏
+   * 正好是后者，`barFloatingStyle({ systemMaterial })` 是官方给的入口，**没有自绘**。
+   *
+   * 四件事决定了「玻璃」还是「磨砂塑料」：
+   *   1. `style`：官方建议**悬浮控件用 THIN / ULTRA_THIN**。之前这里是 REGULAR，
+   *      常规厚度 + 圆角胶囊，屏幕上就是一坨糊掉的深色块。
+   *   2. `materialColor`：官方注释「纯色必须半透明，**否则会完全阻挡材质滤镜**」。
+   *      这里由外观页的滑杆给，**默认 0 = 全透明 = 材质原样呈现**。之前默认 0.24 的黑，
+   *      等于在滤镜上又盖了一层墨，颜色永远透不上来 —— 这就是「只是变暗」的根。
+   *   3. `colorInvert`：材质薄到 THIN 以下时，系统会让子树里文字/图标自动取背景反色。
+   *      玻璃扫过亮海报时字自己变深，这是「有块玻璃压在上面」最直接的观感来源。
+   *   4. `lightEffect`：光感交互反馈（按压时光晕沿材质散开）。官方说它对**所有算力档**生效，
+   *      是静态材质之外唯一能加「光」的官方开关。
+   *
+   * 材质对象带 GPU 资源，按不透明度百分比缓存 —— 滑杆每动一格就是一个新对象，
+   * 不缓存的话拖动时会一直 new。
+   */
+  private tabBarMats: Map<number, uiMaterial.ImmersiveMaterial> = new Map();
+
+  private tabBarMaterial(): uiMaterial.ImmersiveMaterial | undefined {
+    // 设备不支持就别挂：返回 undefined 等于不设材质，底栏退回 `barBackgroundColor` 那条
+    if (!ImmersiveGlass.supported) {
+      return undefined;
+    }
+    const pct: number = Math.round(this.tabBarAlpha * 100);
+    const hit: uiMaterial.ImmersiveMaterial | undefined = this.tabBarMats.get(pct);
+    if (hit !== undefined) {
+      return hit;
+    }
+    const made: uiMaterial.ImmersiveMaterial = new uiMaterial.ImmersiveMaterial({
+      style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+      materialColor: this.tabBarMaterialColor(),
+      // 只有 THIN / ULTRA_THIN 才可能被系统判定为「可以反色」，REGULAR 开始一律不生效
+      colorInvert: true,
+      applyShadow: true,
+      // 按压时材质本身轻微形变 —— 玻璃被手指压下去的那一下
+      interactive: true,
+      // 光感反馈：手指落在底栏上，光沿着材质散开一圈（不是我们自绘的那个白点）
+      lightEffect: { color: Color.White }
+    });
+    this.tabBarMats.set(pct, made);
+    return made;
+  }
+
+  /**
+   * 底栏**选中高亮**用的材质（2026-11-18 四十改）。
+   *
+   * 和顶栏那三颗小胶囊**完全同一个入口**（`ImmersiveGlass.pressMaterial`）：
+   * `ULTRA_THIN` + 可交互 + 边缘流光 + 不投影，只把着色换成主题色 —— 于是两条栏
+   * 是同一套玻璃，选中态就是「同一块玻璃被点亮了一下」。
+   *
+   * 着色 30% 主题色：比原来那层 10% 底色重，因为材质自己会把颜色打散一部分
+   * （模糊 + 折射），真机上不加到这个量就看不出「选中」。
+   * 对象按 `档位|颜色` 缓存在 `pressMaterial` 里，这里每帧调也不会 new。
+   */
+  private barSpotMaterial(): uiMaterial.ImmersiveMaterial | undefined {
+    return ImmersiveGlass.pressMaterial(this.glassLevel, Theme.accentAlpha(0.30));
   }
 
   /**

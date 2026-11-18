@@ -810,7 +810,7 @@ export struct ShortsView {
         this.win.setWindowKeepScreenOn(false);
         this.win.setWindowLayoutFullScreen(false);
         this.win.setWindowSystemBarEnable(['status', 'navigation']);
-        this.win.setPreferredOrientation(window.Orientation.AUTO_ROTATION);
+        this.win.setPreferredOrientation(window.Orientation.PORTRAIT);
       } catch (err) {
         const e = err as BusinessError;
         console.info(`[amane] shorts exit: ${e.code}`);

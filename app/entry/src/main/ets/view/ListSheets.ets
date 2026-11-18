@@ -1,5 +1,7 @@
+import { curves } from '@kit.ArkUI';
 import { ChipOption, SortOption } from '../common/BrowseOptions';
 import { Theme } from '../common/Theme';
+import { GlassCapsule } from './GlassKit';
 
 /**
  * 清单页的「工具条胶囊 + 底部抽屉」公共件（2.4.6.24）。
@@ -18,18 +20,25 @@ export struct ToolPill {
   onTap: () => void = () => {};
 
   build() {
-    Text(this.label)
-      .fontSize(12)
-      .fontColor(this.active ? '#FFFFFF' : Theme.TEXT_DIM)
-      .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-      .backgroundColor(this.active ? Theme.ACCENT : Theme.CARD)
-      // 胶囊 + 细边（2026-11-14）：和媒体库那排 chips 用同一套形状，
-      // 原来圆角 12 的方块夹在胶囊中间，一眼就是两种控件。
-      .borderRadius(Theme.R_PILL)
-      .border({ width: 1, color: this.active ? Theme.accentAlpha(0.55) : Theme.STROKE })
-      .onClick(() => {
+    // ★ 2026-11-18 四十一改：换成**视觉基底**的玻璃胶囊（`view/GlassKit`）★
+    //
+    // 用户把 2.7.3.0 定成基底后要求「每一页的按钮都改成这一套」。这一颗是
+    // 清单页工具条（排序 / 筛选）的公共件 —— 媒体库、收藏、演员、标签、观看记录、
+    // 稍后再看、共演筛选、分类墙全走它，所以改这一处，二十来个页面一起换口径。
+    //
+    // 外观变化：12 → 13 号（与顶栏四块一致）、未选中由 `TEXT_DIM` 提亮到白
+    // （玻璃上灰字看着像禁用）、选中不再涂实心主题色，而是 30% 主题色玻璃。
+    GlassCapsule({
+      label: this.label,
+      active: this.active,
+      fs: 12,
+      padH: 12,
+      padV: 7,
+      radius: Theme.R_PILL,
+      onTap: () => {
         this.onTap();
-      })
+      }
+    })
   }
 }
 
@@ -165,16 +174,18 @@ export struct ChipRow {
   build() {
     Row({ space: 7 }) {
       ForEach(this.options, (opt: ChipOption) => {
-        Text(opt.label)
-          .fontSize(11)
-          .fontColor(this.current === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
-          .padding({ left: 11, right: 11, top: 5, bottom: 5 })
-          .backgroundColor(this.current === opt.key ? Theme.ACCENT : Theme.CARD)
-          .borderRadius(Theme.R_PILL)
-          .border({ width: 1, color: this.current === opt.key ? Theme.accentAlpha(0.55) : Theme.STROKE })
-          .onClick(() => {
+        // 四十一改：同一套玻璃胶囊（标签 / 系列 / 导演 / 制片商 的「切换大类」）。
+        GlassCapsule({
+          label: opt.label,
+          active: this.current === opt.key,
+          fs: 12,
+          padH: 11,
+          padV: 6,
+          radius: Theme.R_PILL,
+          onTap: () => {
             this.onPick(opt.key);
-          })
+          }
+        })
       }, (opt: ChipOption) => `chiprow-${opt.key}`)
     }
   }
@@ -252,6 +263,10 @@ export struct BottomSheet {
     .backgroundColor(Theme.BG_RAISED)
     .borderRadius({ topLeft: 18, topRight: 18 })
     .padding({ bottom: this.tabInset })
+    // 空间动效·弹出（三十一改），同 SortSheet
+    .transition(TransitionEffect.translate({ y: 36 })
+      .combine(TransitionEffect.OPACITY)
+      .animation({ duration: 280, curve: curves.interpolatingSpring(0, 1, 288, 30) }))
   }
 }
 
@@ -323,5 +338,10 @@ export struct SortSheet {
     .backgroundColor(Theme.BG_RAISED)
     .borderRadius({ topLeft: 18, topRight: 18 })
     .padding({ bottom: this.tabInset })
+    // 空间动效·弹出（三十一改）：从下往上浮 + 淡入，弹簧收尾。
+    // 需要在状态变更外面套 animateTo 才会真的动（调用点在 LibraryTab / BrowseGrid）。
+    .transition(TransitionEffect.translate({ y: 36 })
+      .combine(TransitionEffect.OPACITY)
+      .animation({ duration: 280, curve: curves.interpolatingSpring(0, 1, 288, 30) }))
   }
 }

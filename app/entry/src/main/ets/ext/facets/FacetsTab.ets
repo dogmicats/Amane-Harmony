@@ -10,6 +10,8 @@ import { ChipOption, SortOption } from '../../common/BrowseOptions';
 import { MergeBar } from '../merge/MergeBar';
 import { KeywordBox } from '../../view/KeywordBox';
 import { BottomSheet, ChipGroup, ChipRow, SortSheet, ToolPill } from '../../view/ListSheets';
+import { GlassBox, GlassCapsule, GlassSearchBar, PageTitle } from '../../view/GlassKit';
+import { ImmersiveGlass } from '../../common/ImmersiveGlass';
 import {
   FacetItem, FacetList, FacetParams, FacetPick, facetLabel, pickOf, safeFacetList
 } from './FacetTypes';
@@ -58,6 +60,11 @@ export struct FacetsTab {
   @State items: FacetItem[] = [];
   /** 标签网格的控制器：底栏自动收起要用绝对偏移判方向（见 common/NavBarWatch）。 */
   private sc: Scroller = new Scroller();
+  /** 七十二改：上一次喂给底栏的偏移（只做节流；位移来自 `onScroll` 的参数，不读布局）。 */
+  private lastNavOff: number = -1;
+  /** 导航栈 / 材质档位（五十五改）：整页套 Navigation 只为拿到标题栏这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+  @StorageProp('amaneGlass') glassLevel: number = 2;
   @State total: number = 0;
   @State loading: boolean = true;
   @State loadingMore: boolean = false;
@@ -781,91 +788,126 @@ export struct FacetsTab {
     this.logoFailed = this.logoFailed.concat([id]);
   }
 
+  /** 顶栏（五十五改）：两行 —— 标题 + 搜索/排序/筛选；大类切换一整条玻璃。 */
   @Builder
-  Header() {
-    Row({ space: 10 }) {
-      Text(facetLabel(this.kind))
-        .fontSize(19)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(Theme.TEXT)
-      Blank()
-      Text(this.loading ? '' : `${this.total} 项`)
-        .fontSize(10)
-        .fontColor(Theme.TEXT_FAINT)
-        .maxLines(1)
-    }
-    .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 8 + this.topInset, bottom: 6 })
-  }
-
-  /** 标签 / 系列 / 导演 / 制片商 / 我的标签：换大类，属于导航不是筛选。 */
-  @Builder
-  KindRow() {
-    Scroll() {
-      ChipRow({
-        options: this.kinds,
-        current: this.kind,
-        onPick: (key: string) => {
-          this.pickKind(key);
+  TopBar() {
+    Column({ space: 4 }) {
+      // 第一行：左上角标题胶囊（46 / 20 Bold，与媒体库同规范）+ 右侧三颗真材质胶囊
+      Row({ space: 6 }) {
+        GlassBox({ radius: 23, padH: 14, padV: 9, mat: true }) {
+          PageTitle({ text: facetLabel(this.kind) })
         }
-      })
-    }
-    .scrollable(ScrollDirection.Horizontal)
-    .scrollBar(BarState.Off)
-    .width('100%')
-    .align(Alignment.Start)
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
-  }
 
-  @Builder
-  SearchBar() {
-    Row() {
-      KeywordBox({
-        placeholder: `搜索${facetLabel(this.kind)}名`,
-        onCommit: (kw: string) => {
-          const next: string = kw.trim();
-          if (next === this.keyword) {
-            return;
-          }
-          this.keyword = next;
-          this.reload();
-        }
-      })
-    }
-    .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
-  }
-
-  @Builder
-  Toolbar() {
-    Row({ space: 8 }) {
-      Text(this.keyword.length > 0 ? '相关度优先' : '')
-        .fontSize(11)
-        .fontColor(Theme.TEXT_FAINT)
-        .maxLines(1)
-        .layoutWeight(1)
-
-      ToolPill({
-        label: `⇅ ${this.sortLabel()}` +
-          (this.sortBy === 'random' ? '' : (this.order === 'desc' ? ' ↓' : ' ↑')),
-        onTap: () => {
-          this.showSort = true;
-        }
-      })
-
-      // user_tag 既没有收藏位也没有隐藏位，抽屉会是空的 —— 干脆不给入口
-      if (this.kind !== 'user_tag') {
-        ToolPill({
-          label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
-          active: this.filterCount() > 0,
-          onTap: () => {
-            this.showFilter = true;
+        // 搜索：统一组件（收着是放大镜，点一下自己长成搜索栏），只筛当前列表
+        GlassSearchBar({
+          placeholder: `搜索${facetLabel(this.kind)}`,
+          // 五十六改：与收藏页那颗放大镜同规格（42/21/18）
+          boxH: 42,
+          rowH: 46,
+          radius: 21,
+          iconSize: 18,
+          mat: true,
+          onCommit: (kw: string) => {
+            if (kw === this.keyword) {
+              return;
+            }
+            this.keyword = kw;
+            this.reload();
           }
         })
+        .layoutWeight(1)
+
+        GlassCapsule({
+          label: `⇅ ${this.sortLabel()}`,
+          fs: 12,
+          padH: 9,
+          padV: 8,
+          radius: 12,
+          maxW: 96,
+          mat: true,
+          onTap: () => {
+            this.showSort = true;
+          }
+        })
+
+        // user_tag 既没有收藏位也没有隐藏位，抽屉会是空的 —— 干脆不给入口
+        if (this.kind !== 'user_tag') {
+          GlassCapsule({
+            label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+            active: this.filterCount() > 0,
+            fs: 12,
+            padH: 9,
+            padV: 8,
+            radius: 12,
+            mat: true,
+            onTap: () => {
+              this.showFilter = true;
+            }
+          })
+        }
       }
+      .width('100%')
+      .height(46)
+      .alignItems(VerticalAlign.Center)
+
+      // 第二行：大类切换 —— **一整条**玻璃，文字直接贴玻璃、选中主题色（与收藏页同一套）
+      Row() {
+        Scroll() {
+          Row({ space: 22 }) {
+            ForEach(this.kinds, (k: ChipOption) => {
+              Text(k.label)
+                .fontSize(15)
+                .fontWeight(this.kind === k.key ? FontWeight.Medium : FontWeight.Normal)
+                .fontColor(this.kind === k.key ? Theme.ACCENT : '#C4FFFFFF')
+                .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
+                .onClick(() => {
+                  if (this.kind !== k.key) {
+                    this.pickKind(k.key);
+                  }
+                })
+            }, (k: ChipOption) => `kind-${k.key}`)
+          }
+          .padding({ left: 14, right: 22 })
+          .height(42)
+        }
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
+        .layoutWeight(1)
+        .align(Alignment.Start)
+      }
+      .width('100%')
+      .height(42)
+      .borderRadius(Theme.R_PILL)
+      .systemMaterial(ImmersiveGlass.materialFor(this.glassLevel))
+      .clip(true)
     }
     .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 8 })
+    .padding({ left: 14, right: 14 })
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46 + 4 + 42。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleShell()
+      },
+      height: this.barH()
+    };
+  }
+
+  @Builder
+  TitleShell() {
+    Column() {
+      this.TopBar()
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
+
+  /** 顶栏占的高度（内容让位用）。 */
+  private barH(): number {
+    return this.topInset + 92;
   }
 
   @Builder
@@ -946,13 +988,10 @@ export struct FacetsTab {
   }
 
   build() {
+    // 五十五改：整页套 Navigation，顶栏进标题栏（真系统材质），分类卡片从玻璃底下穿过
+    Navigation(this.navStack) {
     Stack({ alignContent: Alignment.Bottom }) {
       Column() {
-        this.Header()
-        this.KindRow()
-        this.SearchBar()
-        this.Toolbar()
-
         if (this.tip.length > 0) {
           Text(this.tip)
             .fontSize(10)
@@ -1052,16 +1091,41 @@ export struct FacetsTab {
           .columnsGap(9)
           .rowsGap(9)
           // 平时底部留 84 给悬浮胶囊；多选时操作条自己让出了胶囊的位置，这里就收回
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: this.selecting ? 10 : 84 })
+          // 五十五改：顶部让位放在网格自己的 padding（随内容滚走）→ 分类卡片能滑到玻璃底下
+          .padding({
+            left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6,
+            bottom: this.selecting ? 10 : 84
+          })
           .layoutWeight(1)
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
+          // ★ 五十六改：治「拖动时上下边突然闪现 / 消失」★
+          //
+          //  1）网格没有 `cachedCount`，视口边缘那一排每帧都被创建/销毁 —— 图片解码跟不上，
+          //     就成了「一冒一冒」的闪。六十改：6 → 10（标签卡是 2~3 列大图，6 个余量不够）。
+          //  2）**不要在滚动回调里读 `currentOffset()`**（六十改）。那是每帧一次布局回读，
+          //     网格虚拟化会跟着重排。媒体库/收藏不闪，是因为它们（`view/BrowseGrid`）
+          //     用 `onScrollIndex` 只拿首行索引。这里对齐同一条路子。
+          .cachedCount(10)
           .onReachEnd(() => {
             this.loadMore();
           })
-          // 往下看收起底栏（2026-11-15）：用绝对偏移差分，见 common/NavBarWatch
-          .onScroll((x: number, y: number) => {
-            NavBarWatch.onOffset(this.sc.currentOffset().yOffset);
+          // 往下看收起底栏（2026-11-15），见 common/NavBarWatch
+          //
+          // ★ 七十二改：与演员页同因同治 —— `onScrollIndex` 是「按行跳」的位移，
+          // 一次跳一行（卡片大时 ≈ 100vp），底栏跟着一顿一顿翻，Tabs 的 barHeight
+          // 动画被反复触发，网格边缘那一排反复创建/销毁 = 「上下边突然闪现」。
+          // 改用 `onScroll` 的 `yOffset`（框架直接给，不是布局回读）+ 24vp 节流。
+          .onScroll((xOff: number, yOff: number) => {
+            if (this.lastNavOff < 0) {
+              this.lastNavOff = yOff;
+              return;
+            }
+            if (Math.abs(yOff - this.lastNavOff) < 24) {
+              return;
+            }
+            this.lastNavOff = yOff;
+            NavBarWatch.onOffset(yOff);
           })
         }
 
@@ -1128,6 +1192,15 @@ export struct FacetsTab {
     }
     .width('100%')
     .height('100%')
-.expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    // 五十六改：与演员页同因同治 —— 内容层不要再叠 expandSafeArea（媒体库/收藏没有它就不闪）
+    }
+    // 五十五改：Navigation 壳（与首页/媒体库/收藏/演员同构）
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
+    .width('100%')
+    .height('100%')
+    .backgroundColor(Theme.BG)
   }
 }

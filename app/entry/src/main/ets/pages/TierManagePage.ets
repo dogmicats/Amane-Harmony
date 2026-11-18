@@ -1,4 +1,5 @@
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 
 /**
  * 已废弃（2.5.4.7）：这里原本是「我的 Tier 图 · 历史」列表页。
@@ -15,6 +16,12 @@ import { router } from '@kit.ArkUI';
 struct TierManagePage {
   aboutToAppear(): void {
     router.replaceUrl({ url: 'pages/TierPage' });
+  }
+
+  /** 七十二改：这页没有状态栏让位逻辑，**显式退回非全屏窗口** —— 
+   * 否则从全屏的二级页推过来，标题会被时钟压住。入口是谁都不怕。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), false);
   }
 
   build() {

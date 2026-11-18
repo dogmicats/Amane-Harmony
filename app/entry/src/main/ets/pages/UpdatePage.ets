@@ -6,6 +6,7 @@ import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { BuildConfig } from '../common/BuildConfig';
 import { UpdateWatch } from '../common/UpdateWatch';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /** 公开版的兜底步骤（`BuildConfig.CHANNEL === 'public'`）。不写端口、不写账号密码。 */
 const HOWTO_PUBLIC: string =
@@ -461,42 +462,6 @@ struct UpdatePage {
     return '';
   }
 
-  @Builder
-  Header() {
-    Row({ space: 10 }) {
-      Text('‹')
-        .fontSize(24)
-        .fontColor(Theme.TEXT)
-        .width(30)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          router.back();
-        })
-      Column({ space: 2 }) {
-        Text('检查更新')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
-        Text(`当前客户端 ${this.clientNow.length > 0 ? this.clientNow : '—'}`)
-          .fontSize(11)
-          .fontColor(Theme.TEXT_FAINT)
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-      Text('重新检查')
-        .fontSize(11)
-        .fontColor(Theme.ACCENT)
-        .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-        .backgroundColor(Theme.CARD)
-        .borderRadius(9)
-        .onClick(() => {
-          this.runCheck();
-        })
-    }
-    .width('100%')
-    .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 8 })
-  }
 
   /**
    * 版本行。**参数只传「哪一行」，值一律在 builder 内读状态** ——
@@ -727,7 +692,10 @@ struct UpdatePage {
             .fontSize(10)
             .fontColor(Theme.ACCENT)
             .padding({ left: 8, right: 8, top: 5, bottom: 5 })
-            .backgroundColor(Theme.CARD)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor('#1FFFFFFF')
+            .border({ width: 0.5, color: '#33FFFFFF' })
+            .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
             .borderRadius(8)
             .onClick(() => {
               this.howtoOpen = !this.howtoOpen;
@@ -782,7 +750,10 @@ struct UpdatePage {
             .fontSize(10)
             .fontColor(Theme.ACCENT)
             .padding({ left: 8, right: 8, top: 5, bottom: 5 })
-            .backgroundColor(Theme.CARD)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor('#1FFFFFFF')
+            .border({ width: 0.5, color: '#33FFFFFF' })
+            .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
             .borderRadius(8)
             .onClick(() => {
               this.howtoOpen = !this.howtoOpen;
@@ -810,7 +781,10 @@ struct UpdatePage {
             .fontSize(10)
             .fontColor(Theme.ACCENT)
             .padding({ left: 8, right: 8, top: 5, bottom: 5 })
-            .backgroundColor(Theme.CARD)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor('#1FFFFFFF')
+            .border({ width: 0.5, color: '#33FFFFFF' })
+            .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
             .borderRadius(8)
             .onClick(() => {
               this.howtoOpen = !this.howtoOpen;
@@ -819,7 +793,10 @@ struct UpdatePage {
             .fontSize(10)
             .fontColor(Theme.ACCENT)
             .padding({ left: 8, right: 8, top: 5, bottom: 5 })
-            .backgroundColor(Theme.CARD)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor('#1FFFFFFF')
+            .border({ width: 0.5, color: '#33FFFFFF' })
+            .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
             .borderRadius(8)
             .onClick(() => {
               this.copyHowto();
@@ -858,219 +835,270 @@ struct UpdatePage {
     .borderRadius(12)
   }
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
-      this.Header()
-
-      Scroll() {
-        Column({ space: 10 }) {
-          this.MainCard()
-          this.FreshnessCard()
-
-          Column({ space: 8 }) {
-            Text(this.stateLine())
-              .fontSize(12)
-              .fontColor(this.stateColor())
-              .width('100%')
-              .lineHeight(18)
-
-            if (this.st === ST_FAILED && this.attempts.length > 0) {
-              Text(this.attempts)
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width('100%')
-                .lineHeight(15)
-                .copyOption(CopyOptions.LocalDevice)
-            }
-            if (this.st === ST_FAILED && this.hint.length > 0) {
-              Text(this.hint)
-                .fontSize(10)
-                .fontColor(Theme.TEXT_DIM)
-                .width('100%')
-                .lineHeight(15)
-            }
-
-            if (this.st === ST_DOWNLOADING) {
-              Progress({
-                value: this.pct < 0 ? 0 : this.pct,
-                total: 100,
-                type: ProgressType.Linear
-              })
-                .width('100%')
-                .height(4)
-                .color(Theme.ACCENT)
-                .backgroundColor(Theme.CARD_HI)
-            }
-
-            if (this.notes.length > 0) {
-              Text(this.notes)
-                .fontSize(11)
-                .fontColor(Theme.TEXT_DIM)
-                .width('100%')
-                .lineHeight(17)
-            }
-
-            if (this.st === ST_DONE && this.clientUpdatable && !this.demo) {
-              Row({ space: 8 }) {
-                Text(`下载新版本 ${this.clientLatest}`)
-                  .fontSize(12)
-                  .fontColor('#FFFFFF')
-                  .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-                  .backgroundColor(Theme.ACCENT)
-                  .borderRadius(10)
-                  .onClick(() => {
-                    this.startDownload();
-                  })
-                if (this.currentSize > 0) {
-                  Text(this.mb(this.currentSize))
-                    .fontSize(10)
-                    .fontColor(Theme.TEXT_FAINT)
-                }
-              }
-              .width('100%')
-            }
-
-            if (this.st === ST_READY) {
-              Text(installHint())
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width('100%')
-                .lineHeight(16)
-              Text(installHintFallback())
-                .fontSize(9)
-                .fontColor(Theme.TEXT_FAINT)
-                .width('100%')
-                .lineHeight(14)
-              Row({ space: 8 }) {
-                Text(this.savedUri.length > 0 ? '已存到手机' : '另存到手机')
-                  .fontSize(12)
-                  .fontColor(this.savedUri.length > 0 ? Theme.GOLD : '#FFFFFF')
-                  .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-                  .backgroundColor(this.savedUri.length > 0 ? Theme.CARD_HI : Theme.ACCENT)
-                  .borderRadius(10)
-                  .onClick(() => {
-                    if (this.savedUri.length === 0) {
-                      this.saveToPhone();
-                    }
-                  })
-              }
-              .width('100%')
-            }
-
-            if (this.st === ST_FAILED) {
-              Text('重试')
-                .fontSize(12)
-                .fontColor(Theme.ACCENT)
-                .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-                .backgroundColor(Theme.ACCENT_SOFT)
-                .borderRadius(10)
-                .onClick(() => {
-                  this.runCheck();
-                })
-            }
+      Row({ space: 10 }) {
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
           }
-          .width('100%')
-          .padding(12)
-          .backgroundColor(Theme.CARD)
-          .borderRadius(12)
+        })
+        Column({ space: 2 }) {
+          PageTitle({ text: '检查更新', fs: 18 })
+          Text(`当前客户端 ${this.clientNow.length > 0 ? this.clientNow : '—'}`)
+            .fontSize(11)
+            .fontColor(Theme.TEXT_FAINT)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        Text('重新检查')
+          .fontSize(11)
+          .fontColor(Theme.ACCENT)
+          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+          .backgroundColor('#1FFFFFFF')
+          .border({ width: 0.5, color: '#33FFFFFF' })
+          .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
+          .borderRadius(9)
+          .onClick(() => {
+            this.runCheck();
+          })
+      }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
+      .width('100%')
+      .padding({ left: 8, right: Theme.PAGE_PAD })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
 
-          this.ServerCard()
+  @StorageProp('amaneTopInset') topInset: number = 30;
 
-          // 手填清单地址是自测线的调试口：公开版固定走默认源（Release → 镜像 → 自有服务端），
-          // 不该让用户看到「测试版」「留空 = 用服务端默认清单」这类内部说法。
-          if (BuildConfig.CHANNEL === 'self') {
-          Column({ space: 4 }) {
-            Row({ space: 8 }) {
-              TextInput({ text: this.draft, placeholder: '留空 = 用服务端默认清单' })
-                .fontSize(10)
-                .height(32)
-                .layoutWeight(1)
-                .backgroundColor(Theme.CARD_HI)
-                .fontColor(Theme.TEXT)
-                .placeholderColor(Theme.TEXT_FAINT)
-                .onChange((v: string) => {
-                  this.draft = v;
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column() {
+
+        Scroll() {
+          Column({ space: 10 }) {
+
+          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
+          // 材质才有颜色可采样。
+          Blank().height(this.barH())
+            this.MainCard()
+            this.FreshnessCard()
+
+            Column({ space: 8 }) {
+              Text(this.stateLine())
+                .fontSize(12)
+                .fontColor(this.stateColor())
+                .width('100%')
+                .lineHeight(18)
+
+              if (this.st === ST_FAILED && this.attempts.length > 0) {
+                Text(this.attempts)
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .width('100%')
+                  .lineHeight(15)
+                  .copyOption(CopyOptions.LocalDevice)
+              }
+              if (this.st === ST_FAILED && this.hint.length > 0) {
+                Text(this.hint)
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_DIM)
+                  .width('100%')
+                  .lineHeight(15)
+              }
+
+              if (this.st === ST_DOWNLOADING) {
+                Progress({
+                  value: this.pct < 0 ? 0 : this.pct,
+                  total: 100,
+                  type: ProgressType.Linear
                 })
-              Text('保存并检查')
-                .fontSize(10)
-                .fontColor(Theme.ACCENT)
-                .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-                .backgroundColor(Theme.ACCENT_SOFT)
-                .borderRadius(8)
-                .onClick(() => {
-                  Store.I.prefSetString('update_manifest_url', this.draft.trim());
-                  this.runCheck();
-                })
-              Text('恢复默认')
-                .fontSize(10)
-                .fontColor(Theme.ACCENT)
-                .padding({ left: 8, right: 8, top: 6, bottom: 6 })
-                .backgroundColor(Theme.CARD_HI)
-                .borderRadius(8)
-                .onClick(() => {
-                  Store.I.prefSetString('update_manifest_url', '');
-                  this.draft = '';
-                  this.runCheck();
-                })
+                  .width('100%')
+                  .height(4)
+                  .color(Theme.ACCENT)
+                  .backgroundColor(Theme.CARD_HI)
+              }
+
+              if (this.notes.length > 0) {
+                Text(this.notes)
+                  .fontSize(11)
+                  .fontColor(Theme.TEXT_DIM)
+                  .width('100%')
+                  .lineHeight(17)
+              }
+
+              if (this.st === ST_DONE && this.clientUpdatable && !this.demo) {
+                Row({ space: 8 }) {
+                  Text(`下载新版本 ${this.clientLatest}`)
+                    .fontSize(12)
+                    .fontColor(Theme.ACCENT)
+                    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+                    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                    .backgroundColor(Theme.accentAlpha(0.30))
+                    .border({ width: 1, color: Theme.accentAlpha(0.55) })
+                    .borderRadius(10)
+                    .onClick(() => {
+                      this.startDownload();
+                    })
+                  if (this.currentSize > 0) {
+                    Text(this.mb(this.currentSize))
+                      .fontSize(10)
+                      .fontColor(Theme.TEXT_FAINT)
+                  }
+                }
+                .width('100%')
+              }
+
+              if (this.st === ST_READY) {
+                Text(installHint())
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .width('100%')
+                  .lineHeight(16)
+                Text(installHintFallback())
+                  .fontSize(9)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .width('100%')
+                  .lineHeight(14)
+                Row({ space: 8 }) {
+                  Text(this.savedUri.length > 0 ? '已存到手机' : '另存到手机')
+                    .fontSize(12)
+                    .fontColor(this.savedUri.length > 0 ? Theme.GOLD : '#FFFFFF')
+                    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+                    .backgroundColor(this.savedUri.length > 0 ? Theme.CARD_HI : Theme.ACCENT)
+                    .borderRadius(10)
+                    .onClick(() => {
+                      if (this.savedUri.length === 0) {
+                        this.saveToPhone();
+                      }
+                    })
+                }
+                .width('100%')
+              }
+
+              if (this.st === ST_FAILED) {
+                Text('重试')
+                  .fontSize(12)
+                  .fontColor(Theme.ACCENT)
+                  .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+                  .backgroundColor(Theme.ACCENT_SOFT)
+                  .borderRadius(10)
+                  .onClick(() => {
+                    this.runCheck();
+                  })
+              }
             }
             .width('100%')
-            Text(`当前在用：${this.manifestUrl}`)
-              .fontSize(9)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .lineHeight(14)
+            .padding(12)
+            .backgroundColor(Theme.CARD)
+            .borderRadius(12)
 
-            // 验收自检只在自测线出现：公开包里 CHANNEL 是 public，整块不渲染，
-            // 用户不会看到「0.0.0」这种假版本号，也不会去点一个没有真实包的按钮。
+            this.ServerCard()
+
+            // 手填清单地址是自测线的调试口：公开版固定走默认源（Release → 镜像 → 自有服务端），
+            // 不该让用户看到「测试版」「留空 = 用服务端默认清单」这类内部说法。
             if (BuildConfig.CHANNEL === 'self') {
+            Column({ space: 4 }) {
               Row({ space: 8 }) {
-                Text(this.demo ? '退回真实结果' : '验收自检（不用联网）')
+                TextInput({ text: this.draft, placeholder: '留空 = 用服务端默认清单' })
+                  .fontSize(10)
+                  .height(32)
+                  .layoutWeight(1)
+                  .backgroundColor(Theme.CARD_HI)
+                  .fontColor(Theme.TEXT)
+                  .placeholderColor(Theme.TEXT_FAINT)
+                  .onChange((v: string) => {
+                    this.draft = v;
+                  })
+                Text('保存并检查')
                   .fontSize(10)
                   .fontColor(Theme.ACCENT)
                   .padding({ left: 10, right: 10, top: 6, bottom: 6 })
                   .backgroundColor(Theme.ACCENT_SOFT)
                   .borderRadius(8)
                   .onClick(() => {
-                    if (this.demo) {
-                      this.runCheck();
-                    } else {
-                      this.applyDemo();
-                    }
+                    Store.I.prefSetString('update_manifest_url', this.draft.trim());
+                    this.runCheck();
                   })
-                Text(this.demo ? '内置演示数据，不会下载' : '一键造出「可更新」态，看服务端升级步骤')
-                  .fontSize(9)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .layoutWeight(1)
-                  .lineHeight(14)
+                Text('恢复默认')
+                  .fontSize(10)
+                  .fontColor(Theme.ACCENT)
+                  .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+                  .backgroundColor(Theme.CARD_HI)
+                  .borderRadius(8)
+                  .onClick(() => {
+                    Store.I.prefSetString('update_manifest_url', '');
+                    this.draft = '';
+                    this.runCheck();
+                  })
               }
               .width('100%')
-            }
-
-            Text('发布版默认按 GitHub Release → 仓库镜像 → CDN 镜像 → 自有服务端 依次找清单；' +
-              '自测版可在上面手填任意地址，连不上会自动回退到下一个源。')
-              .fontSize(9)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .lineHeight(14)
-            Text('这个 App 是自己签名侧载安装的，系统不允许 App 自己装自己 —— ' +
-              '公开接口里没有安装能力。所以最后一步必须你点一下。' +
-              '下载的包会做 sha256 校验，对不上自动删掉。')
-              .fontSize(9)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .lineHeight(14)
-          }
-          .width('100%')
-          .padding({ top: 4, bottom: Theme.BOTTOM_SAFE })
-          } else {
-            Column({ space: 4 }) {
-              Text('检查时按 GitHub Release → 仓库镜像 → CDN 镜像 → 自有服务端 依次找清单，连不上自动换下一个源。')
+              Text(`当前在用：${this.manifestUrl}`)
                 .fontSize(9)
                 .fontColor(Theme.TEXT_FAINT)
                 .width('100%')
                 .lineHeight(14)
-              Text('这个 App 是侧载安装的，系统不允许 App 自己装自己 —— 公开接口里没有安装能力，' +
-                '所以最后一步必须你点一下。下载的包会做 sha256 校验，对不上自动删掉。')
+
+              // 验收自检只在自测线出现：公开包里 CHANNEL 是 public，整块不渲染，
+              // 用户不会看到「0.0.0」这种假版本号，也不会去点一个没有真实包的按钮。
+              if (BuildConfig.CHANNEL === 'self') {
+                Row({ space: 8 }) {
+                  Text(this.demo ? '退回真实结果' : '验收自检（不用联网）')
+                    .fontSize(10)
+                    .fontColor(Theme.ACCENT)
+                    .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+                    .backgroundColor(Theme.ACCENT_SOFT)
+                    .borderRadius(8)
+                    .onClick(() => {
+                      if (this.demo) {
+                        this.runCheck();
+                      } else {
+                        this.applyDemo();
+                      }
+                    })
+                  Text(this.demo ? '内置演示数据，不会下载' : '一键造出「可更新」态，看服务端升级步骤')
+                    .fontSize(9)
+                    .fontColor(Theme.TEXT_FAINT)
+                    .layoutWeight(1)
+                    .lineHeight(14)
+                }
+                .width('100%')
+              }
+
+              Text('发布版默认按 GitHub Release → 仓库镜像 → CDN 镜像 → 自有服务端 依次找清单；' +
+                '自测版可在上面手填任意地址，连不上会自动回退到下一个源。')
+                .fontSize(9)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+                .lineHeight(14)
+              Text('这个 App 是自己签名侧载安装的，系统不允许 App 自己装自己 —— ' +
+                '公开接口里没有安装能力。所以最后一步必须你点一下。' +
+                '下载的包会做 sha256 校验，对不上自动删掉。')
                 .fontSize(9)
                 .fontColor(Theme.TEXT_FAINT)
                 .width('100%')
@@ -1078,17 +1106,41 @@ struct UpdatePage {
             }
             .width('100%')
             .padding({ top: 4, bottom: Theme.BOTTOM_SAFE })
+            } else {
+              Column({ space: 4 }) {
+                Text('检查时按 GitHub Release → 仓库镜像 → CDN 镜像 → 自有服务端 依次找清单，连不上自动换下一个源。')
+                  .fontSize(9)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .width('100%')
+                  .lineHeight(14)
+                Text('这个 App 是侧载安装的，系统不允许 App 自己装自己 —— 公开接口里没有安装能力，' +
+                  '所以最后一步必须你点一下。下载的包会做 sha256 校验，对不上自动删掉。')
+                  .fontSize(9)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .width('100%')
+                  .lineHeight(14)
+              }
+              .width('100%')
+              .padding({ top: 4, bottom: Theme.BOTTOM_SAFE })
+            }
           }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4 })
+          .constraintSize({ minHeight: '100%' })
+          .justifyContent(FlexAlign.Start)
         }
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4 })
-        .constraintSize({ minHeight: '100%' })
-        .justifyContent(FlexAlign.Start)
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
       }
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

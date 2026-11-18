@@ -1,4 +1,5 @@
 import { router, uiMaterial, promptAction } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
@@ -790,6 +791,7 @@ export struct DetailPage {
    * （用户上一轮第 3 条：提示改成高亮，别用弹窗打断）。
    */
   onPageShow(): void {
+    setPageFullScreen(getContext(this), false);
     // 带着浮窗回到这一页：把画面接回页面内，别让小窗和页面同时出声
     if (FloatBox.isOpen) {
       const s: PlayHandoff | undefined = PlaySession.active;
@@ -1774,7 +1776,10 @@ export struct DetailPage {
               .width('100%')
               .textAlign(TextAlign.Center)
               .padding({ top: 10, bottom: 10 })
-              .backgroundColor(Theme.CARD)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+              .backgroundColor('#1FFFFFFF')
+              .border({ width: 0.5, color: '#33FFFFFF' })
+              .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
               .borderRadius(10)
               .onClick(() => {
                 this.downloadAllVersions();
@@ -2007,7 +2012,10 @@ export struct DetailPage {
       .fontSize(11)
       .fontColor(Theme.TEXT_DIM)
       .padding({ left: 9, right: 9, top: 4, bottom: 4 })
-      .backgroundColor(Theme.CARD)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+      .backgroundColor('#1FFFFFFF')
+      .border({ width: 0.5, color: '#33FFFFFF' })
+      .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
       .borderRadius(11)
       .margin({ right: 6, bottom: 6 })
   }
@@ -2295,7 +2303,6 @@ export struct DetailPage {
               // 今日推荐理由：紧跟主按钮 —— 从推荐位进来的人第一眼就看到「为什么是它」
               this.ReasonCard()
 
-              // 私有扩展（归档）：「归档」（2.6.1.22 从圆钮降级成横条 + 说明）。
 
               // 公开扩展 ratings：我的评分。和头部那个上游站点评分隔开，两套数据互不覆盖。
               if (BuildConfig.ENABLE_RATINGS) {
@@ -2817,15 +2824,15 @@ export struct DetailPage {
 
         // 返回按钮（嵌在播放页里时不画：那时候的「返回」是播放页自己的事）
         if (!this.embedded && !this.playerOn) {
+          // 五十八改：形状与基底的返回胶囊统一（34 见方 / 圆角 12 / 20 号字），
+          // 材质仍用 ULTRA_THIN + 半透明黑（它浮在海报上，需要一点压暗才看得清）
           Text('‹')
-            .fontSize(24)
+            .fontSize(20)
             .fontColor('#FFFFFF')
-            .width(36)
-            .height(36)
+            .width(34)
+            .height(34)
             .textAlign(TextAlign.Center)
-            .borderRadius(18)
-            // 沉浸光感：用系统材质替掉手写的半透明底 + 模糊，边缘会带流光；
-            // 老设备不支持材质时退回半透明底（材质生效时会接管 backgroundColor）
+            .borderRadius(12)
             .backgroundColor('#40000000')
             .systemMaterial(new uiMaterial.ImmersiveMaterial({
               style: uiMaterial.ImmersiveStyle.ULTRA_THIN,

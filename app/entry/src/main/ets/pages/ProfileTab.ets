@@ -8,6 +8,7 @@ import { StatsInfo } from '../common/Types';
 import { BuildConfig } from '../common/BuildConfig';
 import { UpdateWatch } from '../common/UpdateWatch';
 import { NavBarWatch } from '../common/NavBarWatch';
+import { GlassBox, PageTitle } from '../view/GlassKit';
 
 @Component
 export struct ProfileTab {
@@ -26,6 +27,8 @@ export struct ProfileTab {
   @StorageProp('update_ver_client') verClient: string = '';
   @StorageProp('update_ver_server') verServer: string = '';
   /** 主滚动区的控制器：底栏自动收起要用绝对偏移判断方向（见 HomeTab 同名注释）。 */
+  /** 导航栈（五十七改）：整页套 Navigation 只为拿到标题栏这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
   private sc: Scroller = new Scroller();
 
   /** 版本号从包信息读，别手写，省得发版忘了改。 */
@@ -190,21 +193,54 @@ export struct ProfileTab {
     ])
   }
 
+  /** 标题行（五十七改）：左上角「我的」装进规范胶囊（46 / 20 Bold，与媒体库同规格）。 */
+  @Builder
+  Header() {
+    Row({ space: 8 }) {
+      GlassBox({ radius: 23, padH: 14, padV: 9, mat: true }) {
+        PageTitle({ text: '我的' })
+      }
+      Blank()
+      if (this.dotClient || this.dotServer) {
+        this.UpdateEntry()
+      }
+    }
+    .width('100%')
+    .height(46)
+    .alignItems(VerticalAlign.Center)
+  }
+
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleShell()
+      },
+      height: this.barH()
+    };
+  }
+
+  @Builder
+  TitleShell() {
+    Column() {
+      this.Header()
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset, left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+  }
+
+  /** 顶栏占的高度（内容让位用）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
   build() {
+    // 五十七改：整页套 Navigation —— 标题胶囊要落在**标题栏**里才是真系统材质。
+    Navigation(this.navStack) {
     Scroll(this.sc) {
       Column({ space: 12 }) {
-        Row() {
-          Text('我的')
-            .fontSize(20)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Theme.TEXT)
-          Blank()
-          if (this.dotClient || this.dotServer) {
-            this.UpdateEntry()
-          }
-        }
-        .width('100%')
-        .padding({ top: 8 + this.topInset })
+        // 标题已搬进标题栏（`Header`），这里留个等高的空位，内容才知道要让开多少
+        Blank().height(this.barH() + 8)
 
         // 2026-11-15 用户重排：原来这三个数字（收藏 / 看过 / 库内条目）搬进「我的内容」，
         // 这个位置让给**每天都会点**的两项：观看记录、稍后再看。
@@ -279,5 +315,14 @@ export struct ProfileTab {
         NavBarWatch.onOffset(this.sc.currentOffset().yOffset);
       })
       .backgroundColor(Theme.BG)
+    }
+    // 五十七改：Navigation 壳（barStyle STACK = 标题栏浮在内容之上）
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
+    .width('100%')
+    .height('100%')
+    .backgroundColor(Theme.BG)
   }
 }

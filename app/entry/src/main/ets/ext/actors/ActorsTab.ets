@@ -1,4 +1,4 @@
-import { router } from '@kit.ArkUI';
+import { curves, router } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet } from '../../common/Http';
 import { Store } from '../../common/Store';
@@ -9,6 +9,8 @@ import { ChipOption, SortOption } from '../../common/BrowseOptions';
 import { ActorItem, ActorList, ActorParams, safeActorList } from './ActorTypes';
 import { KeywordBox } from '../../view/KeywordBox';
 import { BottomSheet, ChipGroup, SortSheet, ToolPill } from '../../view/ListSheets';
+import { GlassBox, GlassCapsule, GlassSearchBar, PageTitle } from '../../view/GlassKit';
+import { ImmersiveGlass } from '../../common/ImmersiveGlass';
 
 const PAGE_SIZE: number = 30;
 
@@ -41,9 +43,26 @@ export struct ActorsTab {
   @Prop @Watch('onRefresh') refreshKey: number = 0;
   /** 顶部状态栏高度（真全屏下顶栏要让出这么多，见 Index.readInsets）。 */
   @StorageProp('amaneTopInset') topInset: number = 30;
+  /** 材质档位（五十一改）：与媒体库/收藏同一来源。 */
+  @StorageProp('amaneGlass') glassLevel: number = 2;
   @State items: ActorItem[] = [];
   /** 演员网格的控制器：底栏自动收起要用绝对偏移判方向（见 common/NavBarWatch）。 */
   private sc: Scroller = new Scroller();
+  /**
+   * 七十二改：上一次喂给底栏的滚动偏移（**只用来节流，不读布局**）。
+   *
+   * 这一页的「拖动时上下边一冒一冒」又回来了。前两轮的修法都没打中：
+   *   · `cachedCount` 加大 → 治的是解码跟不上，不是边界抖动；
+   *   · `onScrollIndex` 只给「第一个可见行」，行高不一时它给出的位移是**跳变**的
+   *     （一次跳一行 = 40vp），底栏跟着跳，Tabs 的 `barHeight` 动画就被触发得一顿一顿。
+   * 现在改成真正的绝对偏移：`onScroll` 的第二个参数本身就是 `yOffset`，
+   * **不用 `currentOffset()`**（那才是布局回读），再做 24vp 节流 ——
+   * 与收藏页同一个节拍，但少一次布局回读。
+   */
+  private lastNavOff: number = -1;
+  /** 导航栈（五十一改）：整页套 Navigation 只为拿到标题栏这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+  // 页内搜索的状态与形变逻辑已收进 iew/GlassKit 的 GlassSearchBar（五十五改）
   @State total: number = 0;
   @State loading: boolean = true;
   @State loadingMore: boolean = false;
@@ -462,75 +481,97 @@ export struct ActorsTab {
     })
   }
 
-  /** 标题行：页面名 + 共演入口（和媒体库右上角的搜索入口同一个位置关系）。 */
+  /**
+  /**
+   * 标题行（五十一 / 五十四改）：左上「演员」胶囊 + 中间搜索胶囊 + 右上 排序 / 筛选。
+   *
+   * ★ 五十四改（用户）：**一颗胶囊自己长成搜索栏**，不是「凭空多出一个输入框 + 一颗取消」★
+   *   之前那版展开后会同时出现 KeywordBox 自带的 ✕ 和一颗「取消」胶囊 —— 两个叉。
+   *   现在中间只有**同一颗胶囊**：
+   *     收着 → 33 宽的放大镜胶囊，贴在中间弹性区的右端（就是原来的位置）
+   *     展开 → 同一颗胶囊把宽度长到整段弹性区的宽度（`width` 在 animateTo 里补间，
+   *            是真正的宽度形变，不是换了一个节点），里面从左到右：放大镜 + 输入框 + 一个 ✕
+   *   ✕ 的行为：有字先清字，没字才收起来 —— 一颗叉管两件事，所以只有一个叉。
+   */
   @Builder
   Header() {
-    Row({ space: 8 }) {
-      Text('演员')
-        .fontSize(19)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(Theme.TEXT)
-      Blank()
-      Text('共演')
-        .fontSize(11)
-        .fontColor('#FFFFFF')
-        .padding({ left: 11, right: 11, top: 5, bottom: 5 })
-        .backgroundColor(Theme.ACCENT)
-        .borderRadius(11)
-        .onClick(() => {
-          router.pushUrl({ url: 'ext/actors/CastFinderPage' });
-        })
-    }
-    .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 8 + this.topInset, bottom: 6 })
-  }
+    Row({ space: 6 }) {
+      GlassBox({ radius: 23, padH: 14, padV: 9, mat: true }) {
+        PageTitle({ text: '演员' })
+      }
 
-  @Builder
-  SearchBar() {
-    Row() {
-      KeywordBox({
-        placeholder: '搜索演员名 / 别名',
+      // 搜索胶囊（五十五改）：统一组件 —— 收着是 33 见方的放大镜，点一下自己长成搜索栏
+      GlassSearchBar({
+        placeholder: '搜索演员',
+        // 五十六改：放大镜统一成 42/21/18（与收藏页那颗一模一样；首页那颗是 46/23/20，同一比例）
+        boxH: 42,
+        rowH: 46,
+        radius: 21,
+        iconSize: 18,
+        mat: true,
         onCommit: (kw: string) => {
-          const next: string = kw.trim();
-          if (next === this.keyword) {
+          if (kw === this.keyword) {
             return;
           }
-          this.keyword = next;
+          this.keyword = kw;
           this.reload();
         }
       })
-    }
-    .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
-  }
+      .layoutWeight(1)
 
-  @Builder
-  Toolbar() {
-    Row({ space: 8 }) {
-      Text(this.keyword.length > 0
-        ? `「${this.keyword}」${this.total} 位 · 相关度优先`
-        : `${this.total} 位`)
-        .fontSize(11)
-        .fontColor(Theme.TEXT_FAINT)
-        .maxLines(1)
-        .layoutWeight(1)
-
-      ToolPill({
-        label: `⇅ ${this.sortLabel()} ${this.order === 'desc' ? '↓' : '↑'}`,
+      GlassCapsule({
+        label: `⇅ ${this.sortLabel()}`,
+        fs: 12,
+        padH: 9,
+        padV: 8,
+        radius: 12,
+        maxW: 96,
+        mat: true,
         onTap: () => {
           this.showSort = true;
         }
       })
-      ToolPill({
+      GlassCapsule({
         label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
         active: this.filterCount() > 0,
+        fs: 12,
+        padH: 9,
+        padV: 8,
+        radius: 12,
+        mat: true,
         onTap: () => {
           this.showFilter = true;
         }
       })
     }
     .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 8 })
+    .height(46)
+    .alignItems(VerticalAlign.Center)
+  }
+
+  /** 标题栏配置（五十一改）：高度 = 状态栏 + 46，第一行不加多余上边距（与媒体库对齐）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleShell()
+      },
+      height: this.barH()
+    };
+  }
+
+  @Builder
+  TitleShell() {
+    Column() {
+      this.Header()
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset, left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+  }
+
+  /** 顶栏占的高度：状态栏 + 一行 46。 */
+  private barH(): number {
+    return this.topInset + 46;
   }
 
   @Builder
@@ -650,12 +691,11 @@ export struct ActorsTab {
   }
 
   build() {
+    // 五十一改：整页套 Navigation —— 顶上那条 header 要落在**标题栏**里，
+    // 沉浸材质才出像素（与首页 / 媒体库 / 收藏同一个结构）。
+    Navigation(this.navStack) {
     Stack({ alignContent: Alignment.Bottom }) {
       Column() {
-        this.Header()
-        this.SearchBar()
-        this.Toolbar()
-
         if (this.loading) {
           Column() {
             LoadingProgress()
@@ -745,17 +785,37 @@ export struct ActorsTab {
           .columnsGap(9)
           .rowsGap(12)
           // 首帧视口高度可能比实际短，Grid 虚拟化会把底部一条留着不画（滑一下才"闪现"）
-          .cachedCount(6)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 84 })
+          // 六十改：6 → 10。演员是 2 列大图（头像 0.8 高宽比），6 个只够 3 行，
+          // 快速拖动时视口边缘那一排还是会被反复创建/销毁 → 改成 10 个（5 行）留足余量。
+          .cachedCount(10)
+          // 五十一改：顶部让位放在网格自己的 padding（随滚动走），演员卡片才会滑到玻璃底下
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6, bottom: 84 })
           .layoutWeight(1)
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
           .onReachEnd(() => {
             this.loadMore();
           })
-          // 往下看收起底栏（2026-11-15）：用绝对偏移差分，见 common/NavBarWatch
-          .onScroll((x: number, y: number) => {
-            NavBarWatch.onOffset(this.sc.currentOffset().yOffset);
+          // 往下看收起底栏（2026-11-15），见 common/NavBarWatch。
+          //
+          // ★ 七十二改：`onScrollIndex` → `onScroll`，用**连续偏移 + 24vp 节流** ★
+          //
+          // 六十改改成索引回调是为了避开 `currentOffset()` 的布局回读，但索引是
+          // 「按行跳」的：演员是 2 列大图，一次跳一行 ≈ 40vp，底栏跟着一顿一顿地翻，
+          // Tabs 的 `barHeight` 动画（58 ↔ 0）于是被反复触发 —— 内容区高度每帧变一点，
+          // 网格边缘那一排就被反复创建/销毁，就是用户看到的「上下边突然闪现/消失」。
+          // 这里换成 `onScroll` 的 `yOffset` 参数（框架直接给，不是回读），
+          // 再按 24vp 节流，位移连续、写入次数和收藏页一样。
+          .onScroll((xOff: number, yOff: number) => {
+            if (this.lastNavOff < 0) {
+              this.lastNavOff = yOff;
+              return;
+            }
+            if (Math.abs(yOff - this.lastNavOff) < 24) {
+              return;
+            }
+            this.lastNavOff = yOff;
+            NavBarWatch.onOffset(yOff);
           })
         }
       }
@@ -802,6 +862,18 @@ export struct ActorsTab {
     }
     .width('100%')
     .height('100%')
-.expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    // ★ 五十六改：**去掉内容层的 expandSafeArea** ★
+    // 媒体库 / 收藏这两页没有它，拖动一点都不闪；演员 / 标签有它，内容比可见屏幕高一截，
+    // 滚动时视口边界把卡片一排排创建/销毁 —— 就是用户看到的「上下边一冒一冒、真全屏也不对」。
+    // 全屏由 Index 那层 `Tabs.expandSafeArea` 负责，内容层不需要再叠一次。
+    }
+    // 五十一改：Navigation 壳（barStyle STACK = 标题栏浮在内容之上，卡片从它底下穿过）
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
+    .width('100%')
+    .height('100%')
+    .backgroundColor(Theme.BG)
   }
 }

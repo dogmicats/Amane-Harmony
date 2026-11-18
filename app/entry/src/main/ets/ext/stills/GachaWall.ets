@@ -38,6 +38,25 @@ export struct GachaWall {
   /** 抽卡开关：由页面持有，放在标题行右端 —— 开和关都在同一侧。 */
   @Prop gachaOn: boolean = true;
   onToggleGacha: (v: boolean) => void = (v: boolean) => {};
+  /**
+   * 不画自己的墙头（2026-11-17）：媒体库把「抽卡」做成标题栏上的高亮按钮后，
+   * 这里再画一遍「剧照 · 范围 · 抽卡中」就是两层头。收藏页等独立入口不传，仍保留墙头。
+   */
+  @Prop hideHeader: boolean = false;
+  /**
+   * 水墙首屏顶部的让位（2026-11-17 七改）。
+   *
+   * 第一版想让它「跟着内容自己滚走」（当成滚动区内边距），**实测不成立**：
+   * `WaterFlow` 的 padding 是固定的视口内边距，不参与滚动 —— 用户看到的就是
+   * 「滚了半天水墙也不升到顶」。所以改成自己按偏移收放。
+   *
+   * 三十八改（2026-11-18）改了**收放的方式**，见 `onScroll` 里那段：
+   * 不再是「越过 24vp 就 animateTo 把留白跳成 0」，而是随滚动连续收，
+   * 用户的原话是「突然跳一下成全屏的感觉不够丝滑」。
+   */
+  @Prop @Watch('onPadInput') topPad: number = 0;
+  /** 当前实际生效的首屏让位（滚动后收成 0）。 */
+  @State padNow: number = 0;
 
   @State stills: GachaStill[] = [];
   @State urls: string[] = [];
@@ -163,7 +182,13 @@ export struct GachaWall {
   }
 
   aboutToAppear(): void {
+    this.padNow = this.topPad;
     this.boot();
+  }
+
+  /** 外部改了让位（换库、进出抽卡）→ 直接跟上，别等下一次滚动。 */
+  onPadInput(): void {
+    this.padNow = this.topPad;
   }
 
   /** 页面换了范围（同一个 GachaWall 复用，比如切换标签）时重来一遍。 */
@@ -416,7 +441,9 @@ export struct GachaWall {
   build() {
     Stack({ alignContent: Alignment.BottomEnd }) {
     Column({ space: 10 }) {
-      this.Header()
+      if (!this.hideHeader) {
+        this.Header()
+      }
 
       // 自己带滚动（2026-11-16）：瀑布流要能一直往下拉，所以不再由页面套 Scroll。
       // 顶部下拉 = 整面墙重抽；触底 = 追加下一批；到底了给一句「刷完了」。
@@ -449,6 +476,8 @@ export struct GachaWall {
       .rowsGap(8)
       .width('100%')
       .height('100%')
+      // 首屏让位（七/八改）：用 `padNow` 而不是 `topPad` —— 滚动时它会被收成 0（见 onScroll）
+      .padding({ top: this.padNow })
       .scrollBar(BarState.Off)
       // 弹簧保留，但**只在内容真能滚动时才生效**（2026-11-16 用户要求）：
       // `alwaysEnabled: false` 表示内容不足一屏时不触发边缘效果——
@@ -482,6 +511,34 @@ export struct GachaWall {
         } else if (Date.now() > this.ignoreNavUntil) {
           // 松手后的余震：仍允许"继续收起"，但不允许把底栏弹回来
           NavBarWatch.onOffset(off, false);
+        }
+        // ★ 首屏让位跟手收放（2026-11-18 三十八改：治「突然跳一下成全屏」）★
+        //
+        // 旧写法（八改）是阈值 + 动画：`off > 24` 就 animateTo 200ms 把留白 89 → 0。
+        // 问题不在动画本身 —— 是**这块留白不属于内容**，它一变，整面墙的每一张图
+        // 就相对手指整体上移 89vp。用户拖着拖着画面自己「蹿」一下，观感是跳帧，不是滚动。
+        //
+        // 新写法：留白由滚动偏移**连续**算出来，一帧一帧地收。
+        // 视觉上等价于「这块留白也是一段内容，跟着手指一起滚走了」：
+        //
+        //   pad = topPad · (1 − smoothstep(off / D))，D = 2 · topPad
+        //
+        // 为什么用 smoothstep（3s²−2s³，两端导数为 0）而不是线性：
+        // 留白在变，内容位置本身就在 1 倍速地走；留白再线性缩，前段就是 2 倍速、
+        // 收完那一帧突然掉回 1 倍速 —— 两头各有一处「速度突变」，还是能看出来。
+        // smoothstep 让「额外那一点速度」从 0 起、到 0 收，进出都是无缝的，
+        // 中段最多 1.75 倍（D = 2×89 时），而且只在头 178vp 的滚动里出现。
+        //
+        // 参数只剩 topPad：换库 / 进出抽卡时 `onPadInput` 会把它重置，回到顶部时也自动长回来。
+        if (this.topPad > 0) {
+          const span: number = this.topPad * 2;
+          let s: number = off <= 0 ? 0 : (off >= span ? 1 : off / span);
+          s = s * s * (3 - 2 * s);
+          const want: number = this.topPad * (1 - s);
+          // 亚像素级别的变化不写状态：每帧都改 padding 会白白触发一次水墙重排
+          if (Math.abs(want - this.padNow) > 0.3) {
+            this.padNow = want;
+          }
         }
         // 离顶端 60vp 内算「在顶部」，「回到顶部」按钮这时没必要出现
         this.atTop = off <= 60;
@@ -543,25 +600,56 @@ export struct GachaWall {
       }
       .width('100%')
       .justifyContent(FlexAlign.Center)
-      .margin({ bottom: 84 })
+      // 与右下角那颗「↑」同高（四十改）：两颗都是浮在底栏之上的东西，
+      // 一起出现时不该一高一低（底栏顶 = 70，这里留 24 的缝）。
+      .margin({ bottom: 94 })
       .hitTestBehavior(HitTestMode.None)
     }
 
     // 「回到顶部」：滚下去之后右下角浮一个，点一下回顶（抽卡容易越刷越深，找不着头）
+    //
+    // ★ 2026-11-18 三十九改：从「实心深色圆」改成**胶囊玻璃** ★
+    // 用户原话：「抽卡界面的置顶按钮能不能也做成这种胶囊效果」——
+    // 之前那个是一块 `Theme.CARD` 实心圆，压在亮色剧照上像贴了张不干胶，跟顶栏那几颗
+    // 玻璃小胶囊不是一套语言。
+    //
+    // 为什么不能直接 `systemMaterial`：沉浸材质的落点是官方硬限制 ——
+    // 只有 Navigation / NavDestination 的标题栏，以及 barPosition=End 的底部 TabBar 里才生效。
+    // 这个按钮在**内容区**（WaterFlow 上面浮着），挂上去一个像素都没有。
+    // 顶栏四块、底栏那条能出玻璃，正是因为它们都在落点内。
+    //
+    // 所以走内容区唯一可行的路子：**背景模糊 + 极薄暗底 + 发丝亮边**。
+    // 配方与墙里那颗「再翻一批…」完全一致（`#4D000000` 那一档降到 20%，因为它是常驻的，
+    // 太黑会变成一块补丁）；模糊负责「玻璃」，暗底负责亮剧照上的白箭头还看得见。
     if (!this.atTop) {
-      Text('↑')
-        .fontSize(18)
-        .fontColor(Theme.TEXT)
-        .width(44)
-        .height(44)
-        .textAlign(TextAlign.Center)
-        .backgroundColor(Theme.CARD)
-        .borderRadius(22)
-        .border({ width: 1, color: Theme.STROKE })
-        .margin({ right: 18, bottom: 72 })
-        .onClick(() => {
-          this.sc.scrollEdge(Edge.Top);
-        })
+      Row() {
+        Text('↑')
+          .fontSize(18)
+          .fontColor('#FFFFFF')
+          .textAlign(TextAlign.Center)
+          // 亮背景上白字要自己的暗边（与顶栏胶囊同一条判据）
+          .textShadow({ radius: 6, color: '#80000000', offsetX: 0, offsetY: 1 })
+      }
+      .width(44)
+      .height(44)
+      .justifyContent(FlexAlign.Center)
+      .borderRadius(22)
+      .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK)
+      .backgroundColor('#33000000')
+      // 发丝亮边是「玻璃」的第二个信号（第一个是模糊）：真机上 30% 白才看得出来，
+      // 25% 以下在亮剧照上会直接消失（三十九改真机对比）。
+      .border({ width: 0.5, color: '#4DFFFFFF' })
+      // 浮在内容上，需要一点投影把自己跟图片分开；半径小、不过界（大了会在亮图上糊成灰圈）
+      .shadow({ radius: 14, color: '#59000000', offsetX: 0, offsetY: 3 })
+      // ★ 2026-11-18 四十改：底部 72 → 94 ★
+      // 用户：「置顶箭头往上移一点，不能跟下方导航栏有重合。」
+      // 底栏是浮动的：高 58 + 底边距 ~12 = 它占着屏幕最下面 70vp（还要算上手势条那一段）。
+      // 72 只比它高 2vp，按钮 14vp 的投影直接压到导航栏上 —— 看着像两块东西叠在一起。
+      // 94 = 导航栏顶 + 24，投影散开之后仍然留得住一条缝。
+      .margin({ right: 18, bottom: 94 })
+      .onClick(() => {
+        this.sc.scrollEdge(Edge.Top);
+      })
     }
     }
   }

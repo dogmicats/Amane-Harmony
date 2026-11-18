@@ -1,4 +1,5 @@
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet } from '../common/Http';
 import { Store } from '../common/Store';
@@ -13,6 +14,7 @@ import { BottomSheet, ChipGroup, ListToolbar, SortSheet } from '../view/ListShee
 import { collectionChipOptions } from '../ext/collections/CollectionTypes';
 import { BuildConfig } from '../common/BuildConfig';
 import { removeWatchLater } from '../ext/watchlater/WatchLaterApi';
+import { NavHeader } from '../view/GlassKit';
 
 /**
  * 稍后再看（公开扩展 watch_later）。
@@ -47,6 +49,7 @@ struct WatchLaterPage {
 
   /** 用 onPageShow：从详情页移出再回来，列表要立刻反映。 */
   onPageShow(): void {
+    setPageFullScreen(getContext(this), false);
     this.load();
   }
 
@@ -138,24 +141,8 @@ struct WatchLaterPage {
 
   @Builder
   Header() {
-    Row({ space: 10 }) {
-      Text('‹')
-        .fontSize(24)
-        .fontColor(Theme.TEXT)
-        .width(30)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          router.back();
-        })
-      Text('稍后再看')
-        .fontSize(17)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(Theme.TEXT)
-      Blank()
-    }
-    .width('100%')
-    .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 6 })
+    // 四十一改：二级页标准头
+    NavHeader({ title: '稍后再看', padTop: 6 })
   }
 
   @Builder

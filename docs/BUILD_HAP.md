@@ -18,7 +18,7 @@ Releases 里提供的是 **unsigned（未签名）HAP**。鸿蒙设备不能直�
 
 ## 准备
 
-- 从 [Releases](../../releases) 下载 `Amane-2.7.0-unsigned.hap`，或按方式二从 `app/` 源码自行构建
+- 从 [Releases](../../releases) 下载 `Amane-2.8.0-unsigned.hap`，或按方式二从 `app/` 源码自行构建
 - 一台开启「开发者模式 + USB 调试」的鸿蒙手机 + 数据线（部分侧载工具支持无线连接，以工具文档为准）
 - 方式一/二另需：[DevEco Studio](https://developer.huawei.com/consumer/cn/deveco-studio/)（含 SDK，API 版本见 `app/build-profile.json5`）与一个华为开发者账号（个人账号即可）
 - 方式三另需：任选一个提供侧载功能的工具（见下）
@@ -29,7 +29,7 @@ Releases 里提供的是 **unsigned（未签名）HAP**。鸿蒙设备不能直�
 2. 等待 `ohpm install` 依赖同步完成（需要网络，会拉取 `@mpv-ohos/mpv-arkts`）。
 3. `File → Project Structure → Signing Configs`，登录你的华为账号，勾选 **Automatically generate signature**。DevEco 会按 `app.json5` 里的 bundleName `io.github.dogmycats.amane` 生成调试证书与 Profile。
 4. 连接手机，`Run` 选择你的设备，或 `Build → Build Hap(s)/APP(s) → Build Hap(s)` 后在 `entry/build/default/outputs/default/` 取包，用 `hdc install` 安装。
-5. 首次打开 App，到「设置 → 连接」填 Amane 地址、用户服务地址与 token。
+5. 首次打开 App，到「我的 → 连接设置」填 Amane 地址、用户服务地址与 token。
 
 ## 方式二：命令行构建
 
@@ -54,9 +54,9 @@ build.cmd
 一般流程（具体菜单以各工具文档为准）：
 
 1. 手机开启「开发者模式 + USB 调试」，用数据线连接电脑并信任此设备。
-2. 在工具里选择下载好的 `Amane-2.7.0-unsigned.hap`。
+2. 在工具里选择下载好的 `Amane-2.8.0-unsigned.hap`。
 3. 工具在本地完成调试签名（或提示你先用自己的证书签名）后推送安装。**若工具只接受已签名包**，请先用方式一或方式二签名再交给它安装。
-4. 装完打开 App，到「设置 → 连接」填地址与 token。
+4. 装完打开 App，到「我的 → 连接设置」填地址与 token。
 
 几点说明：
 

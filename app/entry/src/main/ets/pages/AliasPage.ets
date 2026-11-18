@@ -1,9 +1,11 @@
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpDelete, httpGet, httpPost } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { SuggestItem } from '../common/Types';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /**
  * 高级设置 → 检索别名。
@@ -337,19 +339,12 @@ struct AliasPage {
   @Builder
   Head() {
     Row({ space: 4 }) {
-      Text('‹')
-        .fontSize(24)
-        .fontColor(Theme.TEXT)
-        .width(30)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          router.back();
-        })
-      Text('检索别名')
-        .fontSize(17)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(Theme.TEXT)
+      GlassBack({
+        onTap: () => {
+        router.back();
+        }
+      })
+      PageTitle({ text: '检索别名', fs: 18 })
       Blank()
       if (this.note.length > 0) {
         Text(this.note)
@@ -468,9 +463,11 @@ struct AliasPage {
               })
             Text(this.pickLoading ? '…' : '搜')
               .fontSize(11)
-              .fontColor('#FFFFFF')
+              .fontColor(Theme.ACCENT)
               .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-              .backgroundColor(Theme.ACCENT)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+              .backgroundColor(Theme.accentAlpha(0.30))
+              .border({ width: 1, color: Theme.accentAlpha(0.55) })
               .borderRadius(8)
               .onClick(() => {
                 this.searchTargets(this.pickDraft);
@@ -619,6 +616,12 @@ struct AliasPage {
     .borderRadius(10)
   }
 
+  /** 七十二改：这页没有状态栏让位逻辑，**显式退回非全屏窗口** —— 
+   * 否则从全屏的二级页推过来，标题会被时钟压住。入口是谁都不怕。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), false);
+  }
+
   build() {
     Column() {
       this.Head()
@@ -672,7 +675,10 @@ struct AliasPage {
               .width('100%')
               .lineHeight(15)
               .padding(12)
-              .backgroundColor(Theme.CARD)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+              .backgroundColor('#1FFFFFFF')
+              .border({ width: 0.5, color: '#33FFFFFF' })
+              .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
               .borderRadius(Theme.RADIUS)
           } else {
             ForEach(this.misses, (m: MissRow) => {

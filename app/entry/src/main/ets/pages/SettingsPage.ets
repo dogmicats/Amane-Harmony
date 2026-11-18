@@ -4,6 +4,7 @@ import { Theme } from '../common/Theme';
 import { BuildConfig } from '../common/BuildConfig';
 import { AppLog } from '../common/AppLog';
 import { common } from '@kit.AbilityKit';
+import { GlassGlyph, GlassSearchBar, PageTitle, GlassBack} from '../view/GlassKit';
 
 /**
  * 设置（一级页）：只做分区导航，不放具体设置项。
@@ -64,7 +65,7 @@ interface NavGroup {
 const NAV_KEYWORDS: Record<string, string> = {
   'conn': '服务器 地址 端口 密码 令牌 token 局域网 外网 连接 重连 ping 测试 fuwuqi lianjie mima dk',
   'casttoken': '投屏 电视 令牌 只读 画面 touping tp',
-  'appearance': '主题 配色 颜色 皮肤 列数 海报 剧照 光效 触感 震动 深色 浅色 暗色 夜色 日间 夜间 界面 外观 布局 waiguan zhuti peise lieshu zt ps',
+  'appearance': '主题 配色 颜色 皮肤 列数 海报 剧照 光效 触感 震动 深色 浅色 暗色 夜色 日间 夜间 界面 外观 布局 玻璃 毛玻璃 材质 顶栏 沉浸 模糊 算力 waiguan zhuti peise lieshu zt ps boli cailiao',
   'home': '首页 大图 横幅 banner 推荐 行 排序 显示 刷一刷 筛选 shouye datu tuijian sy',
   'list': '抽卡 每轮 张数 列表 默认 开关 chouka liebiao ck',
   'player': '播放 解码 硬解 软解 缓冲 代理 字幕 弹幕 后台 画中画 手势 bofang zimu danmu jiem a bf',
@@ -81,6 +82,8 @@ const NAV_KEYWORDS: Record<string, string> = {
 const GROUPS: NavGroup[] = [
   {
     key: 'conn', title: '连接与服务', rows: [
+      // 临时置顶（2026-11-17）：HDS 沉浸光感评估探针，评估完删这一行与对应页面
+      { key: 'hdsprobe', label: '★ HDS 沉浸光感评估（临时）', desc: '查设备材质能力，并演示 HDS 标题栏的材质/渐变模糊/光晕', url: 'pages/HdsProbePage', selfOnly: false },
       { key: 'conn', label: '服务器连接', desc: '局域网 / 外网地址、API Token、测试与重连', url: 'pages/SettingsConnectionPage', selfOnly: false },
       // 投屏（2.5.6）暂时隐藏：没有真机能验，先不对外开。
       // 要开：设置里把偏好 `enable_cast` 置 true（详情页的「投屏」按钮读同一个开关）
@@ -89,7 +92,7 @@ const GROUPS: NavGroup[] = [
   },
   {
     key: 'look', title: '外观与浏览', rows: [
-      { key: 'appearance', label: '外观与布局', desc: '8 套主题色、海报列数、剧照瀑布流列数；光效强度与触感反馈也在这里', url: 'pages/SettingsAppearancePage', selfOnly: false },
+      { key: 'appearance', label: '外观与布局', desc: '8 套主题色、海报列数、剧照瀑布流列数，以及触感反馈', url: 'pages/SettingsAppearancePage', selfOnly: false },
       { key: 'home', label: '首页内容', desc: '哪几行显示、从上到下怎么排；顶部大图取自哪里（刷一刷的范围在「刷一刷」那页）', url: 'pages/SettingsHomePage', selfOnly: false },
       { key: 'list', label: '列表与抽卡', desc: '抽卡模式：每轮张数与默认开关', url: 'pages/SettingsListPage', selfOnly: false }
     ]
@@ -244,126 +247,78 @@ struct SettingsPage {
     AppLog.mark('settings', `导出日志：${msg}`);
   }
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
       Row({ space: 10 }) {
-        Text('‹')
-          .fontSize(24)
-          .fontColor(Theme.TEXT)
-          .width(30)
-          .height(34)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            router.back();
-          })
-        Text('设置')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
-        Blank()
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
+          }
+        })
+        PageTitle({ text: '设置', fs: 18 })
+        // 五十九改：搜索收成统一组件 `GlassSearchBar` —— 点放大镜那颗胶囊自己长成搜索栏，
+        // 与首页/收藏/演员/标签同一套交互、同一个图标（以前是内容区单独一条实色输入框）。
+        GlassSearchBar({
+          placeholder: '搜索设置',
+          boxH: 42,
+          rowH: 46,
+          radius: 21,
+          iconSize: 18,
+          onCommit: (kw: string) => {
+            this.q = kw;
+          }
+        })
+        .layoutWeight(1)
       }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 6 })
+      .padding({ left: 8, right: Theme.PAGE_PAD })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
 
-      // 设置搜索（2026-11-16）：输入即出结果，回车不必要 —— 设置项本来就不多，
-      // 实时过滤比"先输再按搜索"少一步。
-      Row({ space: 8 }) {
-        Text('🔍')
-          .fontSize(13)
-        TextInput({ text: this.q, placeholder: '搜索设置：字幕、缓存、主题、抽卡…' })
-          .placeholderColor(Theme.TEXT_FAINT)
-          .fontSize(14)
-          .fontColor(Theme.TEXT)
-          .backgroundColor(Color.Transparent)
-          .padding({ left: 0 })
-          .layoutWeight(1)
-          .onChange((v: string) => {
-            this.q = v;
-          })
-        if (this.q.length > 0) {
-          Text('✕')
-            .fontSize(13)
-            .fontColor(Theme.TEXT_FAINT)
-            .padding({ left: 6, right: 2 })
-            .onClick(() => {
-              this.q = '';
-            })
-        }
-      }
-      .width('100%')
-      .padding({ left: 14, right: 14, top: 2, bottom: 2 })
-      .margin({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 8 })
-      .backgroundColor(Theme.CARD)
-      .borderRadius(12)
+  @StorageProp('amaneTopInset') topInset: number = 30;
 
-      Scroll() {
-        Column({ space: 18 }) {
-          if (this.q.trim().length > 0) {
-            // 搜索结果：一张卡，按相关度排序，行下补一行分组名
-            Column() {
-              ForEach(this.hits(), (r: NavRow, idx: number) => {
-                Column() {
-                  if (idx > 0) {
-                    Divider()
-                      .strokeWidth(1)
-                      .color(Theme.CARD_HI)
-                  }
-                  Row({ space: 12 }) {
-                    Column({ space: 3 }) {
-                      Text(r.label)
-                        .fontSize(15)
-                        .fontColor(r.danger === true ? Theme.DANGER : Theme.TEXT)
-                      Text(`${this.groupTitleOf(r.key)} · ${r.desc}`)
-                        .fontSize(11)
-                        .fontColor(Theme.TEXT_FAINT)
-                        .maxLines(2)
-                    }
-                    .alignItems(HorizontalAlign.Start)
-                    .layoutWeight(1)
-                    if (r.action !== undefined) {
-                      Text(r.action)
-                        .fontSize(12)
-                        .fontColor(Theme.TEXT_DIM)
-                    } else {
-                      Text('›')
-                        .fontSize(20)
-                        .fontColor(Theme.TEXT_FAINT)
-                    }
-                  }
-                  .width('100%')
-                  .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-                  .onClick(() => {
-                    this.open(r);
-                  })
-                }
-                .width('100%')
-              }, (r: NavRow) => `hit-${r.key}`)
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
 
-              if (this.hits().length === 0) {
-                Text('没有找到相关设置，换个说法试试（比如「字幕」→ 播放设置）')
-                  .fontSize(12)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .padding({ left: 14, right: 14, top: 16, bottom: 16 })
-                  .width('100%')
-              }
-            }
-            .width('100%')
-            .backgroundColor(Theme.CARD)
-            .borderRadius(14)
-            .clip(true)
-          } else {
-          ForEach(GROUPS, (g: NavGroup) => {
-            Column({ space: 8 }) {
-              Text(g.title)
-                .fontSize(11)
-                .fontColor(Theme.TEXT_FAINT)
-                .letterSpacing(1)
-                .width('100%')
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
 
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column() {
+
+        // 五十九改：原来这条常驻搜索框已撤 —— 搜索胶囊搬进了标题行（点一下自己长成搜索栏），
+        // 内容区不再被一条实色输入框压掉一截。
+        Scroll() {
+          Column({ space: 18 }) {
+
+          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
+          // 材质才有颜色可采样。
+          Blank().height(this.barH())
+            if (this.q.trim().length > 0) {
+              // 搜索结果：一张卡，按相关度排序，行下补一行分组名
               Column() {
-                ForEach(this.rowsOf(g), (r: NavRow, idx: number) => {
+                ForEach(this.hits(), (r: NavRow, idx: number) => {
                   Column() {
-                    // 行间用 1px 细线分隔（原来是 1px 的透底黑缝，像卡片被切成几段）
                     if (idx > 0) {
                       Divider()
                         .strokeWidth(1)
@@ -374,18 +329,17 @@ struct SettingsPage {
                         Text(r.label)
                           .fontSize(15)
                           .fontColor(r.danger === true ? Theme.DANGER : Theme.TEXT)
-                        Text(r.desc)
+                        Text(`${this.groupTitleOf(r.key)} · ${r.desc}`)
                           .fontSize(11)
                           .fontColor(Theme.TEXT_FAINT)
                           .maxLines(2)
                       }
                       .alignItems(HorizontalAlign.Start)
                       .layoutWeight(1)
-                      // 动作行（导出 / 清空）用动词代替 ›，别让它看着像能进下一页
                       if (r.action !== undefined) {
                         Text(r.action)
                           .fontSize(12)
-                          .fontColor(r.danger === true ? Theme.DANGER : Theme.TEXT_DIM)
+                          .fontColor(Theme.TEXT_DIM)
                       } else {
                         Text('›')
                           .fontSize(20)
@@ -399,29 +353,99 @@ struct SettingsPage {
                     })
                   }
                   .width('100%')
-                }, (r: NavRow) => `row-${r.key}`)
+                }, (r: NavRow) => `hit-${r.key}`)
+
+                if (this.hits().length === 0) {
+                  Text('没有找到相关设置，换个说法试试（比如「字幕」→ 播放设置）')
+                    .fontSize(12)
+                    .fontColor(Theme.TEXT_FAINT)
+                    .padding({ left: 14, right: 14, top: 16, bottom: 16 })
+                    .width('100%')
+                }
               }
               .width('100%')
               .backgroundColor(Theme.CARD)
               .borderRadius(14)
               .clip(true)
-            }
-            .width('100%')
-          }, (g: NavGroup) => `g-${g.key}`)
+            } else {
+            ForEach(GROUPS, (g: NavGroup) => {
+              Column({ space: 8 }) {
+                Text(g.title)
+                  .fontSize(11)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .letterSpacing(1)
+                  .width('100%')
 
-          Text(`当前连接：${Store.I.onWan ? '外网' : '局域网'} · ${Store.I.amane}`)
-            .fontSize(10)
-            .fontColor(Theme.TEXT_FAINT)
-            .width('100%')
+                Column() {
+                  ForEach(this.rowsOf(g), (r: NavRow, idx: number) => {
+                    Column() {
+                      // 行间用 1px 细线分隔（原来是 1px 的透底黑缝，像卡片被切成几段）
+                      if (idx > 0) {
+                        Divider()
+                          .strokeWidth(1)
+                          .color(Theme.CARD_HI)
+                      }
+                      Row({ space: 12 }) {
+                        Column({ space: 3 }) {
+                          Text(r.label)
+                            .fontSize(15)
+                            .fontColor(r.danger === true ? Theme.DANGER : Theme.TEXT)
+                          Text(r.desc)
+                            .fontSize(11)
+                            .fontColor(Theme.TEXT_FAINT)
+                            .maxLines(2)
+                        }
+                        .alignItems(HorizontalAlign.Start)
+                        .layoutWeight(1)
+                        // 动作行（导出 / 清空）用动词代替 ›，别让它看着像能进下一页
+                        if (r.action !== undefined) {
+                          Text(r.action)
+                            .fontSize(12)
+                            .fontColor(r.danger === true ? Theme.DANGER : Theme.TEXT_DIM)
+                        } else {
+                          Text('›')
+                            .fontSize(20)
+                            .fontColor(Theme.TEXT_FAINT)
+                        }
+                      }
+                      .width('100%')
+                      .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+                      .onClick(() => {
+                        this.open(r);
+                      })
+                    }
+                    .width('100%')
+                  }, (r: NavRow) => `row-${r.key}`)
+                }
+                .width('100%')
+                .backgroundColor(Theme.CARD)
+                .borderRadius(14)
+                .clip(true)
+              }
+              .width('100%')
+            }, (g: NavGroup) => `g-${g.key}`)
+
+            Text(`当前连接：${Store.I.onWan ? '外网' : '局域网'} · ${Store.I.amane}`)
+              .fontSize(10)
+              .fontColor(Theme.TEXT_FAINT)
+              .width('100%')
+            }
           }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
         }
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
       }
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

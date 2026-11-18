@@ -1,4 +1,5 @@
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpDelete, httpGet } from '../common/Http';
 import { Store } from '../common/Store';
@@ -12,6 +13,7 @@ import { KeywordBox } from '../view/KeywordBox';
 import { BottomSheet, ChipGroup, ListToolbar, SortSheet } from '../view/ListSheets';
 import { collectionChipOptions } from '../ext/collections/CollectionTypes';
 import { BuildConfig } from '../common/BuildConfig';
+import { GlassCapsule, NavHeader } from '../view/GlassKit';
 
 /**
  * 观看记录（2.4.6.26 起与媒体库同一套「搜索 + 工具条 + 底部抽屉」）。
@@ -165,36 +167,22 @@ struct HistoryPage {
 
   @Builder
   Header() {
-    Row({ space: 10 }) {
-      Text('‹')
-        .fontSize(24)
-        .fontColor(Theme.TEXT)
-        .width(30)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          router.back();
-        })
-      Text('观看记录')
-        .fontSize(17)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(Theme.TEXT)
-      Blank()
+    // 四十一改：二级页标准头（返回胶囊 + 18 号标题 + 右侧玻璃胶囊）
+    NavHeader({ title: '观看记录', padTop: 6 }) {
       if (BuildConfig.ENABLE_WATCHLATER) {
         // 稍后再看和观看记录是同一件事的两半：看过的在这页，想看的在那个队列
-        Text('稍后 ›')
-          .fontSize(11)
-          .fontColor(Theme.TEXT_DIM)
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-          .backgroundColor(Theme.CARD)
-          .borderRadius(11)
-          .onClick(() => {
+        GlassCapsule({
+          label: '稍后 ›',
+          fs: 12,
+          padH: 11,
+          padV: 6,
+          radius: 12,
+          onTap: () => {
             router.pushUrl({ url: 'pages/WatchLaterPage' });
-          })
+          }
+        })
       }
     }
-    .width('100%')
-    .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 6 })
   }
 
   @Builder
@@ -226,6 +214,12 @@ struct HistoryPage {
       }
       Blank().height(20)
     }
+  }
+
+  /** 七十二改：这页没有状态栏让位逻辑，**显式退回非全屏窗口** —— 
+   * 否则从全屏的二级页推过来，标题会被时钟压住。入口是谁都不怕。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), false);
   }
 
   build() {

@@ -7,6 +7,7 @@ import { cacheClear, cacheCount, cacheSizeKb } from '../common/PageCache';
 import { imgCacheBytes, imgCacheCap, imgCacheClear, imgCacheCount, imgCacheFetched, imgCacheHits, imgCacheSetCap } from '../common/ImgCache';
 import { httpGet, httpPost, httpPut } from '../common/Http';
 import { Store } from '../common/Store';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /**
  * 设置 → 存储与缓存（2.6.2.1）。
@@ -758,262 +759,300 @@ struct CachePage {
     .borderRadius(Theme.RADIUS)
   }
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
       Row({ space: 10 }) {
-        Text('‹')
-          .fontSize(24)
-          .fontColor(Theme.TEXT)
-          .width(30)
-          .height(34)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            router.back();
-          })
-        Text('空间管理')
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.TEXT)
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
+          }
+        })
+        PageTitle({ text: '空间管理', fs: 18 })
         Blank()
       }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 10 })
+      .padding({ left: 8, right: Theme.PAGE_PAD })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
 
-      Scroll() {
-        Column({ space: 12 }) {
-          // ---- 服务端（这台 NAS）----
-          // 用户 2026-11-14：「服务端已经有六七个 G 了」——之前这一页只讲手机侧，
-          // 服务器上那 7 G 在设置里完全看不到，只能登上去 du。
-          this.ServerBlock()
+  @StorageProp('amaneTopInset') topInset: number = 30;
 
-          // ---- 这台手机 ----
-          Text('这台手机')
-            .fontSize(11)
-            .fontColor(Theme.TEXT_FAINT)
-            .letterSpacing(1)
-            .width('100%')
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
 
-          // 总览
-          Column({ space: 6 }) {
-            Row() {
-              Text('图片与页面数据（小计）')
-                .fontSize(14)
-                .fontColor(Theme.TEXT)
-                .layoutWeight(1)
-              Text(this.totalText())
-                .fontSize(15)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(Theme.ACCENT)
-            }
-            .width('100%')
-            Text('这一行只是下面两张卡的合计：图片缓存 + 页面数据。不含离线下载的影片，也不含服务器上的空间。')
-              .fontSize(10)
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column() {
+
+        Scroll() {
+          Column({ space: 12 }) {
+
+          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
+          // 材质才有颜色可采样。
+          Blank().height(this.barH())
+            // ---- 服务端（这台 NAS）----
+            // 用户 2026-11-14：「服务端已经有六七个 G 了」——之前这一页只讲手机侧，
+            // 服务器上那 7 G 在设置里完全看不到，只能登上去 du。
+            this.ServerBlock()
+
+            // ---- 这台手机 ----
+            Text('这台手机')
+              .fontSize(11)
               .fontColor(Theme.TEXT_FAINT)
+              .letterSpacing(1)
               .width('100%')
-              .lineHeight(15)
-            Text(`本次运行：本地图命中 ${this.hits} 次 · 新下载 ${this.fetched} 张`)
-              .fontSize(10)
-              .fontColor(Theme.TEXT_DIM)
-              .width('100%')
-          }
-          .width('100%')
-          .padding(14)
-          .backgroundColor(Theme.CARD)
-          .borderRadius(Theme.RADIUS)
 
-          // 图片
-          Column({ space: 8 }) {
-            Row() {
-              Text('图片缓存')
-                .fontSize(14)
-                .fontColor(Theme.TEXT)
-                .layoutWeight(1)
-              Text(`${this.imgCount} 张 · ${this.human(this.imgBytes)}`)
-                .fontSize(12)
-                .fontColor(Theme.ACCENT)
-            }
-            .width('100%')
-            Text('海报、剧照、头像。看过一次就存一份到手机：下次进 App 直接读本地，不再一张张重新下载。')
-              .fontSize(10)
-              .fontColor(Theme.TEXT_FAINT)
+            // 总览
+            Column({ space: 6 }) {
+              Row() {
+                Text('图片与页面数据（小计）')
+                  .fontSize(14)
+                  .fontColor(Theme.TEXT)
+                  .layoutWeight(1)
+                Text(this.totalText())
+                  .fontSize(15)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Theme.ACCENT)
+              }
               .width('100%')
-              .lineHeight(15)
-            Row({ space: 8 }) {
-              this.ActionButton('清理图片缓存', true, () => {
-                this.clearImages();
-              })
-            }
-            .width('100%')
-          }
-          .width('100%')
-          .padding(14)
-          .backgroundColor(Theme.CARD)
-          .borderRadius(Theme.RADIUS)
-
-          // 上限
-          Column({ space: 8 }) {
-            Row() {
-              Text('缓存上限')
-                .fontSize(14)
-                .fontColor(Theme.TEXT)
-                .layoutWeight(1)
-              Text(this.capMb <= 0 ? '不限制' : `${this.capMb >= 1024 ? this.capMb / 1024 + ' GB' : this.capMb + ' MB'}`)
-                .fontSize(12)
-                .fontColor(Theme.ACCENT)
-            }
-            .width('100%')
-            Text('图片缓存超过上限时，自动删「最久没用过」的那些，不会无限占空间。')
-              .fontSize(10)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .lineHeight(15)
-            Flex({ wrap: FlexWrap.Wrap }) {
-              ForEach(CAPS, (o: CapOpt) => {
-                this.CapChip(o)
-              }, (o: CapOpt) => `cap-${o.mb}`)
-            }
-            .width('100%')
-          }
-          .width('100%')
-          .padding(14)
-          .backgroundColor(Theme.CARD)
-          .borderRadius(Theme.RADIUS)
-
-          // 页面数据
-          Column({ space: 8 }) {
-            Row() {
-              Text('页面数据')
-                .fontSize(14)
-                .fontColor(Theme.TEXT)
-                .layoutWeight(1)
-              Text(`${this.pageCount} 条 · ${this.humanKb(this.pageKb)}`)
-                .fontSize(12)
-                .fontColor(Theme.ACCENT)
-            }
-            .width('100%')
-            Text('首页、媒体库、详情页这些接口的返回。切页面时先用上次那份铺出来，网络回来再悄悄换新。')
-              .fontSize(10)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .lineHeight(15)
-            Row({ space: 8 }) {
-              this.ActionButton('清理页面数据', true, () => {
-                this.clearPages();
-              })
-            }
-            .width('100%')
-          }
-          .width('100%')
-          .padding(14)
-          .backgroundColor(Theme.CARD)
-          .borderRadius(Theme.RADIUS)
-
-          // 一键全清：范围就是上面两张卡（图片 + 页面数据），紧跟在它们后面，不挨着下面的手机其他占用
-          Column({ space: 8 }) {
-            Row() {
-              Text('清理图片与页面缓存')
-                .fontSize(14)
-                .fontColor(Theme.TEXT)
-                .layoutWeight(1)
-              Text(this.busy ? '清理中…' : '清理')
-                .fontSize(12)
-                .fontColor(Theme.DANGER)
-                .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-                .backgroundColor(Theme.CARD_HI)
-                .borderRadius(9)
-                .onClick(() => {
-                  this.clearAll();
-                })
-            }
-            .width('100%')
-            Text('只清海报/剧照图和接口返回的页面数据；离线下载的影片、服务器上的空间都不动。清掉之后第一次进页面会慢一点。')
-              .fontSize(10)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .lineHeight(15)
-          }
-          .width('100%')
-          .padding(14)
-          .backgroundColor(Theme.CARD)
-          .borderRadius(Theme.RADIUS)
-
-          // 手机侧其余四块（2026-11-14 22:14 用户：「客户端也有对应的问题吧？」）
-          // 离线影片 / 抽卡截图 / 导出图 / 播放器配置，以前在设置里完全看不到。
-          if (this.cliKinds.length > 0) {
-            Column({ space: 10 }) {
-              Text('手机上的其他占用')
-                .fontSize(14)
-                .fontColor(Theme.TEXT)
+              Text('这一行只是下面两张卡的合计：图片缓存 + 页面数据。不含离线下载的影片，也不含服务器上的空间。')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
                 .width('100%')
-
-              ForEach(this.cliKinds, (k: CliKind) => {
-                Column({ space: 4 }) {
-                  Row({ space: 6 }) {
-                    Text(k.label)
-                      .fontSize(13)
-                      .fontColor(Theme.TEXT)
-                    Blank()
-                    Text(this.humanBytes(k.bytes))
-                      .fontSize(13)
-                      .fontWeight(FontWeight.Medium)
-                      .fontColor(Theme.ACCENT)
-                  }
-                  .width('100%')
-
-                  Row({ space: 8 }) {
-                    Text(k.cleanable
-                      ? `${k.files} 个文件`
-                      : '你自己下载的 · 永不自动清理')
-                      .fontSize(10)
-                      .fontColor(Theme.TEXT_DIM)
-                      .layoutWeight(1)
-                    if (k.cleanable) {
-                      Text('清理')
-                        .fontSize(10)
-                        .fontColor(Theme.TEXT_DIM)
-                        .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-                        .borderRadius(8)
-                        .backgroundColor('#14FFFFFF')
-                        .onClick(() => {
-                          this.clearCli(k.key, k.label);
-                        })
-                    }
-                  }
-                  .width('100%')
-
-                  Text(k.desc)
-                    .fontSize(9)
-                    .fontColor(Theme.TEXT_FAINT)
-                    .width('100%')
-                    .lineHeight(13)
-                }
+                .lineHeight(15)
+              Text(`本次运行：本地图命中 ${this.hits} 次 · 新下载 ${this.fetched} 张`)
+                .fontSize(10)
+                .fontColor(Theme.TEXT_DIM)
                 .width('100%')
-                .padding({ top: 6, bottom: 6 })
-                .border({ width: { bottom: 0.5 }, color: '#14FFFFFF' })
-              }, (k: CliKind) => k.key)
             }
             .width('100%')
             .padding(14)
             .backgroundColor(Theme.CARD)
             .borderRadius(Theme.RADIUS)
-          }
 
-          if (this.note.length > 0) {
-            Text(this.note)
-              .fontSize(11)
-              .fontColor(Theme.ACCENT)
+            // 图片
+            Column({ space: 8 }) {
+              Row() {
+                Text('图片缓存')
+                  .fontSize(14)
+                  .fontColor(Theme.TEXT)
+                  .layoutWeight(1)
+                Text(`${this.imgCount} 张 · ${this.human(this.imgBytes)}`)
+                  .fontSize(12)
+                  .fontColor(Theme.ACCENT)
+              }
               .width('100%')
-              .padding({ left: 4, top: 2 })
-          }
+              Text('海报、剧照、头像。看过一次就存一份到手机：下次进 App 直接读本地，不再一张张重新下载。')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+                .lineHeight(15)
+              Row({ space: 8 }) {
+                this.ActionButton('清理图片缓存', true, () => {
+                  this.clearImages();
+                })
+              }
+              .width('100%')
+            }
+            .width('100%')
+            .padding(14)
+            .backgroundColor(Theme.CARD)
+            .borderRadius(Theme.RADIUS)
 
-          Blank().height(20)
+            // 上限
+            Column({ space: 8 }) {
+              Row() {
+                Text('缓存上限')
+                  .fontSize(14)
+                  .fontColor(Theme.TEXT)
+                  .layoutWeight(1)
+                Text(this.capMb <= 0 ? '不限制' : `${this.capMb >= 1024 ? this.capMb / 1024 + ' GB' : this.capMb + ' MB'}`)
+                  .fontSize(12)
+                  .fontColor(Theme.ACCENT)
+              }
+              .width('100%')
+              Text('图片缓存超过上限时，自动删「最久没用过」的那些，不会无限占空间。')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+                .lineHeight(15)
+              Flex({ wrap: FlexWrap.Wrap }) {
+                ForEach(CAPS, (o: CapOpt) => {
+                  this.CapChip(o)
+                }, (o: CapOpt) => `cap-${o.mb}`)
+              }
+              .width('100%')
+            }
+            .width('100%')
+            .padding(14)
+            .backgroundColor(Theme.CARD)
+            .borderRadius(Theme.RADIUS)
+
+            // 页面数据
+            Column({ space: 8 }) {
+              Row() {
+                Text('页面数据')
+                  .fontSize(14)
+                  .fontColor(Theme.TEXT)
+                  .layoutWeight(1)
+                Text(`${this.pageCount} 条 · ${this.humanKb(this.pageKb)}`)
+                  .fontSize(12)
+                  .fontColor(Theme.ACCENT)
+              }
+              .width('100%')
+              Text('首页、媒体库、详情页这些接口的返回。切页面时先用上次那份铺出来，网络回来再悄悄换新。')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+                .lineHeight(15)
+              Row({ space: 8 }) {
+                this.ActionButton('清理页面数据', true, () => {
+                  this.clearPages();
+                })
+              }
+              .width('100%')
+            }
+            .width('100%')
+            .padding(14)
+            .backgroundColor(Theme.CARD)
+            .borderRadius(Theme.RADIUS)
+
+            // 一键全清：范围就是上面两张卡（图片 + 页面数据），紧跟在它们后面，不挨着下面的手机其他占用
+            Column({ space: 8 }) {
+              Row() {
+                Text('清理图片与页面缓存')
+                  .fontSize(14)
+                  .fontColor(Theme.TEXT)
+                  .layoutWeight(1)
+                Text(this.busy ? '清理中…' : '清理')
+                  .fontSize(12)
+                  .fontColor(Theme.DANGER)
+                  .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+                  .backgroundColor(Theme.CARD_HI)
+                  .borderRadius(9)
+                  .onClick(() => {
+                    this.clearAll();
+                  })
+              }
+              .width('100%')
+              Text('只清海报/剧照图和接口返回的页面数据；离线下载的影片、服务器上的空间都不动。清掉之后第一次进页面会慢一点。')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+                .lineHeight(15)
+            }
+            .width('100%')
+            .padding(14)
+            .backgroundColor(Theme.CARD)
+            .borderRadius(Theme.RADIUS)
+
+            // 手机侧其余四块（2026-11-14 22:14 用户：「客户端也有对应的问题吧？」）
+            // 离线影片 / 抽卡截图 / 导出图 / 播放器配置，以前在设置里完全看不到。
+            if (this.cliKinds.length > 0) {
+              Column({ space: 10 }) {
+                Text('手机上的其他占用')
+                  .fontSize(14)
+                  .fontColor(Theme.TEXT)
+                  .width('100%')
+
+                ForEach(this.cliKinds, (k: CliKind) => {
+                  Column({ space: 4 }) {
+                    Row({ space: 6 }) {
+                      Text(k.label)
+                        .fontSize(13)
+                        .fontColor(Theme.TEXT)
+                      Blank()
+                      Text(this.humanBytes(k.bytes))
+                        .fontSize(13)
+                        .fontWeight(FontWeight.Medium)
+                        .fontColor(Theme.ACCENT)
+                    }
+                    .width('100%')
+
+                    Row({ space: 8 }) {
+                      Text(k.cleanable
+                        ? `${k.files} 个文件`
+                        : '你自己下载的 · 永不自动清理')
+                        .fontSize(10)
+                        .fontColor(Theme.TEXT_DIM)
+                        .layoutWeight(1)
+                      if (k.cleanable) {
+                        Text('清理')
+                          .fontSize(10)
+                          .fontColor(Theme.TEXT_DIM)
+                          .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                          .borderRadius(8)
+                          .backgroundColor('#14FFFFFF')
+                          .onClick(() => {
+                            this.clearCli(k.key, k.label);
+                          })
+                      }
+                    }
+                    .width('100%')
+
+                    Text(k.desc)
+                      .fontSize(9)
+                      .fontColor(Theme.TEXT_FAINT)
+                      .width('100%')
+                      .lineHeight(13)
+                  }
+                  .width('100%')
+                  .padding({ top: 6, bottom: 6 })
+                  .border({ width: { bottom: 0.5 }, color: '#14FFFFFF' })
+                }, (k: CliKind) => k.key)
+              }
+              .width('100%')
+              .padding(14)
+              .backgroundColor(Theme.CARD)
+              .borderRadius(Theme.RADIUS)
+            }
+
+            if (this.note.length > 0) {
+              Text(this.note)
+                .fontSize(11)
+                .fontColor(Theme.ACCENT)
+                .width('100%')
+                .padding({ left: 4, top: 2 })
+            }
+
+            Blank().height(20)
+          }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
         }
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
       }
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

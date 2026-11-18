@@ -1,8 +1,11 @@
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { Theme, THEME_PALETTES, ThemePalette } from '../common/Theme';
 import { Personalize, COLS_MIN, COLS_MAX, STILL_MIN, STILL_MAX } from '../common/Personalize';
 import { Store } from '../common/Store';
 import { Haptics } from '../common/Haptics';
+import { ImmersiveGlass } from '../common/ImmersiveGlass';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /**
  * 外观（2.5.2）：主题色 + 海报列数 + 瀑布流列数。
@@ -31,6 +34,7 @@ struct Swatch {
   @Prop palette: ThemePalette;
   @Prop picked: boolean;
   onPick: (key: string) => void = (key: string) => {};
+
 
   build() {
     Column({ space: 5 }) {
@@ -231,8 +235,8 @@ struct ThemePreview {
 }
 
 /**
- * 光效强度选择：三块等宽小卡，选中填强调色。
- * 独立组件是为了选中态能立刻重绘（同本文件其它 `@Prop` 组件的理由）。
+ * 光效强度选择小卡（0 关 / 1 轻 / 2 强）。
+ * 2026-11-17 用户要求隐藏选择接口，现固定「强」。组件与状态保留，将来要恢复 UI 直接接回来即可。
  */
 @Component
 struct FxChip {
@@ -277,14 +281,24 @@ struct SettingsAppearancePage {
   @StorageProp('amaneThemeEpoch') @Watch('onEpoch') themeEpoch: number = 0;
   @StorageProp('amaneCols') posterCols: number = 3;
   @StorageProp('amaneStillCols') stillCols: number = 2;
-  /** 沉浸光效强度（0 关 / 1 轻 / 2 强）。 */
+  /**
+   * 沉浸光效强度（0 关 / 1 轻 / 2 强）。选择接口已隐藏，固定「强」；
+   * 保留订阅只为将来恢复 UI，当前不渲染任何选择器。
+   */
   @StorageProp('amaneFx') fx: number = 2;
   /** 触感反馈开关（1 开 / 0 关，2.6.1.18）。 */
   @StorageProp('amaneHaptic') haptic: number = 1;
+  /**
+   * 顶栏材质档位（2026-11-17 五改）：`auto` / `none` / `weak` / `strong` / `ultra`。
+   * 本页只存**用户的选择**，真正生效的档位由 `ImmersiveGlass` 结合设备算力解析。
+   */
+  @State glassMode: string = ImmersiveGlass.mode();
 
   aboutToAppear(): void {
     this.pal = Theme.paletteOf(Theme.paletteKey);
     this.pickedKey = this.pal.key;
+    // 顶栏材质档位以偏好为准（别处可能改过，比如以后开放到别的页面）
+    this.glassMode = ImmersiveGlass.mode();
   }
 
   /** 别处换了主题（理论上没有），同步一下选中态。 */
@@ -311,21 +325,14 @@ struct SettingsAppearancePage {
   @Builder
   Header() {
     Row({ space: 10 }) {
-      Text('‹')
-        .fontSize(24)
-        .fontColor(Theme.TEXT)
-        .width(30)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          router.back();
-        })
+      GlassBack({
+        onTap: () => {
+        router.back();
+        }
+      })
       Column({ space: 2 }) {
-        Text('外观与布局')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
-        Text('主题色、列数、光效与触感，只存这台设备')
+        PageTitle({ text: '外观与布局', fs: 18 })
+        Text('主题色、列数与触感，只存这台设备')
           .fontSize(11)
           .fontColor(Theme.TEXT_FAINT)
       }
@@ -334,6 +341,12 @@ struct SettingsAppearancePage {
     }
     .width('100%')
     .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 10 })
+  }
+
+  /** 七十二改：这页没有状态栏让位逻辑，**显式退回非全屏窗口** ——
+   * 否则从全屏的二级页推过来，标题会被时钟压住。入口是谁都不怕。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), false);
   }
 
   build() {
@@ -464,15 +477,18 @@ struct SettingsAppearancePage {
           }
           .width('100%')
 
-          // 底栏玻璃不透明度：2026-11-16 用户调完定在 0%，接口已隐藏（默认值写死 0）。
+          // 沉浸光效强度接口：2026-11-17 用户要求隐藏（这里的「光效」与华为官方「沉浸光感」
+          // 是两回事，留着易误导）。光效固定为「强」，接口与偏好保留在 Personalize，将来要再调直接改那里。
+
+          // 顶栏材质（2026-11-17 五改）：系统沉浸材质 + 按终端算力自动降级，四档可手动指定。
           Column({ space: 10 }) {
             Row() {
-              Text('沉浸光效')
+              Text('顶栏材质')
                 .fontSize(11)
                 .fontColor(Theme.TEXT_FAINT)
                 .letterSpacing(1)
               Blank()
-              Text(Personalize.fxName(this.fx))
+              Text(ImmersiveGlass.modeLabel(this.glassMode))
                 .fontSize(10)
                 .fontColor(this.pal.accent)
             }
@@ -481,39 +497,68 @@ struct SettingsAppearancePage {
             Column({ space: 10 }) {
               Row({ space: 8 }) {
                 FxChip({
-                  label: '关',
-                  sub: '最省电',
-                  picked: this.fx <= 0,
+                  label: '无',
+                  sub: '兜底底色',
+                  picked: this.glassMode === 'none',
                   accent: this.pal.accent,
                   onAccent: this.pal.onAccent,
                   onPick: () => {
-                    Personalize.setFx(0);
+                    this.glassMode = 'none';
+                    ImmersiveGlass.setMode('none');
                   }
                 })
                 FxChip({
-                  label: '轻',
-                  sub: '只留光晕',
-                  picked: this.fx === 1,
+                  label: '弱',
+                  sub: '常规厚',
+                  picked: this.glassMode === 'weak',
                   accent: this.pal.accent,
                   onAccent: this.pal.onAccent,
                   onPick: () => {
-                    Personalize.setFx(1);
+                    this.glassMode = 'weak';
+                    ImmersiveGlass.setMode('weak');
                   }
                 })
                 FxChip({
                   label: '强',
-                  sub: '光晕 + 粒子',
-                  picked: this.fx >= 2,
+                  sub: '透亮',
+                  picked: this.glassMode === 'strong',
                   accent: this.pal.accent,
                   onAccent: this.pal.onAccent,
                   onPick: () => {
-                    Personalize.setFx(2);
+                    this.glassMode = 'strong';
+                    ImmersiveGlass.setMode('strong');
+                  }
+                })
+                FxChip({
+                  label: '极限',
+                  sub: '最透',
+                  picked: this.glassMode === 'ultra',
+                  accent: this.pal.accent,
+                  onAccent: this.pal.onAccent,
+                  onPick: () => {
+                    this.glassMode = 'ultra';
+                    ImmersiveGlass.setMode('ultra');
                   }
                 })
               }
               .width('100%')
 
-              Text('首页大图的柔光、详情封面播放键的光斑、启动时的浮尘，以及底栏选中那一盏灯。光效只画在图上，不压文字；关掉后所有页面都不画，最省电。')
+              // 手动指定后能一键退回自动阶梯（不给这个入口，用户挑过一次就再也回不到「跟随设备」）
+              if (this.glassMode !== 'auto') {
+                Text('恢复自动（跟随这台设备的算力）')
+                  .fontSize(11)
+                  .fontColor(this.pal.accent)
+                  .onClick(() => {
+                    this.glassMode = 'auto';
+                    ImmersiveGlass.setMode('auto');
+                  })
+              }
+
+              Text(ImmersiveGlass.deviceLabel())
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+              Text('玻璃由系统沉浸材质渲染（ArkUI 组件级 systemMaterial，API 26）。分工是这样的：**高/中算力**设备上，底色、描边、阴影、折射全部由材质的 materialFilter 画出来（所以我们不自己铺底，铺了也会被系统重置）；**低算力**设备上系统没有滤镜，只用底色 + 描边 + 阴影，顶栏会更实、没有折射 —— 那不是参数没调对，是这台设备能给的只有这些。档位从「弱」到「极限」= 材质从常规厚度到超薄，越透越像玻璃。')
                 .fontSize(10)
                 .fontColor(Theme.TEXT_FAINT)
                 .width('100%')
@@ -524,6 +569,7 @@ struct SettingsAppearancePage {
             .borderRadius(14)
           }
           .width('100%')
+          .margin({ top: 12 })
 
           // 触感反馈（2.6.1.18）：和光效分开一套开关 —— 有人愿意要光但不要震
           Column({ space: 10 }) {

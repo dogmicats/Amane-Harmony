@@ -1,8 +1,10 @@
 import { promptAction, router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { Downloader, OfflineTask } from '../common/Downloader';
 import { Theme } from '../common/Theme';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 const ST_LOADING: string = 'loading';
 const ST_OK: string = 'ok';
@@ -255,44 +257,6 @@ struct OfflinePage {
     });
   }
 
-  @Builder
-  Header() {
-    Row({ space: 10 }) {
-      Text('‹')
-        .fontSize(24)
-        .fontColor(Theme.TEXT)
-        .width(30)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          router.back();
-        })
-      Column({ space: 2 }) {
-        Text('下载管理')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
-        Text(`${this.tasks.length} 份 · 已用 ${this.mb(this.totalBytes)} / ${this.capText()}`)
-          .fontSize(11)
-          .fontColor(Theme.TEXT_FAINT)
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-      if (this.tasks.length > 0) {
-        Text('清空')
-          .fontSize(11)
-          .fontColor(Theme.DANGER)
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-          .backgroundColor(Theme.CARD)
-          .borderRadius(9)
-          .onClick(() => {
-            this.confirmClear();
-          })
-      }
-    }
-    .width('100%')
-    .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 8 })
-  }
 
   /** 占用条 + 上限进度（到 90% 变金色，满了变红）。 */
   @Builder
@@ -411,9 +375,11 @@ struct OfflinePage {
         .layoutWeight(1)
       Text('按最久没看清理')
         .fontSize(11)
-        .fontColor('#FFFFFF')
+        .fontColor(Theme.ACCENT)
         .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-        .backgroundColor(Theme.ACCENT)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .backgroundColor(Theme.accentAlpha(0.30))
+        .border({ width: 1, color: Theme.accentAlpha(0.55) })
         .borderRadius(9)
         .onClick(() => {
           this.confirmPurge();
@@ -438,9 +404,11 @@ struct OfflinePage {
         .layoutWeight(1)
       Text('清理')
         .fontSize(11)
-        .fontColor('#FFFFFF')
+        .fontColor(Theme.ACCENT)
         .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-        .backgroundColor(Theme.ACCENT)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .backgroundColor(Theme.accentAlpha(0.30))
+        .border({ width: 1, color: Theme.accentAlpha(0.55) })
         .borderRadius(9)
         .onClick(() => {
           this.confirmOrphans();
@@ -544,64 +512,145 @@ struct OfflinePage {
     .borderRadius(12)
   }
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
-      this.Header()
-
-      Scroll() {
-        Column({ space: 10 }) {
-          if (this.warn) {
-            this.WarnBar()
+      Row({ space: 10 }) {
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
           }
-          this.UsageBar()
-          this.SettingsCard()
-          if (this.orphanFiles > 0) {
-            this.OrphanBar()
-          }
+        })
+        Column({ space: 2 }) {
+          PageTitle({ text: '下载管理', fs: 18 })
+          Text(`${this.tasks.length} 份 · 已用 ${this.mb(this.totalBytes)} / ${this.capText()}`)
+            .fontSize(11)
+            .fontColor(Theme.TEXT_FAINT)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        if (this.tasks.length > 0) {
+          Text('清空')
+            .fontSize(11)
+            .fontColor(Theme.DANGER)
+            .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor('#1FFFFFFF')
+            .border({ width: 0.5, color: '#33FFFFFF' })
+            .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
+            .borderRadius(9)
+            .onClick(() => {
+              this.confirmClear();
+            })
+        }
+      }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
+      .width('100%')
+      .padding({ left: 8, right: Theme.PAGE_PAD })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
 
-          if (this.tasks.length === 0) {
-            Column({ space: 8 }) {
-              Text('还没有离线缓存')
-                .fontSize(13)
-                .fontColor(Theme.TEXT_DIM)
-              Text('在影片详情页点「下载」，下完断网也能看。')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .textAlign(TextAlign.Center)
-                .lineHeight(15)
+  @StorageProp('amaneTopInset') topInset: number = 30;
+
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column() {
+
+        Scroll() {
+          Column({ space: 10 }) {
+
+          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
+          // 材质才有颜色可采样。
+          Blank().height(this.barH())
+            if (this.warn) {
+              this.WarnBar()
             }
-            .width('100%')
-            .padding({ top: 40, bottom: 20 })
-            .justifyContent(FlexAlign.Center)
-          } else {
-            if (this.runN + this.waitN > 0) {
-              Text(`正在下 ${this.runN} 个，排队 ${this.waitN} 个`)
-                .fontSize(10)
+            this.UsageBar()
+            this.SettingsCard()
+            if (this.orphanFiles > 0) {
+              this.OrphanBar()
+            }
+
+            if (this.tasks.length === 0) {
+              Column({ space: 8 }) {
+                Text('还没有离线缓存')
+                  .fontSize(13)
+                  .fontColor(Theme.TEXT_DIM)
+                Text('在影片详情页点「下载」，下完断网也能看。')
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .textAlign(TextAlign.Center)
+                  .lineHeight(15)
+              }
+              .width('100%')
+              .padding({ top: 40, bottom: 20 })
+              .justifyContent(FlexAlign.Center)
+            } else {
+              if (this.runN + this.waitN > 0) {
+                Text(`正在下 ${this.runN} 个，排队 ${this.waitN} 个`)
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .width('100%')
+              }
+              ForEach(this.tasks, (t: OfflineTask) => {
+                this.TaskRow(t)
+              }, (t: OfflineTask) => `off-${t.mid}-${t.key}-${t.status}-${t.done}`)
+              Text('缓存存在 App 自己的空间里，卸载 App 会一起清掉。' +
+                '下载时用的是只读播放地址，不额外占用你的流量以外的东西。')
+                .fontSize(9)
                 .fontColor(Theme.TEXT_FAINT)
                 .width('100%')
+                .lineHeight(14)
+                .padding({ top: 4, bottom: Theme.BOTTOM_SAFE })
             }
-            ForEach(this.tasks, (t: OfflineTask) => {
-              this.TaskRow(t)
-            }, (t: OfflineTask) => `off-${t.mid}-${t.key}-${t.status}-${t.done}`)
-            Text('缓存存在 App 自己的空间里，卸载 App 会一起清掉。' +
-              '下载时用的是只读播放地址，不额外占用你的流量以外的东西。')
-              .fontSize(9)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .lineHeight(14)
-              .padding({ top: 4, bottom: Theme.BOTTOM_SAFE })
           }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4 })
+          // Scroll 会把短内容竖向居中（同 ProfileTab.ets:229），撑满最小高度才贴顶
+          .constraintSize({ minHeight: '100%' })
+          .justifyContent(FlexAlign.Start)
         }
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4 })
-        // Scroll 会把短内容竖向居中（同 ProfileTab.ets:229），撑满最小高度才贴顶
-        .constraintSize({ minHeight: '100%' })
-        .justifyContent(FlexAlign.Start)
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
       }
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

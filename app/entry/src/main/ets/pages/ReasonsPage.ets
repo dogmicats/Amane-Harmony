@@ -13,6 +13,7 @@
  * 数据只读 `Reason.today()`（当天快照），不重新生成 —— 句子按天固定，换个入口看必须同一批话。
  */
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet } from '../common/Http';
 import { Store } from '../common/Store';
@@ -20,6 +21,7 @@ import { Theme } from '../common/Theme';
 import { DetailParams, HomeData, MediaItem } from '../common/Types';
 import { safeHome } from '../common/Safe';
 import { Reason, ReasonLine } from '../common/Reason';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 @Entry
 @Component
@@ -78,23 +80,18 @@ struct ReasonsPage {
     return n;
   }
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
       Row({ space: 10 }) {
-        Text('‹')
-          .fontSize(22)
-          .fontColor(Theme.TEXT)
-          .width(34)
-          .height(34)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            router.back();
-          })
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
+          }
+        })
         Column({ space: 2 }) {
-          Text('今天的推荐理由')
-            .fontSize(16)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(Theme.TEXT)
+          PageTitle({ text: '今天的推荐理由', fs: 18 })
           Text('每天换一种说法，同一部片当天不变')
             .fontSize(10)
             .fontColor(Theme.TEXT_FAINT)
@@ -102,106 +99,154 @@ struct ReasonsPage {
         .alignItems(HorizontalAlign.Start)
         Blank()
       }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 6, right: Theme.PAGE_PAD, top: 6, bottom: 8 })
+      .padding({ left: 6, right: Theme.PAGE_PAD })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
 
-      if (this.shown().length === 0) {
-        Column({ space: 8 }) {
-          Text('今天还没有推荐理由')
-            .fontSize(12)
-            .fontColor(Theme.TEXT_DIM)
-          Text('推荐位空着、或者「推荐理由」开关关掉了')
-            .fontSize(10)
-            .fontColor(Theme.TEXT_FAINT)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        Scroll() {
-          Column({ space: 12 }) {
-            ForEach(this.shown(), (l: ReasonLine) => {
-              Row({ space: 12 }) {
-                if (this.coverOf(l.id).length > 0) {
-                  Image(Store.I.img(this.coverOf(l.id)))
-                    .width(46)
-                    .height(66)
-                    .objectFit(ImageFit.Cover)
-                    .borderRadius(7)
-                    .backgroundColor(Theme.CARD_HI)
-                    .alt($r('app.media.placeholder'))
-                }
-                Column({ space: 7 }) {
-                  Row({ space: 6 }) {
-                    Text(l.number)
-                      .fontSize(10)
-                      .fontColor(Theme.TEXT_FAINT)
-                      .maxLines(1)
-                    Text('·')
-                      .fontSize(10)
-                      .fontColor(Theme.TEXT_FAINT)
-                    Text(l.title)
-                      .fontSize(11)
-                      .fontColor(Theme.TEXT_DIM)
-                      .layoutWeight(1)
-                      .maxLines(1)
-                      .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  }
-                  .width('100%')
+  @StorageProp('amaneTopInset') topInset: number = 30;
 
-                  // 一句话是这张卡的重点（与抽屉同一套：15px 金色 + 左侧 2vp 细线）
-                  Text(l.reason)
-                    .fontSize(15)
-                    .fontWeight(FontWeight.Medium)
-                    .fontColor(Theme.GOLD)
-                    .width('100%')
-                    .lineHeight(24)
-                    .padding({ left: 9 })
-                    .border({
-                      width: { left: 2 },
-                      color: { left: Theme.GOLD }
-                    })
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
 
-                  if (l.extra.length > 0) {
-                    Text(l.extra)
-                      .fontSize(11)
-                      .fontColor(Theme.TEXT_FAINT)
-                      .width('100%')
-                      .lineHeight(17)
-                  }
-                }
-                .alignItems(HorizontalAlign.Start)
-                .layoutWeight(1)
-              }
-              .width('100%')
-              .padding(14)
-              .backgroundColor(Theme.CARD)
-              .borderRadius(12)
-              .alignItems(VerticalAlign.Top)
-              .onClick(() => {
-                const params: DetailParams = { id: l.id };
-                router.pushUrl({ url: 'pages/DetailPage', params: params });
-              })
-            }, (l: ReasonLine) => `rp-${l.id}`)
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
 
-            Column({ space: 4 }) {
-              Divider().color(Theme.CARD_HI).margin({ bottom: 6 })
-              Text(`共 ${this.count()} 句 · 每天换一种说法，同一部片当天不变`)
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width('100%')
-            }
-            .width('100%')
-            .padding({ top: 2, bottom: 26 })
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column() {
+
+  // 六十改：让出浮层标题栏的高度
+  Blank().height(this.barH())
+
+        if (this.shown().length === 0) {
+          Column({ space: 8 }) {
+            Text('今天还没有推荐理由')
+              .fontSize(12)
+              .fontColor(Theme.TEXT_DIM)
+            Text('推荐位空着、或者「推荐理由」开关关掉了')
+              .fontSize(10)
+              .fontColor(Theme.TEXT_FAINT)
           }
           .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          Scroll() {
+            Column({ space: 12 }) {
+              ForEach(this.shown(), (l: ReasonLine) => {
+                Row({ space: 12 }) {
+                  if (this.coverOf(l.id).length > 0) {
+                    Image(Store.I.img(this.coverOf(l.id)))
+                      .width(46)
+                      .height(66)
+                      .objectFit(ImageFit.Cover)
+                      .borderRadius(7)
+                      .backgroundColor(Theme.CARD_HI)
+                      .alt($r('app.media.placeholder'))
+                  }
+                  Column({ space: 7 }) {
+                    Row({ space: 6 }) {
+                      Text(l.number)
+                        .fontSize(10)
+                        .fontColor(Theme.TEXT_FAINT)
+                        .maxLines(1)
+                      Text('·')
+                        .fontSize(10)
+                        .fontColor(Theme.TEXT_FAINT)
+                      Text(l.title)
+                        .fontSize(11)
+                        .fontColor(Theme.TEXT_DIM)
+                        .layoutWeight(1)
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    }
+                    .width('100%')
+
+                    // 一句话是这张卡的重点（与抽屉同一套：15px 金色 + 左侧 2vp 细线）
+                    Text(l.reason)
+                      .fontSize(15)
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor(Theme.GOLD)
+                      .width('100%')
+                      .lineHeight(24)
+                      .padding({ left: 9 })
+                      .border({
+                        width: { left: 2 },
+                        color: { left: Theme.GOLD }
+                      })
+
+                    if (l.extra.length > 0) {
+                      Text(l.extra)
+                        .fontSize(11)
+                        .fontColor(Theme.TEXT_FAINT)
+                        .width('100%')
+                        .lineHeight(17)
+                    }
+                  }
+                  .alignItems(HorizontalAlign.Start)
+                  .layoutWeight(1)
+                }
+                .width('100%')
+                .padding(14)
+                .backgroundColor(Theme.CARD)
+                .borderRadius(12)
+                .alignItems(VerticalAlign.Top)
+                .onClick(() => {
+                  const params: DetailParams = { id: l.id };
+                  router.pushUrl({ url: 'pages/DetailPage', params: params });
+                })
+              }, (l: ReasonLine) => `rp-${l.id}`)
+
+              Column({ space: 4 }) {
+                Divider().color(Theme.CARD_HI).margin({ bottom: 6 })
+                Text(`共 ${this.count()} 句 · 每天换一种说法，同一部片当天不变`)
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .width('100%')
+              }
+              .width('100%')
+              .padding({ top: 2, bottom: 26 })
+            }
+            .width('100%')
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+          }
+          .layoutWeight(1)
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring)
         }
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
       }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

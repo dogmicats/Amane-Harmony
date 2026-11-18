@@ -5,6 +5,7 @@ import { httpGet, probe } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { BuildConfig } from '../common/BuildConfig';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /** 关于页：版本 / 运行环境 / 当前连的服务端 / 链接与致谢。 */
 
@@ -201,167 +202,205 @@ struct AboutPage {
     .width('100%')
   }
 
-  build() {
-    Column({ space: 14 }) {
+  @Builder
+  TitleBar() {
+    Column() {
       Row({ space: 10 }) {
-        Text('‹')
-          .fontSize(24)
-          .fontColor(Theme.TEXT)
-          .width(30)
-          .height(34)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            router.back();
-          })
-        Text('关于应用')
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.TEXT)
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
+          }
+        })
+        PageTitle({ text: '关于应用', fs: 18 })
       }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 4 })
+      .padding({ left: 8, right: Theme.PAGE_PAD })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
 
-      Scroll() {
-        Column({ space: 12 }) {
-          // 标识区
-          Column({ space: 8 }) {
-            Image($r('app.media.startIcon'))
-              .width(64)
-              .height(64)
-              .borderRadius(16)
-              .objectFit(ImageFit.Contain)
-            Text('Amane')
-              .fontSize(20)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(Theme.TEXT)
-            Text('HarmonyOS 客户端 · 自建媒体库')
-              .fontSize(11)
-              .fontColor(Theme.TEXT_FAINT)
-            Row({ space: 6 }) {
-              Text(`v${this.appVersion}`)
-                .fontSize(10)
-                .fontColor('#FFFFFF')
-                .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-                .backgroundColor(Theme.ACCENT)
-                .borderRadius(8)
-              Text(BuildConfig.CHANNEL === 'self' ? '自用版' : '公开版')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_DIM)
-                .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-                .backgroundColor(Theme.CARD_HI)
-                .borderRadius(8)
-              Text(`code ${this.appCode}`)
-                .fontSize(10)
+  @StorageProp('amaneTopInset') topInset: number = 30;
+
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column({ space: 14 }) {
+
+        Scroll() {
+          Column({ space: 12 }) {
+
+          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
+          // 材质才有颜色可采样。
+          Blank().height(this.barH())
+            // 标识区
+            Column({ space: 8 }) {
+              Image($r('app.media.startIcon'))
+                .width(64)
+                .height(64)
+                .borderRadius(16)
+                .objectFit(ImageFit.Contain)
+              Text('Amane')
+                .fontSize(20)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Theme.TEXT)
+              Text('HarmonyOS 客户端 · 自建媒体库')
+                .fontSize(11)
                 .fontColor(Theme.TEXT_FAINT)
-                .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-                .backgroundColor(Theme.CARD_HI)
-                .borderRadius(8)
+              Row({ space: 6 }) {
+                Text(`v${this.appVersion}`)
+                  .fontSize(10)
+                  .fontColor('#FFFFFF')
+                  .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                  .backgroundColor(Theme.ACCENT)
+                  .borderRadius(8)
+                Text(BuildConfig.CHANNEL === 'self' ? '自用版' : '公开版')
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_DIM)
+                  .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                  .backgroundColor(Theme.CARD_HI)
+                  .borderRadius(8)
+                Text(`code ${this.appCode}`)
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                  .backgroundColor(Theme.CARD_HI)
+                  .borderRadius(8)
+              }
             }
-          }
-          .width('100%')
-          .padding({ top: 14, bottom: 10 })
-
-          // 运行环境
-          this.Section('运行环境')
-          Column() {
-            this.FactRow('device', '设备', false)
-            this.FactRow('system', '系统', false)
-            this.FactRow('bundle', '包名', false)
-            this.FactRow('appver', '应用版本', true)
-          }
-          .width('100%')
-          .padding({ left: 14, right: 14 })
-          .backgroundColor(Theme.CARD)
-          .borderRadius(Theme.RADIUS)
-
-          // 服务端
-          this.Section('服务端')
-          Column() {
-            this.FactRow('state', '状态', false)
-            this.FactRow('min', '最低要求', false)
-            this.FactRow('mode', '连接方式', false)
-            this.FactRow('addr', '地址', true)
-          }
-          .width('100%')
-          .padding({ left: 14, right: 14 })
-          .backgroundColor(Theme.CARD)
-          .borderRadius(Theme.RADIUS)
-          .onClick(() => {
-            router.pushUrl({ url: 'pages/SettingsPage' });
-          })
-
-          // 链接
-          this.Section('链接')
-          Column() {
-            this.LinkItem({
-              title: 'Telegram 讨论群',
-              desc: '装不上、用着别扭、想加功能，都在这儿说',
-              url: 'https://t.me/+uYKKwB9LtjMxYTY9'
-            }, false)
-            this.LinkItem({
-              title: 'Telegram 更新频道',
-              desc: '只发版本更新，不闲聊',
-              url: 'https://t.me/+iEyg1f5Q_6UxYjY1'
-            }, false)
-            this.LinkItem({
-              title: '项目主页',
-              desc: 'github.com/dogmicats/Amane-Harmony',
-              url: 'https://github.com/dogmicats/Amane-Harmony'
-            }, false)
-            this.LinkItem({
-              title: '问题反馈',
-              desc: 'github.com/dogmicats/Amane-Harmony/issues',
-              url: 'https://github.com/dogmicats/Amane-Harmony/issues'
-            }, true)
-          }
-          .width('100%')
-          .padding({ left: 14, right: 14 })
-          .backgroundColor(Theme.CARD)
-          .borderRadius(Theme.RADIUS)
-
-          // 致谢
-          this.Section('开源与致谢')
-          Column({ space: 8 }) {
-            Text('界面与播放基于 HarmonyOS ArkUI 与 libmpv；媒体库服务端上游为 sqzw-x/amane（GPL-3.0），本客户端以 MIT 协议发布。')
-              .fontSize(11)
-              .fontColor(Theme.TEXT_DIM)
-              .lineHeight(17)
-              .width('100%')
-            Text('这个应用只做「自己服务器上已有媒体的浏览与播放」，不含任何内容源，也不提供下载。')
-              .fontSize(11)
-              .fontColor(Theme.TEXT_FAINT)
-              .lineHeight(17)
-              .width('100%')
-          }
-          .width('100%')
-          .padding(14)
-          .backgroundColor(Theme.CARD)
-          .borderRadius(Theme.RADIUS)
-
-          Button('复制版本信息')
             .width('100%')
-            .height(40)
-            .backgroundColor(Theme.CARD_HI)
-            .fontColor(Theme.TEXT)
-            .fontSize(13)
-            .margin({ top: 4 })
+            .padding({ top: 14, bottom: 10 })
+
+            // 运行环境
+            this.Section('运行环境')
+            Column() {
+              this.FactRow('device', '设备', false)
+              this.FactRow('system', '系统', false)
+              this.FactRow('bundle', '包名', false)
+              this.FactRow('appver', '应用版本', true)
+            }
+            .width('100%')
+            .padding({ left: 14, right: 14 })
+            .backgroundColor(Theme.CARD)
+            .borderRadius(Theme.RADIUS)
+
+            // 服务端
+            this.Section('服务端')
+            Column() {
+              this.FactRow('state', '状态', false)
+              this.FactRow('min', '最低要求', false)
+              this.FactRow('mode', '连接方式', false)
+              this.FactRow('addr', '地址', true)
+            }
+            .width('100%')
+            .padding({ left: 14, right: 14 })
+            .backgroundColor(Theme.CARD)
+            .borderRadius(Theme.RADIUS)
             .onClick(() => {
-              this.copy(this.versionLine(), '版本信息已复制');
+              router.pushUrl({ url: 'pages/SettingsPage' });
             })
 
-          Text('© 2026 dogmicats')
-            .fontSize(10)
-            .fontColor(Theme.TEXT_FAINT)
+            // 链接
+            this.Section('链接')
+            Column() {
+              this.LinkItem({
+                title: 'Telegram 讨论群',
+                desc: '装不上、用着别扭、想加功能，都在这儿说',
+                url: 'https://t.me/+uYKKwB9LtjMxYTY9'
+              }, false)
+              this.LinkItem({
+                title: 'Telegram 更新频道',
+                desc: '只发版本更新，不闲聊',
+                url: 'https://t.me/+iEyg1f5Q_6UxYjY1'
+              }, false)
+              this.LinkItem({
+                title: '项目主页',
+                desc: 'github.com/dogmicats/Amane-Harmony',
+                url: 'https://github.com/dogmicats/Amane-Harmony'
+              }, false)
+              this.LinkItem({
+                title: '问题反馈',
+                desc: 'github.com/dogmicats/Amane-Harmony/issues',
+                url: 'https://github.com/dogmicats/Amane-Harmony/issues'
+              }, true)
+            }
             .width('100%')
-            .textAlign(TextAlign.Center)
-            .margin({ top: 6, bottom: 24 })
+            .padding({ left: 14, right: 14 })
+            .backgroundColor(Theme.CARD)
+            .borderRadius(Theme.RADIUS)
+
+            // 致谢
+            this.Section('开源与致谢')
+            Column({ space: 8 }) {
+              Text('界面与播放基于 HarmonyOS ArkUI 与 libmpv；媒体库服务端上游为 sqzw-x/amane（GPL-3.0），本客户端以 MIT 协议发布。')
+                .fontSize(11)
+                .fontColor(Theme.TEXT_DIM)
+                .lineHeight(17)
+                .width('100%')
+              Text('这个应用只做「自己服务器上已有媒体的浏览与播放」，不含任何内容源，也不提供下载。')
+                .fontSize(11)
+                .fontColor(Theme.TEXT_FAINT)
+                .lineHeight(17)
+                .width('100%')
+            }
+            .width('100%')
+            .padding(14)
+            .backgroundColor(Theme.CARD)
+            .borderRadius(Theme.RADIUS)
+
+            Button('复制版本信息')
+              .width('100%')
+              .height(40)
+              .backgroundColor(Theme.CARD_HI)
+              .fontColor(Theme.TEXT)
+              .fontSize(13)
+              .margin({ top: 4 })
+              .onClick(() => {
+                this.copy(this.versionLine(), '版本信息已复制');
+              })
+
+            Text('© 2026 dogmicats')
+              .fontSize(10)
+              .fontColor(Theme.TEXT_FAINT)
+              .width('100%')
+              .textAlign(TextAlign.Center)
+              .margin({ top: 6, bottom: 24 })
+          }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
         }
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
       }
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

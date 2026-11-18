@@ -1,10 +1,12 @@
 import { router, promptAction } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet, dropPageCache, httpPost, httpPut, httpDelete } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { ItemDetail } from '../common/Types';
 import { safeDetail } from '../common/Safe';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /**
  * 编辑影片信息（2.5.5 · Agent2 客户端）。
@@ -115,6 +117,7 @@ struct SugList {
   @Prop items: SugItem[] = [];
   @Prop active: boolean = false;
   onPick: (name: string) => void = (name: string) => {};
+
 
   build() {
     if (this.active && this.items.length > 0) {
@@ -740,20 +743,13 @@ struct MetaEditPage {
   @Builder
   Header() {
     Row({ space: 10 }) {
-      Text('‹')
-        .fontSize(24)
-        .fontColor(Theme.TEXT)
-        .width(30)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          router.back();
-        })
+      GlassBack({
+        onTap: () => {
+        router.back();
+        }
+      })
       Column({ space: 2 }) {
-        Text('编辑信息')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
+        PageTitle({ text: '编辑信息', fs: 18 })
         Text('存在你的服务端，换手机也在')
           .fontSize(11)
           .fontColor(Theme.TEXT_FAINT)
@@ -766,9 +762,11 @@ struct MetaEditPage {
       if (this.st === ST_OK) {
         Text(this.busy ? '…' : '保存')
           .fontSize(12)
-          .fontColor(Theme.ON_ACCENT)
+          .fontColor(Theme.ACCENT)
           .padding({ left: 14, right: 14, top: 6, bottom: 6 })
-          .backgroundColor(Theme.ACCENT)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+          .backgroundColor(Theme.accentAlpha(0.30))
+          .border({ width: 1, color: Theme.accentAlpha(0.55) })
           .borderRadius(14)
           .onClick(() => {
             this.save();
@@ -887,6 +885,12 @@ struct MetaEditPage {
   }
 
   /** 名字列表（演员 / 标签）：已抽成 `EditList` 组件。 */
+
+  /** 七十二改：这页没有状态栏让位逻辑，**显式退回非全屏窗口** ——
+   * 否则从全屏的二级页推过来，标题会被时钟压住。入口是谁都不怕。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), false);
+  }
 
   build() {
     Column() {
@@ -1026,7 +1030,10 @@ struct MetaEditPage {
               .width('100%')
               .textAlign(TextAlign.Center)
               .padding({ top: 12, bottom: 12 })
-              .backgroundColor(Theme.CARD)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+              .backgroundColor('#1FFFFFFF')
+              .border({ width: 0.5, color: '#33FFFFFF' })
+              .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
               .borderRadius(14)
               .onClick(() => {
                 this.confirmReset();
@@ -1099,9 +1106,11 @@ struct MetaEditPage {
               })
             Text('新建并保存')
               .fontSize(12)
-              .fontColor(Theme.ON_ACCENT)
+              .fontColor(Theme.ACCENT)
               .padding({ left: 16, right: 16, top: 7, bottom: 7 })
-              .backgroundColor(Theme.ACCENT)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+              .backgroundColor(Theme.accentAlpha(0.30))
+              .border({ width: 1, color: Theme.accentAlpha(0.55) })
               .borderRadius(10)
               .onClick(() => {
                 this.confirmCreate();

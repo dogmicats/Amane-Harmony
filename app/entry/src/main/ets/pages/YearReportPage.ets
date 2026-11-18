@@ -8,10 +8,12 @@
  * 每屏一个主题，滚动即翻页：总量 → 最忙的一天 → 12 个月 → 几点看 → 最爱 → 偏好 → 连续。
  */
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 interface AnnualBest {
   d: string;
@@ -183,277 +185,320 @@ struct YearReportPage {
   }
 
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
       Row({ space: 10 }) {
-        Text('‹')
-          .fontSize(22)
-          .fontColor(Theme.TEXT)
-          .width(34)
-          .height(34)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            router.back();
-          })
-        Text(`${this.year} 观影年报`)
-          .fontSize(16)
-          .fontColor(Theme.TEXT)
-          .fontWeight(FontWeight.Medium)
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
+          }
+        })
+        PageTitle({ text: `${this.year} 观影年报`, fs: 18 })
         Blank()
       }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 6, right: Theme.PAGE_PAD, top: 6, bottom: 6 })
+      .padding({ left: 6, right: Theme.PAGE_PAD })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
 
-      if (this.loading) {
-        Column() {
-          LoadingProgress()
-            .width(28)
-            .height(28)
-            .color(Theme.ACCENT)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.err.length > 0) {
-        Column({ space: 10 }) {
-          Text(this.err)
-            .fontSize(12)
-            .fontColor(Theme.TEXT_DIM)
-          Text('换一年试试')
-            .fontSize(11)
-            .fontColor(Theme.ACCENT)
-            .onClick(() => {
-              this.year = this.year - 1;
-              this.load();
-            })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        Scroll() {
-          Column({ space: 14 }) {
-            // ① 总量
-            Column({ space: 8 }) {
-              Text(`${this.data.year}`)
-                .fontSize(13)
-                .fontColor(Theme.ACCENT)
-                .letterSpacing(3)
-              Text(`${this.data.hours} 小时`)
-                .fontSize(40)
-                .fontColor(Theme.TEXT)
-                .fontWeight(FontWeight.Bold)
-              Text(`看了 ${this.data.films} 部 · ${this.data.days} 天有动静`)
-                .fontSize(12)
-                .fontColor(Theme.TEXT_DIM)
-              Text(`平均每次坐下来看 ${dur(this.data.seconds / Math.max(1, this.data.days))}`)
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-            }
-            .width('100%')
-            .padding({ top: 18, bottom: 18 })
-            .alignItems(HorizontalAlign.Center)
+  @StorageProp('amaneTopInset') topInset: number = 30;
 
-            // ② 最忙的一天
-            if (this.data.best !== null) {
-              Column({ space: 8 }) {
-                this.SectionHeadText('最投入的一天', '这一天你坐得最久')
-                Text(this.data.best.d)
-                  .fontSize(20)
-                  .fontColor(Theme.GOLD)
-                Text(`那天看了 ${this.data.best.f} 部，合计 ${dur(this.data.best.s)}`)
-                  .fontSize(11)
-                  .fontColor(Theme.TEXT_DIM)
-              }
-              .alignItems(HorizontalAlign.Start)
-              .width('100%')
-              .padding(14)
-              .backgroundColor(Theme.CARD)
-              .borderRadius(14)
-            }
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
 
-            // ③ 12 个月
-            Column() {
-              this.SectionHeadText('一年十二个月', '柱子的高矮 = 那个月看了多久')
-              Row({ space: 6 }) {
-                ForEach(this.data.months, (v: number, i: number) => {
-                  Column() {
-                    Column()
-                      .width('100%')
-                      .height(Math.max(2, Math.round(v / Math.max(1, this.monthPeak()) * 62)))
-                      .backgroundColor(v > 0 ? Theme.alphaOf(Theme.ACCENT,
-                        Math.max(0.25, v / Math.max(1, this.monthPeak()) * 0.9)) : Theme.CARD_HI)
-                      .borderRadius(3)
-                  }
-                  .layoutWeight(1)
-                  .height(64)
-                  .justifyContent(FlexAlign.End)
-                }, (v: number, i: number) => `mo-${i}`)
-              }
-              .width('100%')
-              .alignItems(VerticalAlign.Bottom)
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
 
-              Row({ space: 6 }) {
-                ForEach([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], (m: number) => {
-                  Text(`${m}`)
-                    .fontSize(8)
-                    .fontColor(Theme.TEXT_FAINT)
-                    .layoutWeight(1)
-                    .textAlign(TextAlign.Center)
-                }, (m: number) => `mn-${m}`)
-              }
-              .width('100%')
-              .margin({ top: 4 })
-            }
-            .alignItems(HorizontalAlign.Start)
-            .width('100%')
-            .padding(14)
-            .backgroundColor(Theme.CARD)
-            .borderRadius(14)
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
 
-            // ④ 几点看
-            if (this.peakHourText().length > 0) {
-              Column({ space: 8 }) {
-                this.SectionHeadText('你多半在几点看', `最集中的时段：${this.peakHourText()}`)
-                Row({ space: 2 }) {
-                  ForEach(this.data.hour_secs, (v: number, i: number) => {
-                    Column()
-                      .layoutWeight(1)
-                      .height(Math.max(3, Math.round(v / Math.max(1, this.hourPeak()) * 40)))
-                      .backgroundColor(v > 0 ? Theme.alphaOf(Theme.ACCENT2,
-                        Math.max(0.22, v / Math.max(1, this.hourPeak()) * 0.9)) : Theme.CARD_HI)
-                      .borderRadius(2)
-                  }, (v: number, i: number) => `hr-${i}`)
-                }
-                .width('100%')
-                .height(42)
-                .alignItems(VerticalAlign.Bottom)
-                Row() {
-                  Text('0 点').fontSize(8).fontColor(Theme.TEXT_FAINT)
-                  Blank()
-                  Text('12 点').fontSize(8).fontColor(Theme.TEXT_FAINT)
-                  Blank()
-                  Text('23 点').fontSize(8).fontColor(Theme.TEXT_FAINT)
-                }
-                .width('100%')
-              }
-              .alignItems(HorizontalAlign.Start)
-              .width('100%')
-              .padding(14)
-              .backgroundColor(Theme.CARD)
-              .borderRadius(14)
-            }
+  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
 
-            // ⑤ 看得最久的几部
-            if (this.data.top_films.length > 0) {
-              Column({ space: 8 }) {
-                this.SectionHeadText('看得最久的几部', '按这一年累计的播放时长排')
-                ForEach(this.data.top_films.slice(0, 5), (f: AnnualFilm, i: number) => {
-                  Row({ space: 8 }) {
-                    Text(`${i + 1}`)
-                      .fontSize(11)
-                      .fontColor(i < 3 ? Theme.GOLD : Theme.TEXT_FAINT)
-                      .width(16)
-                    Column({ space: 2 }) {
-                      Text(f.number.length > 0 ? f.number : `#${f.id}`)
-                        .fontSize(11)
-                        .fontColor(Theme.ACCENT)
-                      if (f.title.length > 0) {
-                        Text(f.title)
-                          .fontSize(10)
-                          .fontColor(Theme.TEXT_DIM)
-                          .maxLines(1)
-                          .textOverflow({ overflow: TextOverflow.Ellipsis })
-                      }
-                    }
-                    .alignItems(HorizontalAlign.Start)
-                    .layoutWeight(1)
-                    Text(dur(f.seconds))
-                      .fontSize(10)
-                      .fontColor(Theme.TEXT_FAINT)
-                  }
-                  .width('100%')
-                  .padding({ top: 4, bottom: 4 })
-                }, (f: AnnualFilm) => `tf-${f.id}`)
-              }
-              .alignItems(HorizontalAlign.Start)
-              .width('100%')
-              .padding(14)
-              .backgroundColor(Theme.CARD)
-              .borderRadius(14)
-            }
+  build() {
+    Navigation(this.navStack) {
+      Column() {
 
-            // ⑥ 偏好：演员 / 标签
-            if (this.data.top_actors.length > 0 || this.data.top_tags.length > 0) {
-              Column({ space: 10 }) {
-                this.SectionHeadText('这一年偏谁、偏什么', '按有看的部数算')
-                if (this.data.top_actors.length > 0) {
-                  Flex({ wrap: FlexWrap.Wrap }) {
-                    ForEach(this.data.top_actors, (a: AnnualName) => {
-                      Text(a.name)
-                        .fontSize(11)
-                        .fontColor(Theme.TEXT)
-                        .padding({ left: 9, right: 9, top: 4, bottom: 4 })
-                        .backgroundColor(Theme.CARD_HI)
-                        .borderRadius(11)
-                        .margin({ right: 6, bottom: 6 })
-                    }, (a: AnnualName) => `ta-${a.id}-${a.name}`)
-                  }
-                  .width('100%')
-                }
-                if (this.data.top_tags.length > 0) {
-                  Flex({ wrap: FlexWrap.Wrap }) {
-                    ForEach(this.data.top_tags, (t: AnnualName) => {
-                      Text(`# ${t.name}`)
-                        .fontSize(11)
-                        .fontColor(Theme.TEXT_DIM)
-                        .padding({ left: 9, right: 9, top: 4, bottom: 4 })
-                        .backgroundColor(Theme.CARD_HI)
-                        .borderRadius(11)
-                        .margin({ right: 6, bottom: 6 })
-                    }, (t: AnnualName) => `tt-${t.id}-${t.name}`)
-                  }
-                  .width('100%')
-                }
-              }
-              .alignItems(HorizontalAlign.Start)
-              .width('100%')
-              .padding(14)
-              .backgroundColor(Theme.CARD)
-              .borderRadius(14)
-            }
+  // 六十改：让出浮层标题栏的高度
+  Blank().height(this.barH())
 
-            // ⑦ 连续
-            if (this.data.max_streak > 1) {
-              Column({ space: 6 }) {
-                this.SectionHeadText('最长的一段', '连续有观看的天数')
-                Text(`${this.data.max_streak} 天`)
-                  .fontSize(24)
-                  .fontColor(Theme.TEXT)
-              }
-              .alignItems(HorizontalAlign.Start)
-              .width('100%')
-              .padding(14)
-              .backgroundColor(Theme.CARD)
-              .borderRadius(14)
-            }
-
-            Text(this.data.from !== null && this.data.to !== null
-              ? `${this.data.from} ~ ${this.data.to} · 数据来自这台设备的上报`
-              : '数据来自这台设备的上报')
-              .fontSize(9)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .padding({ top: 2, bottom: 26 })
+        if (this.loading) {
+          Column() {
+            LoadingProgress()
+              .width(28)
+              .height(28)
+              .color(Theme.ACCENT)
           }
           .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.err.length > 0) {
+          Column({ space: 10 }) {
+            Text(this.err)
+              .fontSize(12)
+              .fontColor(Theme.TEXT_DIM)
+            Text('换一年试试')
+              .fontSize(11)
+              .fontColor(Theme.ACCENT)
+              .onClick(() => {
+                this.year = this.year - 1;
+                this.load();
+              })
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          Scroll() {
+            Column({ space: 14 }) {
+              // ① 总量
+              Column({ space: 8 }) {
+                Text(`${this.data.year}`)
+                  .fontSize(13)
+                  .fontColor(Theme.ACCENT)
+                  .letterSpacing(3)
+                Text(`${this.data.hours} 小时`)
+                  .fontSize(40)
+                  .fontColor(Theme.TEXT)
+                  .fontWeight(FontWeight.Bold)
+                Text(`看了 ${this.data.films} 部 · ${this.data.days} 天有动静`)
+                  .fontSize(12)
+                  .fontColor(Theme.TEXT_DIM)
+                Text(`平均每次坐下来看 ${dur(this.data.seconds / Math.max(1, this.data.days))}`)
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_FAINT)
+              }
+              .width('100%')
+              .padding({ top: 18, bottom: 18 })
+              .alignItems(HorizontalAlign.Center)
+
+              // ② 最忙的一天
+              if (this.data.best !== null) {
+                Column({ space: 8 }) {
+                  this.SectionHeadText('最投入的一天', '这一天你坐得最久')
+                  Text(this.data.best.d)
+                    .fontSize(20)
+                    .fontColor(Theme.GOLD)
+                  Text(`那天看了 ${this.data.best.f} 部，合计 ${dur(this.data.best.s)}`)
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_DIM)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .width('100%')
+                .padding(14)
+                .backgroundColor(Theme.CARD)
+                .borderRadius(14)
+              }
+
+              // ③ 12 个月
+              Column() {
+                this.SectionHeadText('一年十二个月', '柱子的高矮 = 那个月看了多久')
+                Row({ space: 6 }) {
+                  ForEach(this.data.months, (v: number, i: number) => {
+                    Column() {
+                      Column()
+                        .width('100%')
+                        .height(Math.max(2, Math.round(v / Math.max(1, this.monthPeak()) * 62)))
+                        .backgroundColor(v > 0 ? Theme.alphaOf(Theme.ACCENT,
+                          Math.max(0.25, v / Math.max(1, this.monthPeak()) * 0.9)) : Theme.CARD_HI)
+                        .borderRadius(3)
+                    }
+                    .layoutWeight(1)
+                    .height(64)
+                    .justifyContent(FlexAlign.End)
+                  }, (v: number, i: number) => `mo-${i}`)
+                }
+                .width('100%')
+                .alignItems(VerticalAlign.Bottom)
+
+                Row({ space: 6 }) {
+                  ForEach([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], (m: number) => {
+                    Text(`${m}`)
+                      .fontSize(8)
+                      .fontColor(Theme.TEXT_FAINT)
+                      .layoutWeight(1)
+                      .textAlign(TextAlign.Center)
+                  }, (m: number) => `mn-${m}`)
+                }
+                .width('100%')
+                .margin({ top: 4 })
+              }
+              .alignItems(HorizontalAlign.Start)
+              .width('100%')
+              .padding(14)
+              .backgroundColor(Theme.CARD)
+              .borderRadius(14)
+
+              // ④ 几点看
+              if (this.peakHourText().length > 0) {
+                Column({ space: 8 }) {
+                  this.SectionHeadText('你多半在几点看', `最集中的时段：${this.peakHourText()}`)
+                  Row({ space: 2 }) {
+                    ForEach(this.data.hour_secs, (v: number, i: number) => {
+                      Column()
+                        .layoutWeight(1)
+                        .height(Math.max(3, Math.round(v / Math.max(1, this.hourPeak()) * 40)))
+                        .backgroundColor(v > 0 ? Theme.alphaOf(Theme.ACCENT2,
+                          Math.max(0.22, v / Math.max(1, this.hourPeak()) * 0.9)) : Theme.CARD_HI)
+                        .borderRadius(2)
+                    }, (v: number, i: number) => `hr-${i}`)
+                  }
+                  .width('100%')
+                  .height(42)
+                  .alignItems(VerticalAlign.Bottom)
+                  Row() {
+                    Text('0 点').fontSize(8).fontColor(Theme.TEXT_FAINT)
+                    Blank()
+                    Text('12 点').fontSize(8).fontColor(Theme.TEXT_FAINT)
+                    Blank()
+                    Text('23 点').fontSize(8).fontColor(Theme.TEXT_FAINT)
+                  }
+                  .width('100%')
+                }
+                .alignItems(HorizontalAlign.Start)
+                .width('100%')
+                .padding(14)
+                .backgroundColor(Theme.CARD)
+                .borderRadius(14)
+              }
+
+              // ⑤ 看得最久的几部
+              if (this.data.top_films.length > 0) {
+                Column({ space: 8 }) {
+                  this.SectionHeadText('看得最久的几部', '按这一年累计的播放时长排')
+                  ForEach(this.data.top_films.slice(0, 5), (f: AnnualFilm, i: number) => {
+                    Row({ space: 8 }) {
+                      Text(`${i + 1}`)
+                        .fontSize(11)
+                        .fontColor(i < 3 ? Theme.GOLD : Theme.TEXT_FAINT)
+                        .width(16)
+                      Column({ space: 2 }) {
+                        Text(f.number.length > 0 ? f.number : `#${f.id}`)
+                          .fontSize(11)
+                          .fontColor(Theme.ACCENT)
+                        if (f.title.length > 0) {
+                          Text(f.title)
+                            .fontSize(10)
+                            .fontColor(Theme.TEXT_DIM)
+                            .maxLines(1)
+                            .textOverflow({ overflow: TextOverflow.Ellipsis })
+                        }
+                      }
+                      .alignItems(HorizontalAlign.Start)
+                      .layoutWeight(1)
+                      Text(dur(f.seconds))
+                        .fontSize(10)
+                        .fontColor(Theme.TEXT_FAINT)
+                    }
+                    .width('100%')
+                    .padding({ top: 4, bottom: 4 })
+                  }, (f: AnnualFilm) => `tf-${f.id}`)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .width('100%')
+                .padding(14)
+                .backgroundColor(Theme.CARD)
+                .borderRadius(14)
+              }
+
+              // ⑥ 偏好：演员 / 标签
+              if (this.data.top_actors.length > 0 || this.data.top_tags.length > 0) {
+                Column({ space: 10 }) {
+                  this.SectionHeadText('这一年偏谁、偏什么', '按有看的部数算')
+                  if (this.data.top_actors.length > 0) {
+                    Flex({ wrap: FlexWrap.Wrap }) {
+                      ForEach(this.data.top_actors, (a: AnnualName) => {
+                        Text(a.name)
+                          .fontSize(11)
+                          .fontColor(Theme.TEXT)
+                          .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+                          .backgroundColor(Theme.CARD_HI)
+                          .borderRadius(11)
+                          .margin({ right: 6, bottom: 6 })
+                      }, (a: AnnualName) => `ta-${a.id}-${a.name}`)
+                    }
+                    .width('100%')
+                  }
+                  if (this.data.top_tags.length > 0) {
+                    Flex({ wrap: FlexWrap.Wrap }) {
+                      ForEach(this.data.top_tags, (t: AnnualName) => {
+                        Text(`# ${t.name}`)
+                          .fontSize(11)
+                          .fontColor(Theme.TEXT_DIM)
+                          .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+                          .backgroundColor(Theme.CARD_HI)
+                          .borderRadius(11)
+                          .margin({ right: 6, bottom: 6 })
+                      }, (t: AnnualName) => `tt-${t.id}-${t.name}`)
+                    }
+                    .width('100%')
+                  }
+                }
+                .alignItems(HorizontalAlign.Start)
+                .width('100%')
+                .padding(14)
+                .backgroundColor(Theme.CARD)
+                .borderRadius(14)
+              }
+
+              // ⑦ 连续
+              if (this.data.max_streak > 1) {
+                Column({ space: 6 }) {
+                  this.SectionHeadText('最长的一段', '连续有观看的天数')
+                  Text(`${this.data.max_streak} 天`)
+                    .fontSize(24)
+                    .fontColor(Theme.TEXT)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .width('100%')
+                .padding(14)
+                .backgroundColor(Theme.CARD)
+                .borderRadius(14)
+              }
+
+              Text(this.data.from !== null && this.data.to !== null
+                ? `${this.data.from} ~ ${this.data.to} · 数据来自这台设备的上报`
+                : '数据来自这台设备的上报')
+                .fontSize(9)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+                .padding({ top: 2, bottom: 26 })
+            }
+            .width('100%')
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+          }
+          .layoutWeight(1)
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring)
         }
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
       }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

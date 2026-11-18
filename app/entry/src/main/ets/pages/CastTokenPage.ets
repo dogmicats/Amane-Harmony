@@ -1,8 +1,10 @@
 import { promptAction, router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpDelete, httpGet } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 interface CastToken {
   token: string;
@@ -126,129 +128,168 @@ struct CastTokenPage {
     }
   }
 
+
   @Builder
-  Header() {
-    Row({ space: 10 }) {
-      Text('‹')
-        .fontSize(24)
-        .fontColor(Theme.TEXT)
-        .width(30)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
+  TitleBar() {
+    Column() {
+      Row({ space: 10 }) {
+        GlassBack({
+          mat: true,
+          onTap: () => {
           router.back();
+          }
         })
-      Column({ space: 2 }) {
-        Text('投屏令牌')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
-        Text('给电视用的只读钥匙，12 小时过期')
-          .fontSize(11)
-          .fontColor(Theme.TEXT_FAINT)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Column({ space: 2 }) {
+          PageTitle({ text: '投屏令牌', fs: 18 })
+          Text('给电视用的只读钥匙，12 小时过期')
+            .fontSize(11)
+            .fontColor(Theme.TEXT_FAINT)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
       }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
+      .height(46)
+      .alignItems(VerticalAlign.Center)
+      .width('100%')
+      .padding({ left: 8, right: Theme.PAGE_PAD })
     }
     .width('100%')
-    .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 8 })
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
+
+  @StorageProp('amaneTopInset') topInset: number = 30;
+
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
   }
 
   build() {
-    Column() {
-      this.Header()
+    Navigation(this.navStack) {
+      Column() {
 
-      if (this.st === ST_OK) {
-        Scroll() {
-          Column({ space: 10 }) {
-            if (this.items.length === 0) {
-              Column({ space: 8 }) {
-                Text('还没有投屏令牌')
-                  .fontSize(13)
-                  .fontColor(Theme.TEXT_DIM)
-                Text('在影片的「选择版本」里点「投屏」会生成一把，用完 12 小时自动失效。')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .textAlign(TextAlign.Center)
-                  .lineHeight(15)
-              }
-              .width('100%')
-              .padding({ top: 60 })
-            } else {
-              ForEach(this.items, (it: CastToken) => {
-                Row({ space: 10 }) {
-                  Column({ space: 3 }) {
-                    Text(this.short(it.token))
-                      .fontSize(13)
-                      .fontColor(Theme.TEXT)
-                    Text(`${this.fmt(it.created_at)} 生成 · ${this.fmt(it.expires_at)} 过期`)
-                      .fontSize(10)
-                      .fontColor(Theme.TEXT_FAINT)
-                  }
-                  .alignItems(HorizontalAlign.Start)
-                  .layoutWeight(1)
+  // 六十改：让出浮层标题栏的高度
+  Blank().height(this.barH())
 
-                  Text('吊销')
-                    .fontSize(11)
-                    .fontColor(Theme.DANGER)
-                    .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-                    .backgroundColor(Theme.CARD_HI)
-                    .borderRadius(9)
-                    .onClick(() => {
-                      this.confirmRevoke(it);
-                    })
+        if (this.st === ST_OK) {
+          Scroll() {
+            Column({ space: 10 }) {
+              if (this.items.length === 0) {
+                Column({ space: 8 }) {
+                  Text('还没有投屏令牌')
+                    .fontSize(13)
+                    .fontColor(Theme.TEXT_DIM)
+                  Text('在影片的「选择版本」里点「投屏」会生成一把，用完 12 小时自动失效。')
+                    .fontSize(10)
+                    .fontColor(Theme.TEXT_FAINT)
+                    .textAlign(TextAlign.Center)
+                    .lineHeight(15)
                 }
                 .width('100%')
-                .padding(12)
-                .backgroundColor(Theme.CARD)
-                .borderRadius(12)
-              }, (it: CastToken) => `ct-${it.token}`)
-            }
+                .padding({ top: 60 })
+              } else {
+                ForEach(this.items, (it: CastToken) => {
+                  Row({ space: 10 }) {
+                    Column({ space: 3 }) {
+                      Text(this.short(it.token))
+                        .fontSize(13)
+                        .fontColor(Theme.TEXT)
+                      Text(`${this.fmt(it.created_at)} 生成 · ${this.fmt(it.expires_at)} 过期`)
+                        .fontSize(10)
+                        .fontColor(Theme.TEXT_FAINT)
+                    }
+                    .alignItems(HorizontalAlign.Start)
+                    .layoutWeight(1)
 
-            Text('这些钥匙只能读媒体（播放 / 字幕 / 封面），改不了任何数据；' +
-              '换片时会复用还没过期的那一把。')
-              .fontSize(9)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .lineHeight(14)
-              .padding({ top: 4, bottom: Theme.BOTTOM_SAFE })
+                    Text('吊销')
+                      .fontSize(11)
+                      .fontColor(Theme.DANGER)
+                      .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+                      .backgroundColor(Theme.CARD_HI)
+                      .borderRadius(9)
+                      .onClick(() => {
+                        this.confirmRevoke(it);
+                      })
+                  }
+                  .width('100%')
+                  .padding(12)
+                  .backgroundColor(Theme.CARD)
+                  .borderRadius(12)
+                }, (it: CastToken) => `ct-${it.token}`)
+              }
+
+              Text('这些钥匙只能读媒体（播放 / 字幕 / 封面），改不了任何数据；' +
+                '换片时会复用还没过期的那一把。')
+                .fontSize(9)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+                .lineHeight(14)
+                .padding({ top: 4, bottom: Theme.BOTTOM_SAFE })
+            }
+            .width('100%')
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4 })
+          }
+          .layoutWeight(1)
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring)
+        } else {
+          Column({ space: 10 }) {
+            if (this.st === ST_LOADING) {
+              LoadingProgress()
+                .width(24)
+                .height(24)
+                .color(Theme.ACCENT)
+            } else {
+              Text(this.note)
+                .fontSize(12)
+                .fontColor(Theme.TEXT_DIM)
+                .textAlign(TextAlign.Center)
+                .padding({ left: 32, right: 32 })
+              Button('重试')
+                .height(34)
+                .backgroundColor(Theme.CARD)
+                .fontColor(Theme.TEXT)
+                .fontSize(12)
+                .onClick(() => {
+                  this.load();
+                })
+            }
           }
           .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4 })
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
         }
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
-      } else {
-        Column({ space: 10 }) {
-          if (this.st === ST_LOADING) {
-            LoadingProgress()
-              .width(24)
-              .height(24)
-              .color(Theme.ACCENT)
-          } else {
-            Text(this.note)
-              .fontSize(12)
-              .fontColor(Theme.TEXT_DIM)
-              .textAlign(TextAlign.Center)
-              .padding({ left: 32, right: 32 })
-            Button('重试')
-              .height(34)
-              .backgroundColor(Theme.CARD)
-              .fontColor(Theme.TEXT)
-              .fontSize(12)
-              .onClick(() => {
-                this.load();
-              })
-          }
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
       }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

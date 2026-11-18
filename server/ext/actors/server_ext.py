@@ -599,8 +599,10 @@ def _poster_of(row) -> str:
         for u in urls:
             if not isinstance(u, str):
                 continue
-            if u.startswith("/api/resources/"):
-                return u
+            # ★ 一律过 `public_image`（2026-11-17 修）：库里存的是 `/api/resources/<hash>`
+            # （上游内网路径），这里原样返回的话客户端按前缀分流到上游，外网/非上游端口
+            # 就是 404 —— 用户报「筛选列表的海报很多不显示」正是这一条。
+            # `public_image` 会把它改成旁挂的 `/api/user/res/<hash>`；外链转 `/img?b=`。
             p = A.public_image(u)
             if p:
                 return p
@@ -844,6 +846,74 @@ def _cast_filter(query: dict) -> dict:
             lo, hi = hi, lo
         where.append("CAST(substr(m.release, 1, 4) AS INTEGER) BETWEEN ? AND ?")
         params.extend([lo, hi])
+
+    # ── 与影片库对齐的其余筛选（2026-11-17）────────────────────────────────
+    # 用户原话：「我们不是有共演筛选吗？把这个功能扩展成全功能筛选不就好了」。
+    # 共演筛选（cast_find）本来就支持 演员同时出现（AND）/ 人数 / 导演 / 标签 id / 字幕 /
+    # 马赛克 / 年份 / 关键词 / 单库，缺的只是 browse 那几项。这里一并补齐，
+    # **参数名与 browse 完全一致**，客户端以后可以用同一套面板打两个端点。
+    libs_raw = _one(query, "libs") or ""
+    lib_ids: list[int] = []
+    for part in libs_raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            lib_ids.append(int(part))
+    # 多库语义与 browse 一致：**同时出现在每个所选库**（AND），不是「任一」
+    for lid in lib_ids:
+        where.append("EXISTS (SELECT 1 FROM media_files f4 "
+                     "WHERE f4.metadata_id = m.id AND f4.library_id = ?)")
+        params.append(lid)
+
+    ctype = (_one(query, "ctype") or "").upper()
+    if ctype:
+        vals = [v for v in ctype.split(",") if v]
+        if vals:
+            marks = ",".join("?" * len(vals))
+            where.append(f"UPPER(m.content_type) IN ({marks})")
+            params.extend(vals)
+
+    multi = _one(query, "multi")
+    if multi == "1":
+        where.append("(SELECT COUNT(*) FROM media_files x WHERE x.metadata_id = m.id) >= 2")
+    elif multi == "0":
+        where.append("(SELECT COUNT(*) FROM media_files x WHERE x.metadata_id = m.id) = 1")
+
+    min_score = _one(query, "min_score")
+    if min_score:
+        try:
+            where.append("CAST(json_extract(m.scores, '$.javdb') AS REAL) >= ?")
+            params.append(float(min_score))
+        except ValueError:
+            pass
+
+    # 按分类名字筛（系列 / 制片商 / 标签）：自建分类没有 id，只能按名字。
+    # 这里不处理「覆盖层改到该名字下」的那部分（browse 里走 `override_ids_for`），
+    # 共演筛选先按库里原本归属算 —— 差异记在 TODO-ADVANCED-FILTER.md。
+    #
+    # ★ 2026-11-17：三个维度改成**互相独立、同时生效（AND）**。
+    # 之前只有一个 `facet_kind` + `facet_name`，选了标签就没法再选系列 ——
+    # 用户原话「标签、系列、制片商应该是与的关系」。现在各有自己的参数：
+    #   tag_id=1,2（多值，AND）  series_name=<名字>   studio_name=<名字>
+    # `facet_kind/facet_name` 保留给老客户端，语义不变。
+    series_name = _one(query, "series_name")
+    if series_name:
+        where.append("m.series = ?")
+        params.append(series_name)
+    studio_name = _one(query, "studio_name")
+    if studio_name:
+        where.append("m.studio = ?")
+        params.append(studio_name)
+
+    facet_kind = (_one(query, "facet_kind") or "").lower()
+    facet_name = _one(query, "facet_name")
+    if facet_name and facet_kind in ("series", "studio", "tag"):
+        if facet_kind in ("series", "studio"):
+            where.append("m.%s = ?" % facet_kind)
+            params.append(facet_name)
+        else:
+            where.append("m.id IN (SELECT mt.metadata_id FROM metadata_tags mt "
+                         "JOIN tags t ON t.id = mt.tag_id WHERE t.name = ?)")
+            params.append(facet_name)
 
     # 清单内关键词（2.4.6.26 起）：番号 / 标题。
     # 演员作品页以前只能一路往下翻，找「TA 演的 IPZZ-436」得靠记番号前缀。
@@ -1865,6 +1935,66 @@ def suggest_films(raw: str, limit: int) -> dict:
     return {"ids": [_num(r["id"]) for r in rows if _num(r["id"]) > 0]}
 
 
+def on_browse_where(query: dict) -> dict:
+    """把「指定演员」与「演员人数」接进 `browse`（2026-11-17 · 全功能高级筛选）。
+
+    为什么加在这里：共演筛选（`/api/user/cast/find`）本来就会**同时出现**与人数，
+    但它有自己的结果结构（`CastFindItem`），排序/分页也不如 `browse` 全。
+    用户要的是「一个面板筛所有东西」，所以把这两个维度做成 `browse_where` 钩子 ——
+    `browse` 立刻支持，客户端不用为它换一套列表。
+
+    参数与 `cast/find` 完全一致：
+      * `actor_id=1&actor_id=2`  这些演员**必须同时出现**（AND，与共演页同一口径）
+      * `female_n=1,2` / `male_n=0,1`  女/男演员人数离散集合
+      * `cast_min` / `cast_max`  总人数区间
+
+    返回 clauses 而不是自己查 id 列表：条件写成子查询，`browse` 的 SQL 里
+    metadata 别名就是 `m`，拼进去即可；也就不用把几千个 id 塞进 IN (...)。
+    """
+    out: list = []
+    actor_ids = _ids(query, "actor_id")
+    if actor_ids:
+        ph = ",".join("?" * len(actor_ids))
+        out.append((
+            "m.id IN (SELECT metadata_id FROM metadata_actors "
+            f"WHERE actor_id IN ({ph}) GROUP BY metadata_id "
+            f"HAVING COUNT(DISTINCT actor_id) = {len(actor_ids)})",
+            actor_ids,
+        ))
+
+    female_n = _sizes(query, "female_n")
+    male_n = _sizes(query, "male_n")
+    cmin = _int(_one(query, "cast_min", "0"), 0, 0, 99)
+    cmax = _int(_one(query, "cast_max", "99"), 99, 0, 99)
+    if cmin > cmax:
+        cmin, cmax = cmax, cmin
+    need_count = bool(female_n or male_n or cmin > 0 or cmax < 99)
+    if need_count:
+        fsum = "SUM(CASE WHEN LOWER(a.gender) = 'female' THEN 1 ELSE 0 END)"
+        msum = "SUM(CASE WHEN LOWER(a.gender) = 'male' THEN 1 ELSE 0 END)"
+        having: list = []
+        args: list = []
+        if female_n:
+            having.append(f"{fsum} IN ({','.join('?' * len(female_n))})")
+            args.extend(female_n)
+        if male_n:
+            having.append(f"{msum} IN ({','.join('?' * len(male_n))})")
+            args.extend(male_n)
+        if cmin > 0 or cmax < 99:
+            having.append("COUNT(ma.actor_id) BETWEEN ? AND ?")
+            args.extend([cmin, cmax])
+        out.append((
+            "m.id IN (SELECT ma.metadata_id FROM metadata_actors ma "
+            "JOIN actors a ON a.id = ma.actor_id "
+            f"GROUP BY ma.metadata_id HAVING {' AND '.join(having)})",
+            args,
+        ))
+
+    if not out:
+        return {}
+    return {"clauses": out}
+
+
 def install(api) -> dict:
     global A  # noqa: PLW0603
     A = api
@@ -1872,6 +2002,7 @@ def install(api) -> dict:
     api.add_ddl(FAV_DDL)
     for method, pattern, fn in ROUTES:
         api.route(method, pattern)(fn)
+    api.hook("browse_where", on_browse_where)
     api.hook("suggest_entities", suggest_entities)
     api.hook("suggest_kinds", suggest_kinds)
     api.hook("suggest_films", suggest_films)

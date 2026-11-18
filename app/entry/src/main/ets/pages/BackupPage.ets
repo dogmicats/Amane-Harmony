@@ -15,6 +15,7 @@ import { util } from '@kit.ArkTS';
 import { httpGet, httpPost } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 interface ImportResult {
   ok: boolean;
@@ -270,9 +271,11 @@ struct BackupPage {
       .layoutWeight(1)
       Text(action)
         .fontSize(12)
-        .fontColor('#FFFFFF')
+        .fontColor(Theme.ACCENT)
         .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-        .backgroundColor(Theme.ACCENT)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .backgroundColor(Theme.accentAlpha(0.30))
+        .border({ width: 1, color: Theme.accentAlpha(0.55) })
         .borderRadius(14)
         .onClick(() => {
           run();
@@ -325,7 +328,10 @@ struct BackupPage {
             .fontSize(11)
             .fontColor(Theme.TEXT_DIM)
             .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-            .backgroundColor(Theme.CARD)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor('#1FFFFFFF')
+            .border({ width: 0.5, color: '#33FFFFFF' })
+            .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
             .borderRadius(12)
             .onClick(() => {
               this.preview = null;
@@ -335,9 +341,11 @@ struct BackupPage {
           Blank()
           Text('确认导入')
             .fontSize(11)
-            .fontColor('#FFFFFF')
+            .fontColor(Theme.ACCENT)
             .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            .backgroundColor(Theme.ACCENT)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor(Theme.accentAlpha(0.30))
+            .border({ width: 1, color: Theme.accentAlpha(0.55) })
             .borderRadius(12)
             .onClick(() => {
               this.doImport();
@@ -352,23 +360,17 @@ struct BackupPage {
     }
   }
 
-  build() {
-    Scroll() {
-      Column({ space: 12 }) {
+  @Builder
+  TitleBar() {
+    Column() {
         Row({ space: 8 }) {
-          Text('‹')
-            .fontSize(20)
-            .fontColor(Theme.TEXT)
-            .width(28)
-            .height(28)
-            .textAlign(TextAlign.Center)
-            .onClick(() => {
-              router.back();
-            })
-          Text('数据备份与迁移')
-            .fontSize(17)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(Theme.TEXT)
+          GlassBack({
+            mat: true,
+            onTap: () => {
+            router.back();
+            }
+          })
+          PageTitle({ text: '数据备份与迁移', fs: 18 })
           Blank()
           if (this.busy) {
             LoadingProgress()
@@ -377,77 +379,123 @@ struct BackupPage {
               .color(Theme.ACCENT)
           }
         }
+        .height(46)
+        .alignItems(VerticalAlign.Center)
         .width('100%')
-        .padding({ left: 6, right: Theme.PAGE_PAD, top: 10, bottom: 2 })
-
-        Text(this.note.length > 0 ? this.note : (this.detail.length > 0 ? this.detail : ' '))
-          .fontSize(11)
-          .fontColor(this.note.length > 0 ? Theme.ACCENT : Theme.TEXT_DIM)
-          .lineHeight(15)
-          .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
-
-        Column({ space: 10 }) {
-          this.Entry('导出备份', '收藏、评分、历史、稍后再看、清单 + 内容快照，存成一个 JSON 文件',
-            '导出', () => {
-              this.doExport();
-            })
-          this.Entry('导入备份', '先预览再导入，可只导其中几类；导入前会自动留一份快照',
-            '选文件', () => {
-              this.pickAndPreview();
-            })
-        }
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
-
-        Column() {
-          this.PreviewCard()
-        }
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
-
-        if (this.rbAvail) {
-          Column({ space: 8 }) {
-            Text('撤销上次导入')
-              .fontSize(13)
-              .fontColor(Theme.TEXT)
-              .width('100%')
-            Text(this.rbText)
-              .fontSize(10)
-              .fontColor(Theme.TEXT_FAINT)
-              .lineHeight(14)
-              .width('100%')
-            Text('恢复到导入前')
-              .fontSize(11)
-              .fontColor(Theme.DANGER)
-              .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-              .backgroundColor(Theme.CARD)
-              .borderRadius(12)
-              .onClick(() => {
-                this.askRollback();
-              })
-          }
-          .width('100%')
-          .padding(12)
-          .backgroundColor(Theme.CARD)
-          .borderRadius(Theme.RADIUS)
-          .margin({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
-        }
-
-        Text('导出文件里只有「番号 + 标题 + 片商」这类快照信息和你自己的数据，不含账号凭据；' +
-          '重复导入不会产生重复记录，进度取更靠后的那个。')
-          .fontSize(10)
-          .fontColor(Theme.TEXT_FAINT)
-          .lineHeight(15)
-          .width('100%')
-          .padding({ left: Theme.PAGE_PAD + 2, right: Theme.PAGE_PAD + 2, bottom: 20 })
-      }
-      .width('100%')
+        .padding({ left: 6, right: Theme.PAGE_PAD })
     }
     .width('100%')
     .height('100%')
+    .padding({ top: this.topInset })
+  }
+
+  @StorageProp('amaneTopInset') topInset: number = 30;
+
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Scroll() {
+        Column({ space: 12 }) {
+
+  // 六十改：让出浮层标题栏的高度
+  Blank().height(this.barH())
+
+          Text(this.note.length > 0 ? this.note : (this.detail.length > 0 ? this.detail : ' '))
+            .fontSize(11)
+            .fontColor(this.note.length > 0 ? Theme.ACCENT : Theme.TEXT_DIM)
+            .lineHeight(15)
+            .width('100%')
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+
+          Column({ space: 10 }) {
+            this.Entry('导出备份', '收藏、评分、历史、稍后再看、清单 + 内容快照，存成一个 JSON 文件',
+              '导出', () => {
+                this.doExport();
+              })
+            this.Entry('导入备份', '先预览再导入，可只导其中几类；导入前会自动留一份快照',
+              '选文件', () => {
+                this.pickAndPreview();
+              })
+          }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+
+          Column() {
+            this.PreviewCard()
+          }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+
+          if (this.rbAvail) {
+            Column({ space: 8 }) {
+              Text('撤销上次导入')
+                .fontSize(13)
+                .fontColor(Theme.TEXT)
+                .width('100%')
+              Text(this.rbText)
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .lineHeight(14)
+                .width('100%')
+              Text('恢复到导入前')
+                .fontSize(11)
+                .fontColor(Theme.DANGER)
+                .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+                .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                .backgroundColor('#1FFFFFFF')
+                .border({ width: 0.5, color: '#33FFFFFF' })
+                .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
+                .borderRadius(12)
+                .onClick(() => {
+                  this.askRollback();
+                })
+            }
+            .width('100%')
+            .padding(12)
+            .backgroundColor(Theme.CARD)
+            .borderRadius(Theme.RADIUS)
+            .margin({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+          }
+
+          Text('导出文件里只有「番号 + 标题 + 片商」这类快照信息和你自己的数据，不含账号凭据；' +
+            '重复导入不会产生重复记录，进度取更靠后的那个。')
+            .fontSize(10)
+            .fontColor(Theme.TEXT_FAINT)
+            .lineHeight(15)
+            .width('100%')
+            .padding({ left: Theme.PAGE_PAD + 2, right: Theme.PAGE_PAD + 2, bottom: 20 })
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring)
+    }
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
+    .width('100%')
+    .height('100%')
     .backgroundColor(Theme.BG)
-    .scrollBar(BarState.Off)
-    .edgeEffect(EdgeEffect.Spring)
   }
 }

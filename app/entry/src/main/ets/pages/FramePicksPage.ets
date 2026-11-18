@@ -1,4 +1,5 @@
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
@@ -8,6 +9,7 @@ import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { DetailParams } from '../common/Types';
 import { clock } from '../common/Util';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /**
  * 我的截帧（R25 管理页）。
@@ -354,22 +356,17 @@ struct FramePicksPage {
     })
   }
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
       Row({ space: 10 }) {
-        Text('‹')
-          .fontSize(24)
-          .fontColor(Theme.TEXT)
-          .width(30)
-          .height(34)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            router.back();
-          })
-        Text('我的截帧')
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.TEXT)
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
+          }
+        })
+        PageTitle({ text: '我的截帧', fs: 18 })
         Blank()
         Text('抽一张')
           .fontSize(11)
@@ -385,90 +382,138 @@ struct FramePicksPage {
           .fontSize(11)
           .fontColor(Theme.TEXT_FAINT)
       }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 8 })
-
-      // 自动保存开关（默认关）：开了之后每次截帧都直接写进系统相册
-      Row({ space: 12 }) {
-        Column({ space: 2 }) {
-          Text('截帧自动存到相册')
-            .fontSize(13)
-            .fontColor(Theme.TEXT)
-          Text(this.saveLocal
-            ? '每次截帧后自动发起保存，系统会弹一次「保存到相册」确认'
-            : '只存在服务端，需要时再手动存到相册（默认）')
-            .fontSize(10)
-            .fontColor(Theme.TEXT_FAINT)
-            .lineHeight(14)
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.saveLocal })
-          .selectedColor(Theme.ACCENT)
-          .onChange((v: boolean) => {
-            this.saveLocal = v;
-            Store.I.prefSetString('frame_save_local', v ? '1' : '0');
-          })
-      }
-      .width('100%')
-      .padding(12)
-      .margin({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 8 })
-      .backgroundColor(Theme.CARD)
-      .borderRadius(12)
-
-      if (this.note.length > 0) {
-        Text(this.note)
-          .fontSize(10)
-          .fontColor(Theme.ACCENT)
-          .padding({ left: Theme.PAGE_PAD, bottom: 4 })
-          .width('100%')
-      }
-
-      if (this.loading) {
-        Column() {
-          LoadingProgress()
-            .width(30)
-            .height(30)
-            .color(Theme.ACCENT)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.items.length === 0) {
-        Column({ space: 8 }) {
-          Text('还没有截过帧')
-            .fontSize(14)
-            .fontColor(Theme.TEXT_DIM)
-          Text('播放时点底栏的「截帧」，那一帧会进亮点，也可能进剧照')
-            .fontSize(11)
-            .fontColor(Theme.TEXT_FAINT)
-            .textAlign(TextAlign.Center)
-            .padding({ left: 40, right: 40 })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        List({ space: 10 }) {
-          ForEach(this.items, (it: PickRow) => {
-            ListItem() {
-              this.PickItemView(it)
-            }
-            .swipeAction({
-              end: {
-                builder: () => {
-                  this.DeleteButton(it)
-                }
-              }
-            })
-          }, (it: PickRow) => `pick-${it.metadata_id}-${it.ms}`)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
-        .scrollBar(BarState.Off)
-      }
+      .padding({ left: 8, right: Theme.PAGE_PAD })
     }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
+
+  @StorageProp('amaneTopInset') topInset: number = 30;
+
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column() {
+
+  // 六十改：让出浮层标题栏的高度
+  Blank().height(this.barH())
+
+        // 自动保存开关（默认关）：开了之后每次截帧都直接写进系统相册
+        Row({ space: 12 }) {
+          Column({ space: 2 }) {
+            Text('截帧自动存到相册')
+              .fontSize(13)
+              .fontColor(Theme.TEXT)
+            Text(this.saveLocal
+              ? '每次截帧后自动发起保存，系统会弹一次「保存到相册」确认'
+              : '只存在服务端，需要时再手动存到相册（默认）')
+              .fontSize(10)
+              .fontColor(Theme.TEXT_FAINT)
+              .lineHeight(14)
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          Toggle({ type: ToggleType.Switch, isOn: this.saveLocal })
+            .selectedColor(Theme.ACCENT)
+            .onChange((v: boolean) => {
+              this.saveLocal = v;
+              Store.I.prefSetString('frame_save_local', v ? '1' : '0');
+            })
+        }
+        .width('100%')
+        .padding(12)
+        .margin({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 8 })
+        .backgroundColor(Theme.CARD)
+        .borderRadius(12)
+
+        if (this.note.length > 0) {
+          Text(this.note)
+            .fontSize(10)
+            .fontColor(Theme.ACCENT)
+            .padding({ left: Theme.PAGE_PAD, bottom: 4 })
+            .width('100%')
+        }
+
+        if (this.loading) {
+          Column() {
+            LoadingProgress()
+              .width(30)
+              .height(30)
+              .color(Theme.ACCENT)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.items.length === 0) {
+          Column({ space: 8 }) {
+            Text('还没有截过帧')
+              .fontSize(14)
+              .fontColor(Theme.TEXT_DIM)
+            Text('播放时点底栏的「截帧」，那一帧会进亮点，也可能进剧照')
+              .fontSize(11)
+              .fontColor(Theme.TEXT_FAINT)
+              .textAlign(TextAlign.Center)
+              .padding({ left: 40, right: 40 })
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          List({ space: 10 }) {
+            ForEach(this.items, (it: PickRow) => {
+              ListItem() {
+                this.PickItemView(it)
+              }
+              .swipeAction({
+                end: {
+                  builder: () => {
+                    this.DeleteButton(it)
+                  }
+                }
+              })
+            }, (it: PickRow) => `pick-${it.metadata_id}-${it.ms}`)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+          .scrollBar(BarState.Off)
+        }
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
+    }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

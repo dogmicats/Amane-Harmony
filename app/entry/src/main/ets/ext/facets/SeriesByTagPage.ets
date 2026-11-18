@@ -1,8 +1,10 @@
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet } from '../../common/Http';
 import { Store } from '../../common/Store';
 import { Theme } from '../../common/Theme';
+import { GlassGlyph, PageTitle, GlassBack} from '../../view/GlassKit';
 
 /** 一个系列（by-tags 返回的最小集合）。 */
 interface SeriesHit {
@@ -136,22 +138,17 @@ struct SeriesByTagPage {
     });
   }
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
       Row({ space: 10 }) {
-        Text('‹')
-          .fontSize(24)
-          .fontColor(Theme.TEXT)
-          .width(30)
-          .height(34)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            router.back();
-          })
-        Text('按属性筛系列')
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.TEXT)
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
+          }
+        })
+        PageTitle({ text: '按属性筛系列', fs: 18 })
         Blank()
         if (this.picked.length > 0) {
           Text('清空')
@@ -164,106 +161,156 @@ struct SeriesByTagPage {
             })
         }
       }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 6 })
+      .padding({ left: 8, right: Theme.PAGE_PAD })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
 
-      // 属性多选
-      // 属性多选：候选是全量标签（上限 200），先搜再选
-      Row({ space: 8 }) {
-        TextInput({ text: this.kw, placeholder: '搜标签，如 NTR / 搜查官' })
-          .height(36)
-          .fontSize(12)
-          .backgroundColor(Theme.CARD)
-          .borderRadius(10)
-          .onChange((v: string) => {
-            this.kw = v;
-          })
-      }
-      .width('100%')
-      .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 8 })
+  @StorageProp('amaneTopInset') topInset: number = 30;
 
-      Scroll() {
-        Flex({ wrap: FlexWrap.Wrap }) {
-          ForEach(this.filtered(), (o: TagOpt) => {
-            Text(o.name)
-              .fontSize(12)
-              .fontColor(this.picked.indexOf(o.id) >= 0 ? '#FFFFFF' : Theme.TEXT_DIM)
-              .padding({ left: 11, right: 11, top: 6, bottom: 6 })
-              .backgroundColor(this.picked.indexOf(o.id) >= 0 ? Theme.ACCENT : Theme.CARD)
-              .borderRadius(12)
-              .margin({ right: 7, bottom: 7 })
-              .onClick(() => {
-                this.toggle(o.id);
-              })
-          }, (o: TagOpt) => 'opt-' + o.id)
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column() {
+
+  // 六十改：让出浮层标题栏的高度
+  Blank().height(this.barH())
+
+        // 属性多选
+        // 属性多选：候选是全量标签（上限 200），先搜再选
+        Row({ space: 8 }) {
+          TextInput({ text: this.kw, placeholder: '搜标签，如 NTR / 搜查官' })
+            .height(36)
+            .fontSize(12)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor('#1FFFFFFF')
+            .border({ width: 0.5, color: '#33FFFFFF' })
+            .borderRadius(10)
+            .onChange((v: string) => {
+              this.kw = v;
+            })
         }
         .width('100%')
-      }
-      .height(126)
-      .scrollBar(BarState.Off)
-      .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 8 })
 
-      Text(this.note.length > 0 ? this.note : '多选 = 同时具备这些属性')
-        .fontSize(10)
-        .fontColor(Theme.TEXT_FAINT)
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 6 })
-
-      if (this.items.length === 0) {
-        Column({ space: 8 }) {
-          Text(this.loading ? '加载中…' : '还没有结果')
-            .fontSize(13)
-            .fontColor(Theme.TEXT_DIM)
+        Scroll() {
+          Flex({ wrap: FlexWrap.Wrap }) {
+            ForEach(this.filtered(), (o: TagOpt) => {
+              Text(o.name)
+                .fontSize(12)
+                .fontColor(this.picked.indexOf(o.id) >= 0 ? '#FFFFFF' : Theme.TEXT_DIM)
+                .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+                .backgroundColor(this.picked.indexOf(o.id) >= 0 ? Theme.ACCENT : Theme.CARD)
+                .borderRadius(12)
+                .margin({ right: 7, bottom: 7 })
+                .onClick(() => {
+                  this.toggle(o.id);
+                })
+            }, (o: TagOpt) => 'opt-' + o.id)
+          }
+          .width('100%')
         }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        List({ space: 10 }) {
-          ForEach(this.items, (s: SeriesHit) => {
-            ListItem() {
-              Row({ space: 10 }) {
-                Image(Store.I.img(s.poster))
-                  .width(52)
-                  .height(72)
-                  .objectFit(ImageFit.Cover)
-                  .backgroundColor(Theme.CARD)
-                  .borderRadius(8)
-                  .alt($r('app.media.placeholder'))
-                Column({ space: 4 }) {
-                  Text(s.name)
-                    .fontSize(13)
-                    .fontColor(Theme.TEXT)
-                    .maxLines(2)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    .width('100%')
-                  Text(s.count.toString() + ' 部')
-                    .fontSize(10)
+        .height(126)
+        .scrollBar(BarState.Off)
+        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+
+        Text(this.note.length > 0 ? this.note : '多选 = 同时具备这些属性')
+          .fontSize(10)
+          .fontColor(Theme.TEXT_FAINT)
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 6 })
+
+        if (this.items.length === 0) {
+          Column({ space: 8 }) {
+            Text(this.loading ? '加载中…' : '还没有结果')
+              .fontSize(13)
+              .fontColor(Theme.TEXT_DIM)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          List({ space: 10 }) {
+            ForEach(this.items, (s: SeriesHit) => {
+              ListItem() {
+                Row({ space: 10 }) {
+                  Image(Store.I.img(s.poster))
+                    .width(52)
+                    .height(72)
+                    .objectFit(ImageFit.Cover)
+                    .backgroundColor(Theme.CARD)
+                    .borderRadius(8)
+                    .alt($r('app.media.placeholder'))
+                  Column({ space: 4 }) {
+                    Text(s.name)
+                      .fontSize(13)
+                      .fontColor(Theme.TEXT)
+                      .maxLines(2)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                      .width('100%')
+                    Text(s.count.toString() + ' 部')
+                      .fontSize(10)
+                      .fontColor(Theme.TEXT_FAINT)
+                  }
+                  .alignItems(HorizontalAlign.Start)
+                  .layoutWeight(1)
+                  Text('›')
+                    .fontSize(18)
                     .fontColor(Theme.TEXT_FAINT)
                 }
-                .alignItems(HorizontalAlign.Start)
-                .layoutWeight(1)
-                Text('›')
-                  .fontSize(18)
-                  .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+                .padding(10)
+                .backgroundColor(Theme.CARD)
+                .borderRadius(11)
+                .onClick(() => {
+                  this.open(s);
+                })
               }
-              .width('100%')
-              .padding(10)
-              .backgroundColor(Theme.CARD)
-              .borderRadius(11)
-              .onClick(() => {
-                this.open(s);
-              })
-            }
-          }, (s: SeriesHit) => 'sh-' + s.id)
+            }, (s: SeriesHit) => 'sh-' + s.id)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring)
         }
-        .width('100%')
-        .layoutWeight(1)
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
       }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

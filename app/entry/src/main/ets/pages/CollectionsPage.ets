@@ -1,7 +1,9 @@
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 import {
   CollectionInfo, CollectionCreateResult, createCollection, deleteCollection,
   fetchCollections, renameCollection
@@ -30,6 +32,7 @@ struct CollectionsPage {
   @State busy: boolean = false;
 
   onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
     this.load();
   }
 
@@ -126,9 +129,11 @@ struct CollectionsPage {
             })
           Text('保存')
             .fontSize(12)
-            .fontColor('#FFFFFF')
+            .fontColor(Theme.ACCENT)
             .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            .backgroundColor(Theme.ACCENT)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor(Theme.accentAlpha(0.30))
+            .border({ width: 1, color: Theme.accentAlpha(0.55) })
             .borderRadius(8)
             .onClick(() => {
               this.saveName(c.id);
@@ -207,22 +212,17 @@ struct CollectionsPage {
     .padding({ left: 14, right: 14, top: 10, bottom: 10 })
   }
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
       Row({ space: 10 }) {
-        Text('‹')
-          .fontSize(24)
-          .fontColor(Theme.TEXT)
-          .width(30)
-          .height(34)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            router.back();
-          })
-        Text('我的清单')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.TEXT)
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
+          }
+        })
+        PageTitle({ text: '我的清单', fs: 18 })
         Blank()
         Text('＋ 新建')
           .fontSize(12)
@@ -234,88 +234,135 @@ struct CollectionsPage {
             this.creating = !this.creating;
           })
       }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 6 })
+      .padding({ left: 8, right: Theme.PAGE_PAD })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
 
-      if (this.creating) {
-        Row({ space: 8 }) {
-          TextInput({ text: this.newName, placeholder: '新清单名' })
-            .layoutWeight(1)
-            .height(38)
-            .fontSize(12)
-            .backgroundColor(Theme.CARD)
-            .borderRadius(10)
-            .onChange((v: string) => {
-              this.newName = v;
-            })
-          Text(this.busy ? '…' : '创建')
-            .fontSize(12)
-            .fontColor('#FFFFFF')
-            .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-            .backgroundColor(Theme.ACCENT)
-            .borderRadius(10)
-            .onClick(() => {
-              this.create();
-            })
-        }
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 8 })
-      }
+  @StorageProp('amaneTopInset') topInset: number = 30;
 
-      if (this.note.length > 0) {
-        Text(this.note)
-          .fontSize(11)
-          .fontColor(Theme.TEXT_DIM)
-          .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
-      }
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
 
-      if (this.loading) {
-        Column() {
-          LoadingProgress()
-            .width(24)
-            .height(24)
-            .color(Theme.ACCENT)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.lists.length === 0) {
-        Column({ space: 10 }) {
-          Text('☰')
-            .fontSize(30)
-            .fontColor(Theme.TEXT_FAINT)
-          Text('还没有清单')
-            .fontSize(14)
-            .fontColor(Theme.TEXT_DIM)
-          Text('新建一个清单，把收藏的影片按自己的方式归类。')
-            .fontSize(11)
-            .fontColor(Theme.TEXT_FAINT)
-            .textAlign(TextAlign.Center)
-            .padding({ left: 32, right: 32 })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        Scroll() {
-          Column({ space: 1 }) {
-            ForEach(this.lists, (c: CollectionInfo) => {
-              this.RowItem(c)
-            }, (c: CollectionInfo) => `col-${c.id}`)
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column() {
+
+  // 六十改：让出浮层标题栏的高度
+  Blank().height(this.barH())
+
+        if (this.creating) {
+          Row({ space: 8 }) {
+            TextInput({ text: this.newName, placeholder: '新清单名' })
+              .layoutWeight(1)
+              .height(38)
+              .fontSize(12)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+              .backgroundColor('#1FFFFFFF')
+              .border({ width: 0.5, color: '#33FFFFFF' })
+              .borderRadius(10)
+              .onChange((v: string) => {
+                this.newName = v;
+              })
+            Text(this.busy ? '…' : '创建')
+              .fontSize(12)
+              .fontColor(Theme.ACCENT)
+              .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+              .backgroundColor(Theme.accentAlpha(0.30))
+              .border({ width: 1, color: Theme.accentAlpha(0.55) })
+              .borderRadius(10)
+              .onClick(() => {
+                this.create();
+              })
           }
           .width('100%')
-          .backgroundColor(Theme.CARD)
-          .borderRadius(14)
-          .clip(true)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 8 })
         }
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-        .align(Alignment.Top)
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+
+        if (this.note.length > 0) {
+          Text(this.note)
+            .fontSize(11)
+            .fontColor(Theme.TEXT_DIM)
+            .width('100%')
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
+        }
+
+        if (this.loading) {
+          Column() {
+            LoadingProgress()
+              .width(24)
+              .height(24)
+              .color(Theme.ACCENT)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.lists.length === 0) {
+          Column({ space: 10 }) {
+            Text('☰')
+              .fontSize(30)
+              .fontColor(Theme.TEXT_FAINT)
+            Text('还没有清单')
+              .fontSize(14)
+              .fontColor(Theme.TEXT_DIM)
+            Text('新建一个清单，把收藏的影片按自己的方式归类。')
+              .fontSize(11)
+              .fontColor(Theme.TEXT_FAINT)
+              .textAlign(TextAlign.Center)
+              .padding({ left: 32, right: 32 })
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          Scroll() {
+            Column({ space: 1 }) {
+              ForEach(this.lists, (c: CollectionInfo) => {
+                this.RowItem(c)
+              }, (c: CollectionInfo) => `col-${c.id}`)
+            }
+            .width('100%')
+            .backgroundColor(Theme.CARD)
+            .borderRadius(14)
+            .clip(true)
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+          }
+          .layoutWeight(1)
+          .scrollBar(BarState.Off)
+          .align(Alignment.Top)
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+        }
       }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

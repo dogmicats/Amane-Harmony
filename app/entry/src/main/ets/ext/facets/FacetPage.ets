@@ -1,4 +1,4 @@
-import { promptAction, router } from '@kit.ArkUI';
+import { promptAction, router, window } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { util } from '@kit.ArkTS';
 import { fileIo } from '@kit.CoreFileKit';
@@ -20,6 +20,8 @@ import { collectionChipOptions } from '../collections/CollectionTypes';
 import { BuildConfig } from '../../common/BuildConfig';
 import { GachaSwitch } from '../stills/GachaSwitch';
 import { GachaWall } from '../stills/GachaWall';
+import { GlassBack, GlassCapsule, GlassGlyph, GlassSearchBar } from '../../view/GlassKit';
+import { ImmersiveGlass } from '../../common/ImmersiveGlass';
 import {
   FacetFavoriteResult, FacetItem, FacetMediaItem, FacetMediaList, FacetParams,
   emptyFacet, facetLabel, safeFacetMediaList
@@ -124,6 +126,33 @@ struct FacetPage {
     this.loadCollections();
     this.loadPropTags();
     this.load(0, false);
+  }
+
+  /**
+   * 真·全屏（七十一改）：海报要画到状态栏 / 手势条后面，**窗口层**就必须先铺满。
+   *
+   * 之前的 `expandSafeArea` 挂在内容层却一点用都没有，因为 `Index.onPageHide` 在
+   * 打开二级页时把 `setWindowLayoutFullScreen(false)` 关掉了 —— 窗口本身就避让了
+   * 系统栏，内容再怎么 expand 也画不出窗口边界。所以本页自己开。
+   *
+   * ★ 七十二改：**离开本页不关** ★
+   * 路由返回时 `onPageHide` 是**后触发**的（`Index.onPageShow` 已经先把全屏设回 true），
+   * 若在这里再关一次，等于把主界面刚设好的状态改回 false —— 表现就是用户报的
+   * 「从标签详情返回，整个 tab 页往下掉一个状态栏的高度」。
+   * 需要让位的只有「本页 → 影片详情」，那一步在 `pushDetail()` 里**推之前**关。
+   */
+  onPageShow(): void {
+    this.setFullScreen(true);
+  }
+
+  private setFullScreen(on: boolean): void {
+    window.getLastWindow(getContext(this)).then((w: window.Window) => {
+      w.setWindowLayoutFullScreen(on).catch((err: BusinessError) => {
+        console.info(`[amane] facet fullscreen: ${err.code} ${err.message}`);
+      });
+    }).catch((err: BusinessError) => {
+      console.info(`[amane] facet window: ${err.code} ${err.message}`);
+    });
   }
 
   private async loadCollections(): Promise<void> {
@@ -363,8 +392,30 @@ struct FacetPage {
   }
 
   private open(item: FacetMediaItem): void {
-    const params: DetailParams = { id: item.id };
-    router.pushUrl({ url: 'pages/DetailPage', params: params });
+    this.pushDetail(item.id);
+  }
+
+  /**
+   * 进影片详情（七十二改）：**先把窗口的全屏关掉，再推页面**。
+   *
+   * 详情页没有状态栏让位逻辑（它的标题栏按安全区排），本页是全屏窗口，
+   * 直接推过去会被时钟压住。关窗口是异步的，所以用回调串起来；
+   * 失败也要照样跳 —— 宁可详情页顶到状态栏，不能点了没反应。
+   */
+  private pushDetail(id: number): void {
+    const params: DetailParams = { id: id };
+    const go: () => void = () => {
+      router.pushUrl({ url: 'pages/DetailPage', params: params });
+    };
+    window.getLastWindow(getContext(this)).then((w: window.Window) => {
+      w.setWindowLayoutFullScreen(false).then(() => {
+        go();
+      }).catch(() => {
+        go();
+      });
+    }).catch(() => {
+      go();
+    });
   }
 
   /**
@@ -778,88 +829,6 @@ struct FacetPage {
     .bindMenu(this.kind === 'user_tag' ? [] : this.coverMenu())
   }
 
-  @Builder
-  Header() {
-    Row() {
-      Text('‹')
-        .fontSize(24)
-        .fontColor(Theme.TEXT)
-        .width(32)
-        .height(32)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          router.back();
-        })
-      // 系列本来就有拼贴封面；标签 / 厂牌也显示（有片就有海报），
-      // 换过自定义封面的再优先显示它（2.5.5.7）
-      if (this.kind !== 'user_tag' && (this.coverUrl.length > 0 || this.items.length > 0)) {
-        this.Cover()
-      }
-      Column({ space: 3 }) {
-        Text(this.title.length > 0 ? this.title : facetLabel(this.kind))
-          .fontSize(17)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-        Text(this.subLine())
-          .fontSize(10)
-          .fontColor(Theme.TEXT_FAINT)
-          .width('100%')
-        if (this.kind !== 'user_tag') {
-          StarPick({
-            score: this.myStars(),
-            starSize: 15,
-            gap: 2,
-            onPick: (n: number) => {
-              this.rate(n);
-            }
-          })
-        }
-      }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
-
-      // 分类收藏：与详情页的影片收藏是两条链路，这里只写 amane 的 is_favorite 位
-      if (this.kind !== 'user_tag') {
-        Column({ space: 1 }) {
-          Text(this.facet.isFavorite ? '♥' : '♡')
-            .fontSize(17)
-            .fontColor(this.facet.isFavorite ? Theme.ACCENT : Theme.TEXT_DIM)
-          Text(this.facet.isFavorite ? '已收藏' : '收藏')
-            .fontSize(8)
-            .fontColor(Theme.TEXT_FAINT)
-        }
-        .width(40)
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => {
-          this.toggleFav();
-        })
-      }
-
-      // 隐藏：只在标签上开。隐藏只是不在「标签」列表里列出来，
-      // 不删标签、不动刮削规则 —— 用户明确说懒得因此改刮削设置。
-      if (this.kind === 'tag') {
-        Column({ space: 1 }) {
-          Text(this.facet.isHidden ? '⊘' : '◎')
-            .fontSize(16)
-            .fontColor(this.facet.isHidden ? Theme.GOLD : Theme.TEXT_DIM)
-          Text(this.facet.isHidden ? '已隐藏' : '隐藏')
-            .fontSize(8)
-            .fontColor(Theme.TEXT_FAINT)
-        }
-        .width(40)
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => {
-          this.toggleHide();
-        })
-      }
-    }
-    .width('100%')
-    .padding({ left: 10, right: Theme.PAGE_PAD, top: 10, bottom: 8 })
-    .alignItems(VerticalAlign.Center)
-  }
 
   /**
    * 一行工具条：部数 / 抽卡开关 / ⇅ 排序 / ⚙ 筛选。
@@ -985,8 +954,7 @@ struct FacetPage {
       item: this.cardOf(m),
       fluid: true,
       onTap: () => {
-        const p: DetailParams = { id: m.id };
-        router.pushUrl({ url: 'pages/DetailPage', params: p });
+        this.open(m);
       }
     })
   }
@@ -994,9 +962,12 @@ struct FacetPage {
   /**
    * 抽卡模式下的精简工具条：只留开关 + 一句说明。
    * 开关必须一直看得见 —— 否则进了抽卡模式就退不出来了。
+   *
+   * 七十二改：**停用**（见下方 `GachaBar` 的调用点被删掉的原因）。
+   * 抽卡不再另起一条工具条，标题栏原样保留，与 tab 页（媒体库 / 收藏）一致。
    */
   @Builder
-  GachaBar() {
+  GachaBarLegacy() {
     Row({ space: 8 }) {
       GachaSwitch({
         on: this.gachaOn,
@@ -1021,49 +992,281 @@ struct FacetPage {
       .opacity(0)
   }
 
-  build() {
-    Stack({ alignContent: Alignment.Bottom }) {
-      Column() {
-        this.Header()
+  @Builder
+  TitleBar() {
+    // 七十一改（用户选 B：第二行整体上移）：两行贴紧，中间不留 6 的空档。
+    Column({ space: 0 }) {
+      // 第一行：返回球 + 封面胶囊 + 名字。收藏/隐藏挪到第二行（这里给封面让位）。
+      Row({ space: 8 }) {
+        GlassBack({
+          mat: true,
+          onTap: () => {
+            router.back();
+          }
+        })
 
-        if (this.tip.length > 0) {
-          Text(this.tip)
-            .fontSize(10)
-            .fontColor(Theme.DANGER)
-            .width('100%')
-            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
+        // 封面胶囊（六十九改）：横向的——小封面 + 星级装在一颗玻璃胶囊里。
+        // 下滑时整颗收起（宽度补间到 0），名字左移拿到整行；上拉再展开。
+        if (this.coverOn) {
+          Row({ space: 6 }) {
+            if (this.kind !== 'user_tag' && (this.coverUrl.length > 0 || this.items.length > 0)) {
+              this.Cover()
+            }
+            if (this.kind !== 'user_tag') {
+              StarPick({
+                score: this.myStars(),
+                starSize: 14,
+                gap: 1,
+                onPick: (n: number) => {
+                  this.rate(n);
+                }
+              })
+            }
+          }
+          .padding({ left: 6, right: 8, top: 4, bottom: 4 })
+          .borderRadius(17)
+          .systemMaterial(ImmersiveGlass.pressMaterial(this.glassLevel, undefined))
+          .clip(true)
+          .transition(TransitionEffect.OPACITY)
         }
 
-        // 抽卡模式下搜索/排序/筛选都收起来：那一堵墙不吃这些条件，摆着只会误导
-        if (!this.gachaOn) {
-          Row() {
-            KeywordBox({
-              placeholder: `在${facetLabel(this.kind)}里搜番号 / 标题`,
-              onCommit: (kw: string) => {
-                const next: string = kw.trim();
-                if (next === this.keyword) {
-                  return;
-                }
-                this.keyword = next;
-                this.reload();
+        Text(this.title.length > 0 ? this.title : facetLabel(this.kind))
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#FFFFFF')
+          .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+
+        // 收藏 / 隐藏：第一行最右（用户 11:25：别挤到下面来）
+        if (this.kind !== 'user_tag') {
+          GlassGlyph({
+            glyph: this.facet.isFavorite ? '♥' : '♡',
+            active: this.facet.isFavorite,
+            glyphSize: 15,
+            mat: true,
+            onTap: () => {
+              this.toggleFav();
+            }
+          })
+        }
+        if (this.kind === 'tag') {
+          GlassGlyph({
+            glyph: this.facet.isHidden ? '⊘' : '◎',
+            active: this.facet.isHidden,
+            glyphSize: 15,
+            mat: true,
+            onTap: () => {
+              this.toggleHide();
+            }
+          })
+        }
+      }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
+      .width('100%')
+
+      // 第二行：搜索胶囊（点一下自己长成搜索栏）+ 抽卡 / 排序 / 筛选
+      // 七十二改：抽卡时**这一行照旧在场** —— 与 tab 页同一个做法（只换内容区，不动标题栏）。
+      // 之前抽卡时把整行藏起来、另起一条 `GachaBar`，用户一眼看出「又新开了一个布局」。
+      Row({ space: 5 }) {
+          GlassSearchBar({
+            placeholder: '搜索番号 / 标题',
+            boxH: 34,
+            rowH: 42,
+            radius: 17,
+            iconSize: 15,
+            mat: true,
+            onCommit: (kw: string) => {
+              const next: string = kw.trim();
+              if (next === this.keyword) {
+                return;
+              }
+              this.keyword = next;
+              this.reload();
+            }
+          })
+          .layoutWeight(1)
+
+          if (BuildConfig.ENABLE_GACHA) {
+            GlassCapsule({
+              label: this.gachaOn ? '❖ 抽卡中' : '❖ 抽卡',
+              active: this.gachaOn,
+              fs: 11,
+              padH: 7,
+              padV: 7,
+              mat: true,
+              onTap: () => {
+                this.gachaOn = !this.gachaOn;
               }
             })
           }
-          .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 4 })
-
-          this.Toolbar()
+          GlassCapsule({
+            label: `⇅ ${this.sortLabel()}`,
+            fs: 11,
+            padH: 7,
+            padV: 7,
+            maxW: 88,
+            mat: true,
+            onTap: () => {
+              this.showSort = true;
+            }
+          })
+          GlassCapsule({
+            label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+            active: this.filterCount() > 0,
+            fs: 11,
+            padH: 7,
+            padV: 7,
+            mat: true,
+            onTap: () => {
+              this.showFilter = true;
+            }
+          })
         }
+        .height(42)
+        .alignItems(VerticalAlign.Center)
+        .width('100%')
+    }
+    .width('100%')
+    .height('100%')
+    // 用户 11:25：整个导航上移一点（状态栏下面留 8，不再空 16）
+    .padding({ left: 10, right: Theme.PAGE_PAD, top: this.topInset - 8 })
+  }
 
-        if (this.gachaOn) {
-          this.GachaBar()
-          Scroll() {
+  // ────────────────────────────────────────────────────────────────
+  // 首屏 hero（六十二改）：封面铺到屏幕最顶端（**连状态栏一起**），
+  // 标题栏只是浮在它上面的一层 —— 这页的「大黑条」就是让位留白造成的。
+  // ────────────────────────────────────────────────────────────────
+  private heroImg(): string {
+    const c: string = this.coverShown();
+    if (c.length > 0) {
+      return c;
+    }
+    return this.posterAt(0);
+  }
+
+  @Builder
+  HeroBlock() {
+    Stack({ alignContent: Alignment.BottomStart }) {
+      if (this.heroImg().length > 0) {
+        Image(Store.I.img(this.heroImg()))
+          .width('100%')
+          .height(this.topInset + 200)
+          .objectFit(ImageFit.Cover)
+          .blur(16)
+          .backgroundColor(Theme.CARD_HI)
+      } else {
+        Column()
+          .width('100%')
+          .height(this.topInset + 200)
+          .backgroundColor(Theme.CARD_HI)
+      }
+
+      // 上下两条压暗：上面给状态栏和返回键留可读性，下面融进页面底色
+      Column()
+        .width('100%')
+        .height(this.topInset + 200)
+        .linearGradient({
+          angle: 180,
+          colors: [['#A6000000', 0], ['#33000000', 0.38], ['#CC000000', 0.78], ['#FF000000', 1]]
+        })
+
+      Row({ space: 12 }) {
+        if (this.kind !== 'user_tag' && (this.coverUrl.length > 0 || this.items.length > 0)) {
+          this.Cover()
+        }
+        Column({ space: 4 }) {
+          Text(this.title.length > 0 ? this.title : facetLabel(this.kind))
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#FFFFFF')
+            .textShadow({ radius: 10, color: '#99000000', offsetX: 0, offsetY: 1 })
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%')
+          Text(this.subLine())
+            .fontSize(11)
+            .fontColor('#D9FFFFFF')
+            .width('100%')
+          if (this.kind !== 'user_tag') {
+            StarPick({
+              score: this.myStars(),
+              starSize: 16,
+              gap: 2,
+              onPick: (n: number) => {
+                this.rate(n);
+              }
+            })
+          }
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Bottom)
+      .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 10 })
+    }
+    .width('100%')
+  }
+
+  @StorageProp('amaneTopInset') topInset: number = 30;
+  @StorageProp('amaneGlass') glassLevel: number = 2;
+  /** 封面模块是否展开（六十四改）：下滑自动收起，回到顶部自己弹出来。 */
+  @State coverOn: boolean = true;
+  /** 上一次的首行索引（六十六改）：靠它判方向 —— 下滑收、上拉放，不用拉到顶。 */
+  private lastFirst: number = -1;
+
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。46 第一行 + 42 第二行，无间隙。 */
+  private barH(): number {
+    return this.topInset + 88;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 88，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      // 六十九改：封面改成**横向胶囊**放进第一行，收起只是横向缩没，不改高度 → 不会留空档。
+      height: 88 + this.topInset
+    };
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Stack({ alignContent: Alignment.Bottom }) {
+        Column() {
+
+          if (this.tip.length > 0) {
+            Text(this.tip)
+              .fontSize(10)
+              .fontColor(Theme.DANGER)
+              .width('100%')
+              .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
+          }
+
+
+          if (this.gachaOn) {
+            // 七十二改：**照 tab 页（媒体库 BrowseGrid / 收藏 FavoritesTab）的版式** ——
+            // 标题栏原封不动，只把内容区换成抽卡墙。不再另起 `GachaBar`，也不再自己套一层
+            // `Scroll`（墙内部就是 WaterFlow，自己会滚）。
+            //
+            // 首屏让位交给水墙自己的 `topPad`（**滚动内边距**，一滑就收成 0、图顶到物理屏顶）；
+            // 写在外层 Column 的 padding 上是死留白，滚了也不动，那就永远做不到真全屏。
+            // 墙头（剧照 · 范围 · 开关）不画：范围已在本页第一行，退出抽卡靠第二行那颗高亮的「抽卡中」。
             Column() {
               GachaWall({
                 scope: this.kind,
                 scopeId: this.facetId,
                 label: this.title,
                 count: 0,
+                hideHeader: true,
+                topPad: this.barH() + 6,
                 gachaOn: this.gachaOn,
                 onToggleGacha: (v: boolean) => {
                   this.gachaOn = v;
@@ -1071,152 +1274,174 @@ struct FacetPage {
               })
             }
             .width('100%')
-            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 2, bottom: 24 })
-          }
-          .layoutWeight(1)
-          .align(Alignment.Top)
-          .scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.Spring)
-        } else if (this.loading) {
-          Column() {
-            LoadingProgress()
-              .width(28)
-              .height(28)
-              .color(Theme.ACCENT)
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else if (this.error.length > 0) {
-          Column({ space: 10 }) {
-            Text(this.error)
-              .fontSize(13)
-              .fontColor(Theme.TEXT_DIM)
-              .onClick(() => {
-                this.loading = true;
-                this.load(0, false);
-              })
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else if (this.items.length === 0) {
-          Column({ space: 10 }) {
-            Text('▤')
-              .fontSize(32)
-              .fontColor(Theme.TEXT_FAINT)
-            Text(this.keyword.length > 0
-              ? `没有找到「${this.keyword}」`
-              : (this.filterCount() > 0 ? '没有符合筛选条件的影片' : '这个分类下还没有影片'))
-              .fontSize(13)
-              .fontColor(Theme.TEXT_DIM)
-            if (this.keyword.length > 0) {
-              Text('换个关键词，或清空搜索看全部')
-                .fontSize(11)
+            .layoutWeight(1)
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 0, bottom: 0 })
+          } else if (this.loading) {
+            Column() {
+              LoadingProgress()
+                .width(28)
+                .height(28)
+                .color(Theme.ACCENT)
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .justifyContent(FlexAlign.Center)
+          } else if (this.error.length > 0) {
+            Column({ space: 10 }) {
+              Text(this.error)
+                .fontSize(13)
+                .fontColor(Theme.TEXT_DIM)
+                .onClick(() => {
+                  this.loading = true;
+                  this.load(0, false);
+                })
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .justifyContent(FlexAlign.Center)
+          } else if (this.items.length === 0) {
+            Column({ space: 10 }) {
+              Text('▤')
+                .fontSize(32)
                 .fontColor(Theme.TEXT_FAINT)
-            } else if (this.filterCount() > 0) {
-              Text('重置筛选')
-                .fontSize(12)
-                .fontColor(Theme.ACCENT)
-                .padding({ left: 16, right: 16, top: 6, bottom: 6 })
-                .backgroundColor(Theme.ACCENT_SOFT)
-                .borderRadius(14)
-                .onClick(() => {
-                  this.resetFilters();
-                })
-            }
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else {
-          Grid() {
-            ForEach(this.items, (m: FacetMediaItem) => {
-              GridItem() {
-                this.Cell(m)
+              Text(this.keyword.length > 0
+                ? `没有找到「${this.keyword}」`
+                : (this.filterCount() > 0 ? '没有符合筛选条件的影片' : '这个分类下还没有影片'))
+                .fontSize(13)
+                .fontColor(Theme.TEXT_DIM)
+              if (this.keyword.length > 0) {
+                Text('换个关键词，或清空搜索看全部')
+                  .fontSize(11)
+                  .fontColor(Theme.TEXT_FAINT)
+              } else if (this.filterCount() > 0) {
+                Text('重置筛选')
+                  .fontSize(12)
+                  .fontColor(Theme.ACCENT)
+                  .padding({ left: 16, right: 16, top: 6, bottom: 6 })
+                  .backgroundColor(Theme.ACCENT_SOFT)
+                  .borderRadius(14)
+                  .onClick(() => {
+                    this.resetFilters();
+                  })
               }
-            }, (m: FacetMediaItem) => `fm-${m.id}`)
-
-            if (this.items.length < this.total) {
-              GridItem() {
-                Column() {
-                  if (this.loadingMore) {
-                    LoadingProgress()
-                      .width(20)
-                      .height(20)
-                      .color(Theme.TEXT_FAINT)
-                  } else {
-                    Text('加载更多')
-                      .fontSize(11)
-                      .fontColor(Theme.TEXT_FAINT)
-                  }
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .justifyContent(FlexAlign.Center)
+          } else {
+            Grid() {
+              ForEach(this.items, (m: FacetMediaItem) => {
+                GridItem() {
+                  this.Cell(m)
                 }
-                .width('100%')
-                .height(120)
-                .justifyContent(FlexAlign.Center)
-                .onClick(() => {
-                  this.loadMore();
-                })
+              }, (m: FacetMediaItem) => `fm-${m.id}`)
+
+              if (this.items.length < this.total) {
+                GridItem() {
+                  Column() {
+                    if (this.loadingMore) {
+                      LoadingProgress()
+                        .width(20)
+                        .height(20)
+                        .color(Theme.TEXT_FAINT)
+                    } else {
+                      Text('加载更多')
+                        .fontSize(11)
+                        .fontColor(Theme.TEXT_FAINT)
+                    }
+                  }
+                  .width('100%')
+                  .height(120)
+                  .justifyContent(FlexAlign.Center)
+                  .onClick(() => {
+                    this.loadMore();
+                  })
+                }
               }
             }
+            .columnsTemplate(Personalize.colsTemplate(this.posterCols))
+            .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
+              Personalize.zoom(event.scale);
+            }))
+            .columnsGap(8)
+            .rowsGap(14)
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6, bottom: Theme.BOTTOM_SAFE })
+            .layoutWeight(1)
+            .scrollBar(BarState.Off)
+            .edgeEffect(EdgeEffect.Spring)
+            .onReachEnd(() => {
+              this.loadMore();
+            })
+            // 六十六改：按**方向**触发，不再等回到顶 —— 下滑收、上拉放（200ms 补间）
+            .onScrollIndex((first: number) => {
+              const up: boolean = this.lastFirst >= 0 && first < this.lastFirst;
+              const down: boolean = this.lastFirst >= 0 && first > this.lastFirst;
+              this.lastFirst = first;
+              if (down && this.coverOn) {
+                this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+                  this.coverOn = false;
+                });
+              } else if (up && !this.coverOn) {
+                this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+                  this.coverOn = true;
+                });
+              }
+            })
           }
-          .columnsTemplate(Personalize.colsTemplate(this.posterCols))
-          .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
-            Personalize.zoom(event.scale);
-          }))
-          .columnsGap(8)
-          .rowsGap(14)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
-          .layoutWeight(1)
-          .scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.Spring)
-          .onReachEnd(() => {
-            this.loadMore();
-          })
+        }
+        .width('100%')
+        .height('100%')
+
+        if (this.showSort || this.showFilter) {
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor('#99000000')
+            .onClick(() => {
+              this.showSort = false;
+              this.showFilter = false;
+            })
+
+          if (this.showSort) {
+            SortSheet({
+              options: this.sorts,
+              current: this.sortBy,
+              order: this.order,
+              tabInset: 0,
+              onPick: (key: string) => {
+                if (this.sortBy !== key) {
+                  this.sortBy = key;
+                  this.order = sortDefOf(key);
+                }
+                // 随机再点一次 = 重摇一批
+                this.reload();
+                this.showSort = false;
+              },
+              onToggleOrder: () => {
+                this.order = this.order === 'asc' ? 'desc' : 'asc';
+                this.reload();
+              },
+              onClose: () => {
+                this.showSort = false;
+              }
+            })
+          }
+          if (this.showFilter) {
+            this.FilterSheet()
+          }
         }
       }
       .width('100%')
       .height('100%')
-
-      if (this.showSort || this.showFilter) {
-        Column()
-          .width('100%')
-          .height('100%')
-          .backgroundColor('#99000000')
-          .onClick(() => {
-            this.showSort = false;
-            this.showFilter = false;
-          })
-
-        if (this.showSort) {
-          SortSheet({
-            options: this.sorts,
-            current: this.sortBy,
-            order: this.order,
-            tabInset: 0,
-            onPick: (key: string) => {
-              if (this.sortBy !== key) {
-                this.sortBy = key;
-                this.order = sortDefOf(key);
-              }
-              // 随机再点一次 = 重摇一批
-              this.reload();
-              this.showSort = false;
-            },
-            onToggleOrder: () => {
-              this.order = this.order === 'asc' ? 'desc' : 'asc';
-              this.reload();
-            },
-            onClose: () => {
-              this.showSort = false;
-            }
-          })
-        }
-        if (this.showFilter) {
-          this.FilterSheet()
-        }
-      }
+      // 六十五改：让**内容**铺进上下系统栏 —— 海报要能画到状态栏/导航条后面，
+      // 只在 Navigation 上挂 expandSafeArea 是不够的（那只是让导航壳变大，内容照样被裁）。
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+      .backgroundColor(Theme.BG)
     }
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

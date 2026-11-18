@@ -1,8 +1,10 @@
 import { router, promptAction } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpPost } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /**
  * 设置 · 资料整理（二级页，2026-11-15 建立）。
@@ -108,95 +110,139 @@ struct OrganizePage {
     })
   }
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
       Row({ space: 10 }) {
-        Text('‹')
-          .fontSize(24)
-          .fontColor(Theme.TEXT)
-          .width(30)
-          .height(34)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            router.back();
-          })
-        Text('资料整理')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
+          }
+        })
+        PageTitle({ text: '资料整理', fs: 18 })
         Blank()
       }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 6 })
-
-      Scroll() {
-        Column({ space: 18 }) {
-          Column({ space: 8 }) {
-            Text('我起过的名字')
-              .fontSize(11)
-              .fontColor(Theme.TEXT_FAINT)
-              .letterSpacing(1)
-              .width('100%')
-            Column() {
-              this.NavRow(ROWS[0])
-              Divider()
-                .strokeWidth(1)
-                .color(Theme.CARD_HI)
-              this.NavRow(ROWS[1])
-            }
-            .width('100%')
-            .backgroundColor(Theme.CARD)
-            .borderRadius(14)
-            .clip(true)
-            Text('这两处只影响你手机上的检索与分类，不改服务器里刮削到的原始数据。')
-              .fontSize(10)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .lineHeight(16)
-          }
-          .width('100%')
-
-          Column({ space: 8 }) {
-            Text('危险操作')
-              .fontSize(11)
-              .fontColor(Theme.TEXT_FAINT)
-              .letterSpacing(1)
-              .width('100%')
-            Row({ space: 12 }) {
-              Column({ space: 3 }) {
-                Text('清空所有自定义修改')
-                  .fontSize(15)
-                  .fontColor(Theme.DANGER)
-                Text('把改过的片名/演员/标签与换过的封面全部还原成刮削原样（所有设备一起变）')
-                  .fontSize(11)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .maxLines(2)
-              }
-              .alignItems(HorizontalAlign.Start)
-              .layoutWeight(1)
-              Text('清空')
-                .fontSize(12)
-                .fontColor(Theme.DANGER)
-            }
-            .width('100%')
-            .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-            .backgroundColor(Theme.CARD)
-            .borderRadius(14)
-            .onClick(() => {
-              this.confirmResetMeta();
-            })
-          }
-          .width('100%')
-        }
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
-      }
-      .layoutWeight(1)
-      // Scroll 里的 Column 默认会被垂直居中（真机实测：标题下空出一大块），必须显式靠上
-      .align(Alignment.Top)
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
+      .padding({ left: 8, right: Theme.PAGE_PAD })
     }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
+
+  @StorageProp('amaneTopInset') topInset: number = 30;
+
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column() {
+
+        Scroll() {
+          Column({ space: 18 }) {
+
+          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
+          // 材质才有颜色可采样。
+          Blank().height(this.barH())
+            Column({ space: 8 }) {
+              Text('我起过的名字')
+                .fontSize(11)
+                .fontColor(Theme.TEXT_FAINT)
+                .letterSpacing(1)
+                .width('100%')
+              Column() {
+                this.NavRow(ROWS[0])
+                Divider()
+                  .strokeWidth(1)
+                  .color(Theme.CARD_HI)
+                this.NavRow(ROWS[1])
+              }
+              .width('100%')
+              .backgroundColor(Theme.CARD)
+              .borderRadius(14)
+              .clip(true)
+              Text('这两处只影响你手机上的检索与分类，不改服务器里刮削到的原始数据。')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+                .lineHeight(16)
+            }
+            .width('100%')
+
+            Column({ space: 8 }) {
+              Text('危险操作')
+                .fontSize(11)
+                .fontColor(Theme.TEXT_FAINT)
+                .letterSpacing(1)
+                .width('100%')
+              Row({ space: 12 }) {
+                Column({ space: 3 }) {
+                  Text('清空所有自定义修改')
+                    .fontSize(15)
+                    .fontColor(Theme.DANGER)
+                  Text('把改过的片名/演员/标签与换过的封面全部还原成刮削原样（所有设备一起变）')
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_FAINT)
+                    .maxLines(2)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                Text('清空')
+                  .fontSize(12)
+                  .fontColor(Theme.DANGER)
+              }
+              .width('100%')
+              .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+              .backgroundColor(Theme.CARD)
+              .borderRadius(14)
+              .onClick(() => {
+                this.confirmResetMeta();
+              })
+            }
+            .width('100%')
+          }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+        }
+        .layoutWeight(1)
+        // Scroll 里的 Column 默认会被垂直居中（真机实测：标题下空出一大块），必须显式靠上
+        .align(Alignment.Top)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
+    }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

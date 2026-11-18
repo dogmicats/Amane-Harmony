@@ -1,8 +1,10 @@
-﻿import { router } from '@kit.ArkUI';
+import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { LikedClip, likedSorted, removeLiked } from '../common/LikedShorts';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /**
  * 我的喜爱（刷一刷里点过心的片段）。
@@ -23,6 +25,7 @@ struct MyLikedShortsPage {
 
   /** onPageShow：从详情页回来可能已经取消喜爱了，重读一遍。 */
   onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
     this.reload();
   }
 
@@ -65,75 +68,115 @@ struct MyLikedShortsPage {
     this.note = `已经不喜爱 ${c.number}（不影响影片的收藏）`;
   }
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
-      // 顶部：标题 + 一句「和收藏不一样」的说明
       Row({ space: 8 }) {
-        Text('‹')
-          .fontSize(26)
-          .fontColor(Theme.TEXT)
-          .width(40)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            router.back();
-          })
-        Text('我的喜爱')
-          .fontSize(19)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.TEXT)
+        // 五十八改：返回键换成基底的玻璃胶囊（与其它二级页统一）
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
+          }
+        })
+        PageTitle({ text: '我的喜爱', fs: 18 })
         Blank()
         Text(this.rows.length > 0 ? `${this.rows.length} 条` : '')
           .fontSize(12)
           .fontColor(Theme.TEXT_DIM)
       }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 8, right: 16, top: 6, bottom: 6 })
-
-      Text('刷一刷里点过心的片段。这里和影片的「收藏」是两件事：取消喜爱不会动收藏，收藏也不会出现在这里。')
-        .fontSize(12)
-        .fontColor(Theme.TEXT_DIM)
-        .lineHeight(18)
-        .width('100%')
-        .padding({ left: 16, right: 16, bottom: 10 })
-
-      if (this.note.length > 0) {
-        Text(this.note)
-          .fontSize(12)
-          .fontColor(Theme.GOLD)
-          .width('100%')
-          .padding({ left: 16, right: 16, bottom: 8 })
-      }
-
-      if (this.rows.length === 0) {
-        Column({ space: 10 }) {
-          Text('♡')
-            .fontSize(40)
-            .fontColor(Theme.TEXT_DIM)
-          Text('还没有喜爱')
-            .fontSize(15)
-            .fontColor(Theme.TEXT)
-          Text('在负一屏点一下右侧的爱心，或者双击画面，就会收进这里')
-            .fontSize(12)
-            .fontColor(Theme.TEXT_DIM)
-            .textAlign(TextAlign.Center)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        List({ space: 10 }) {
-          ForEach(this.rows, (c: LikedClip) => {
-            ListItem() {
-              this.Row(c)
-            }
-          }, (c: LikedClip) => `${c.id}_${c.at}`)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .padding({ left: 12, right: 12 })
-        .scrollBar(BarState.Off)
-      }
+      .padding({ left: 8, right: 16 })
     }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
+
+  @StorageProp('amaneTopInset') topInset: number = 30;
+
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column() {
+        // 顶部：标题 + 一句「和收藏不一样」的说明
+
+  // 六十改：让出浮层标题栏的高度
+  Blank().height(this.barH())
+
+        Text('刷一刷里点过心的片段。这里和影片的「收藏」是两件事：取消喜爱不会动收藏，收藏也不会出现在这里。')
+          .fontSize(12)
+          .fontColor(Theme.TEXT_DIM)
+          .lineHeight(18)
+          .width('100%')
+          .padding({ left: 16, right: 16, bottom: 10 })
+
+        if (this.note.length > 0) {
+          Text(this.note)
+            .fontSize(12)
+            .fontColor(Theme.GOLD)
+            .width('100%')
+            .padding({ left: 16, right: 16, bottom: 8 })
+        }
+
+        if (this.rows.length === 0) {
+          Column({ space: 10 }) {
+            Text('♡')
+              .fontSize(40)
+              .fontColor(Theme.TEXT_DIM)
+            Text('还没有喜爱')
+              .fontSize(15)
+              .fontColor(Theme.TEXT)
+            Text('在负一屏点一下右侧的爱心，或者双击画面，就会收进这里')
+              .fontSize(12)
+              .fontColor(Theme.TEXT_DIM)
+              .textAlign(TextAlign.Center)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          List({ space: 10 }) {
+            ForEach(this.rows, (c: LikedClip) => {
+              ListItem() {
+                this.Row(c)
+              }
+            }, (c: LikedClip) => `${c.id}_${c.at}`)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .padding({ left: 12, right: 12 })
+          .scrollBar(BarState.Off)
+        }
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
+    }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)
@@ -215,4 +258,3 @@ struct MyLikedShortsPage {
     })
   }
 }
-

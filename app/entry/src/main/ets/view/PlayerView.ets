@@ -754,8 +754,12 @@ export struct PlayerView {
       } else if (this.orientIntent === 'landscape') {
         w.setPreferredOrientation(window.Orientation.LANDSCAPE);
       } else if (this.viewMode === 'landscape') {
-        // 详情页里的播放器跟着重力走（auto）：不锁死，否则「竖不回来」
-        w.setPreferredOrientation(this.pageHost
+        // 详情页里的播放器跟着重力走（auto）：不锁死，否则「竖不回来」。
+        // 2026-11-17 修「横屏播着播着突然变竖屏」：锁定 20 秒到期后 intent 变回 auto，
+        // 这里若直接交还 AUTO_ROTATION，系统就按当时握持角度重判一次 —— 躺着/斜着拿
+        // 就会翻回竖屏。所以只有在**传感器确认手机已经是竖的**时才交还重力。
+        const phonePortrait: boolean = this.physicalKnown && this.physicalPortrait;
+        w.setPreferredOrientation(this.pageHost || !phonePortrait
           ? window.Orientation.LANDSCAPE
           : window.Orientation.AUTO_ROTATION);
       } else if (this.pageHost) {
@@ -1030,12 +1034,13 @@ export struct PlayerView {
     if (this.win === undefined) {
       return;
     }
-    // ★ 不要在这里锁 PORTRAIT ★
-    // 用户第 4 条报「横屏退出播放页后变成横屏主页，重力也回不来」：退出时锁竖屏
-    // 只是碰巧能回去；真正的原因是整个 App 在播放页之外还是竖屏锁定，
-    // 而播放页把窗口留在了横屏。现在统一交还给重力（AUTO_ROTATION），
-    // 由 EntryAbility 在启动时给主窗口设一次，任何界面都跟着手机转。
-    this.win.setPreferredOrientation(window.Orientation.AUTO_ROTATION);
+    // 播放器销毁 = 离开播放器上下文，宿主页（详情/播放页）都是没按横屏调过版式的普通页，
+    // 退出后锁回竖屏（2026-11-18 用户：「先禁止除了播放器以外的所有横屏」）。
+    // 旧版这里交还 AUTO_ROTATION，前提是「整个 App 全局跟重力转」，那个前提已经取消
+    // （EntryAbility 现在默认 PORTRAIT）。整页播放器 PlayerPage.exitFullscreen 也是锁
+    // PORTRAIT，这里对齐它。注意：这只管播放器**销毁后**；播放中的横竖屏仍由
+    // applyWindowMode（orientIntent / viewMode）决定，那套逻辑没动，播放器例外保留。
+    this.win.setPreferredOrientation(window.Orientation.PORTRAIT);
     this.win.setWindowLayoutFullScreen(false);
     this.win.setWindowSystemBarEnable(['status', 'navigation']);
     // 退出播放：把常亮还回去，否则这一页关了屏幕还一直亮着

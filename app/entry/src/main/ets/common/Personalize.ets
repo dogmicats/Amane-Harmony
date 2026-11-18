@@ -84,7 +84,10 @@ export class Personalize {
     const stills: number = Personalize.clampStills(Personalize.readStillsPref());
     AppStorage.setOrCreate<number>(KEY_STILL_COLS, stills);
     AppStorage.setOrCreate<number>(KEY_THEME_EPOCH, 0);
-    AppStorage.setOrCreate<number>(KEY_FX, Personalize.clampFx(Number(Store.I.prefString(PREF_FX, `${FX_DEFAULT}`))));
+    // 光效固定「强」：2026-11-17 用户要求隐藏选择接口（这里的「光效」易与华为官方
+    // 「沉浸光感」混淆）。不再读旧偏好，老机器上存过的 0/1 一并复位到强；
+    // 接口与偏好键都保留，将来要恢复只要把这里改回读 prefString 即可。
+    AppStorage.setOrCreate<number>(KEY_FX, FX_DEFAULT);
     // 底栏玻璃不透明度：用户在「外观」里调，Index 订阅这个键重建底栏材质
     AppStorage.setOrCreate<number>(KEY_TABBAR_ALPHA, Personalize.readTabBarAlpha());
     // 触感开关（2.6.1.18）：和光效分开一套偏好 —— 有人愿意要光但不要震

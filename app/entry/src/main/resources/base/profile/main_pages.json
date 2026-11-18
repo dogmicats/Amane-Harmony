@@ -19,6 +19,7 @@
     "pages/CastTokenPage",
     "pages/OfflinePage",
     "pages/SettingsPage",
+    "pages/HdsProbePage",
     "pages/SettingsHomePage",
     "pages/SettingsAppearancePage",
     "pages/SettingsConnectionPage",

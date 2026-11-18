@@ -21,6 +21,7 @@ import { HeroBanner } from '../view/HeroBanner';
 import { MediaRow } from '../view/MediaRow';
 import { BannerRow } from '../view/BannerRow';
 import { GlowOrb, ParticleField } from '../view/Fx';
+import { GlassBox, GlassIcon, PageTitle } from '../view/GlassKit';
 
 /** 首页「媒体库」一栏的一张卡（2.5.5.4）。 */
 interface LibCard {
@@ -56,7 +57,7 @@ const HOME_WARM_AT: Map<number, number> = new Map();
 /**
  * 首页的一行（2.5.2 起首页由数据驱动）。
  *
- * `kind` 决定用哪个组件渲染：`cast` 是找共演入口卡、`banner` 是横幅行、
+ * `kind` 决定用哪个组件渲染：`cast` 是甄选入口卡、`banner` 是横幅行、
  * 其余（`continue` / `row`）都是普通的横向海报行。`key` 同时是偏好里的键名，
  * 一旦发布不要再改（改了用户存的顺序就对不上了）。
  */
@@ -259,56 +260,103 @@ struct LibCardCell {
     return items;
   }
 
-  build() {
-    Column({ space: 5 }) {
-      Stack({ alignContent: Alignment.TopEnd }) {
-        if (this.card.cover.length > 0) {
-          Image(Store.I.img(this.card.cover))
-            .width('100%')
+  /**
+   * 封面视觉（不含 ⇄ 按钮）：原图与倒影共用同一份，保证镜像和本体一致。
+   * 三种形态：用户自定义封面 > 两张库内海报拼贴 > 库名首字。
+   */
+  @Builder
+  CoverArt() {
+    if (this.card.cover.length > 0) {
+      Image(Store.I.img(this.card.cover))
+        .width('100%')
+        .height('100%')
+        .objectFit(ImageFit.Cover)
+    } else if (this.card.posters.length > 0) {
+      Row({ space: 1 }) {
+        ForEach(this.card.posters, (p: string, i: number) => {
+          Image(Store.I.img(p))
+            .layoutWeight(1)
             .height('100%')
             .objectFit(ImageFit.Cover)
-        } else if (this.card.posters.length > 0) {
-          Row({ space: 1 }) {
-            ForEach(this.card.posters, (p: string, i: number) => {
-              Image(Store.I.img(p))
-                .layoutWeight(1)
-                .height('100%')
-                .objectFit(ImageFit.Cover)
-            }, (p: string, i: number) => `lp-${this.card.id}-${i}`)
-          }
-          .width('100%')
-          .height('100%')
-        } else {
-          Column() {
-            Text(this.card.name.substring(0, 1))
-              .fontSize(26)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(Theme.TEXT_DIM)
-          }
-          .width('100%')
-          .height('100%')
-          .justifyContent(FlexAlign.Center)
-          .backgroundColor(Theme.CARD_HI)
-        }
-        // 明确可点：点它出菜单（长按在很多机型上会被滚动手势抢掉）
-        Text('⇄')
-          .fontSize(10)
-          .fontColor('#F2FFFFFF')
-          .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-          .backgroundColor('#99000000')
-          .borderRadius(7)
-          .margin({ top: 5, right: 5 })
-          .bindMenu(this.menuItems())
+        }, (p: string, i: number) => `lp-${this.card.id}-${i}`)
       }
       .width('100%')
-      .height(84)
-      .borderRadius(10)
-      .clip(true)
+      .height('100%')
+    } else {
+      Column() {
+        Text(this.card.name.substring(0, 1))
+          .fontSize(26)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Theme.TEXT_DIM)
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
       .backgroundColor(Theme.CARD_HI)
-      .border({
-        width: this.card.cover.length > 0 ? 1 : 0,
-        color: Theme.accentAlpha(0.32)
-      })
+    }
+  }
+
+  build() {
+    Column({ space: 5 }) {
+      // 封面 + 倒影贴成一段（两者零间隙），整段再与下面的库名/部数保持 5 的距离
+      Column() {
+        Stack({ alignContent: Alignment.TopEnd }) {
+          this.CoverArt()
+          // 明确可点：点它出菜单（长按在很多机型上会被滚动手势抢掉）
+          Text('⇄')
+            .fontSize(10)
+            .fontColor('#F2FFFFFF')
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+            .backgroundColor('#99000000')
+            .borderRadius(7)
+            .margin({ top: 5, right: 5 })
+            .bindMenu(this.menuItems())
+        }
+        .width('100%')
+        .height(84)
+        .borderRadius(10)
+        .clip(true)
+        .backgroundColor(Theme.CARD_HI)
+        .border({
+          width: this.card.cover.length > 0 ? 1 : 0,
+          color: Theme.accentAlpha(0.32)
+        })
+
+        // 镜像倒影（2026-11-17，用户参考 hosplayer）：取封面底部一段垂直翻转，
+        // 再叠一层背景色渐变同时完成「压暗」和「淡出」。
+        // scale 绕中心翻转不改变布局尺寸：84 高的镜像在 TopStart 的 30 高 Stack 里
+        // 只露出顶部 30px，那正是封面底部 30px 的倒影。倒影不拦点击，点它等同点卡片进库。
+        //
+        // 暗部/收尾的坑：不要在 Stack 上挂 opacity —— 它会把渐变底部那层本该
+        // 100% 不透明的背景色一起削薄，容器 clip 时还剩几十 % 的倒影被硬切断，
+        // 看着像「戛然而止」。改为渐变自带 alpha：顶部即带背景色压暗，到底部
+        // 82% 处已是纯背景色，clip 掉的那段和页面底色同色，自然看不出边界。
+        Stack({ alignContent: Alignment.TopStart }) {
+          Column() {
+            this.CoverArt()
+          }
+          .width('100%')
+          .height(84)
+          .scale({ x: 1, y: -1 })
+
+          Column()
+            .width('100%')
+            .height(30)
+            .linearGradient({
+              angle: 180,
+              colors: [
+                ['#800B0B0F', 0.0],
+                ['#B30B0B0F', 0.40],
+                ['#FF0B0B0F', 0.82],
+                ['#FF0B0B0F', 1.0]
+              ]
+            })
+        }
+        .width('100%')
+        .height(30)
+        .clip(true)
+      }
+      .width('100%')
 
       Text(this.card.name)
         .fontSize(11)
@@ -346,6 +394,11 @@ export struct HomeTab {
    * 只看到过 +1 / -2 这种抖动值），拿它判方向会一直以为在往下看。
    */
   private sc: Scroller = new Scroller();
+  /**
+   * 导航栈（四十三改）：首页套 Navigation 只为了拿到**标题栏这个材质落点**，
+   * 栈里永远只有本页自己 —— 和媒体库同样的用法。
+   */
+  private navStack: NavPathStack = new NavPathStack();
   @State home: HomeData = emptyHome();
   /** 这次真的要铺的行（顺序 / 显隐来自「设置 → 首页内容」）。 */
   @State sections: HomeSection[] = [];
@@ -774,7 +827,7 @@ export struct HomeTab {
     const keys: string[] = [];
     if (BuildConfig.ENABLE_ACTORS) {
       avail.push({
-        key: 'cast', kind: 'cast', title: '找共演', subtitle: '',
+        key: 'cast', kind: 'cast', title: '甄选', subtitle: '',
         libraryId: 0, moreKind: '', items: []
       });
       keys.push('cast');
@@ -937,41 +990,74 @@ export struct HomeTab {
   @Builder
   Header() {
     Row() {
-      // 标题让位给封面（2026-11-14）：原来 20 号粗体压在亮封面上像水印，
-      // 现在收到 15 号 + 半透明白 + 字间距，只当"品牌签名"用。
-      Text('Amane')
-        .fontSize(15)
-        .fontWeight(FontWeight.Medium)
-        .fontColor('#CCFFFFFF')
-        .letterSpacing(0.6)
-        .textShadow({ radius: 10, color: '#B3000000', offsetX: 0, offsetY: 2 })
-      Blank()
-      // 搜索键（2.5.7.8）：原先是「42vp 半透明灰圆盘 + `⌕` 字形」——46% 的灰底压在亮色
-      // 横幅上像一块脏印子，字形又细又小。现在换成真矢量图标（20vp）+ 36vp 暗玻璃底 +
-      // 一圈 1px 亮边：亮背景上有轮廓，暗背景上不突兀。
-      Stack() {
-        Image($r('app.media.ic_search'))
-          .width(20)
-          .height(20)
-          .objectFit(ImageFit.Contain)
-          .draggable(false)
+      // ★ 2026-11-18 四十三改：真的系统材质 ★
+      //
+      // 用户问「我要的就是系统材质，为什么不行？」—— 因为**位置**不对，不是参数不对。
+      // 沉浸材质的落点是官方硬限制：只有 Navigation/NavDestination 的**标题栏**、
+      // `barPosition: End` 的底部 TabBar 里才出像素。之前这条 header 是画在内容区里的
+      // 自建 Row（首页根 Stack 的一层），挂 `systemMaterial` 一个像素都不会有 ——
+      // 这就是当时只能退成「模糊 + 极薄暗底」那种兜底的原因。
+      //
+      // 现在整页套了 Navigation，这条 header 经 `title(builder, { barStyle: STACK })`
+      // 搬进了标题栏（与媒体库完全同一个落点），所以 `mat: true` 是真的材质：
+      // 折射、边缘光、阴影都由系统画，我们**不再铺任何底色**（`tint: ''`）。
+      GlassBox({ radius: 23, padH: 14, padV: 9, mat: true, tint: '' }) {
+        // ★ 四十四改：左上角这一颗的**规范**（用户定的，之后每页都照这个来）★
+        // 「位置和大小要参考媒体库这一颗」= 20 号 / Bold / 白 / 暗投影，装在 46 高的玻璃胶囊里。
+        // 原来是 15 号 Medium + 字间距的品牌签名，用户要求放大加粗到标题量级。
+        PageTitle({ text: 'Amane', fs: 20 })
       }
-      .width(36)
-      .height(36)
-      .borderRadius(18)
-      .backgroundColor('#33000000')
-      .border({ width: 1, color: '#40FFFFFF' })
-      .onClick(() => {
-        router.pushUrl({ url: 'pages/SearchPage' });
+      Blank()
+      // 搜索键（五十六改）：**与收藏/演员/标签完全同一颗** —— 42 见方、圆角 21、图标 18。
+      // 之前首页是 46/23/20，比例虽然一致，但用户要的「统一」是一个像素都别差。
+      GlassIcon({
+        icon: $r('app.media.ic_search'),
+        iconSize: 18,
+        boxW: 42,
+        boxH: 42,
+        radius: 21,
+        mat: true,
+        tint: '',
+        onTap: () => {
+          router.pushUrl({ url: 'pages/SearchPage' });
+        }
       })
     }
     .width('100%')
-    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 8 + this.topInset })
+    .height(46)
+    .alignItems(VerticalAlign.Center)
+    .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
     .hitTestBehavior(HitTestMode.Transparent)
   }
 
   /**
-   * 公开扩展 actors 的特色入口卡（找共演）。
+   * 标题栏配置（四十三改）：首页 header 搬进 Navigation 标题栏后，高度 = 状态栏 + 8 + 46 + 8。
+   *
+   * 写成有明确返回类型的方法，不是内联对象字面量 —— 联合类型下内联 `{ builder, height }`
+   * 会触发 `arkts-no-untyped-obj-literals`（媒体库那一版踩过）。
+   */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar()
+      },
+      height: 62 + this.topInset
+    };
+  }
+
+  /** 标题栏壳：只让出状态栏，玻璃胶囊由里面的 Header 自己挂材质。 */
+  @Builder
+  TitleBar() {
+    Column() {
+      this.Header()
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset + 8 })
+  }
+
+  /**
+   * 公开扩展 actors 的特色入口卡（甄选）。
    *
    * 从 build() 里搬出来只是为了让首页那段 ForEach 短一点；
    * 版式与 2.4.x 完全一致，别顺手改。
@@ -984,7 +1070,7 @@ export struct HomeTab {
       Row({ space: 12 }) {
         Column({ space: 4 }) {
           Row({ space: 6 }) {
-            Text('找共演')
+            Text('甄选')
               .fontSize(15)
               .fontWeight(FontWeight.Bold)
               .fontColor(Theme.TEXT)
@@ -995,7 +1081,7 @@ export struct HomeTab {
               .backgroundColor(Theme.ACCENT_SOFT)
               .borderRadius(4)
           }
-          Text('挑几个人找同台作品，或按「几个女演员」直接筛')
+          Text('按演员、标签、人数、媒体库等条件自由组合，筛出你要的片子')
             .fontSize(10)
             .fontColor(Theme.TEXT_FAINT)
             .maxLines(2)
@@ -1038,6 +1124,13 @@ export struct HomeTab {
   }
 
   build() {
+    // ★ 2026-11-18 四十三改：整页套一层 Navigation ★
+    //
+    // 唯一目的：让顶上那条 header 落到**标题栏**里 —— 沉浸材质只认这个位置。
+    // 与媒体库（`LibraryTab`）完全同一个结构：`title(builder, { barStyle: STACK })`，
+    // 标题栏浮在内容之上，大图从它底下穿过去，玻璃才有东西可采样。
+    // 内容树的层次一个都没动，只是外面多了一层壳。
+    Navigation(this.navStack) {
     Stack({ alignContent: Alignment.TopStart }) {
       // 左边缘漏光：放在**最底层**（2026-11-16 用户报「左侧 110vp 内滑不动」——
       // 它原来压在内容上面，虽然设了 hitTestBehavior(None)，实测仍吃掉纵向手势）。
@@ -1267,7 +1360,7 @@ export struct HomeTab {
           this.pullRefresh();
         })
 
-        this.Header()
+        // 四十三改：header 已搬进 Navigation 标题栏（`TitleBar`），这里不再画第二遍。
 
         // 负一屏提示（2.6.1.68）：首页元素太密，光带本身在满屏内容里几乎看不见，
         // 所以提示时**把整页压暗一点**（8% 黑），光带在暗底上才跳得出来；闪完两层一起退。
@@ -1310,6 +1403,16 @@ export struct HomeTab {
     .onTouch((ev: TouchEvent) => {
       this.trackSwipe(ev);
     })
+    }
+    // 四十三改：Navigation 壳。内容仍是整屏（barStyle STACK = 标题栏浮在上面，
+    // 大图照旧从屏幕最顶上开始），所以宽高都写满、背景色跟页面一致。
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
+    .width('100%')
+    .height('100%')
+    .backgroundColor(Theme.BG)
   }
 
   /** 记一次触摸的起止点（只观测，不消费事件）。 */

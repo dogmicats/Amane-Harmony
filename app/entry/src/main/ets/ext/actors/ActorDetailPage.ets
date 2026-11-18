@@ -1,4 +1,5 @@
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
@@ -11,6 +12,7 @@ import { DetailParams, ItemDetail } from '../../common/Types';
 import { posterItem } from '../../common/Util';
 import { PosterCard } from '../../view/PosterCard';
 import { StillsWall } from '../../view/StillsWall';
+import { GlassBack, GlassGlyph } from '../../view/GlassKit';
 import { safeDetail } from '../../common/Safe';
 import {
   ActorDetail, ActorMediaItem, ActorMediaList, ActorParams, ActorStill, ActorStillList,
@@ -418,6 +420,7 @@ struct ActorDetailPage {
   }
 
   onPageShow(): void {
+    setPageFullScreen(getContext(this), false);
     this.resetZoom();
   }
 
@@ -613,7 +616,10 @@ struct ActorDetailPage {
             .fontSize(11)
             .fontColor(Theme.TEXT_DIM)
             .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-            .backgroundColor(Theme.CARD)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor('#1FFFFFFF')
+            .border({ width: 0.5, color: '#33FFFFFF' })
+            .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
             .borderRadius(10)
             .onClick(() => {
               this.loadStills(true);
@@ -847,7 +853,10 @@ struct ActorDetailPage {
                 .fontSize(11)
                 .fontColor(Theme.TEXT_DIM)
                 .padding({ left: 9, right: 9, top: 4, bottom: 4 })
-                .backgroundColor(Theme.CARD)
+                .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                .backgroundColor('#1FFFFFFF')
+                .border({ width: 0.5, color: '#33FFFFFF' })
+                .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
                 .borderRadius(11)
                 .margin({ right: 6, bottom: 6 })
             }, (alias: string) => `alias-${alias}`)
@@ -968,16 +977,21 @@ struct ActorDetailPage {
                   .fontSize(11)
                   .fontColor(Theme.TEXT_DIM)
                   .padding({ left: 11, right: 11, top: 5, bottom: 5 })
-                  .backgroundColor(Theme.CARD)
+                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                  .backgroundColor('#1FFFFFFF')
+                  .border({ width: 0.5, color: '#33FFFFFF' })
+                  .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
                   .borderRadius(11)
                   .onClick(() => {
                     router.pushUrl({ url: 'ext/actors/CastFinderPage' });
                   })
                 Text('筛选 ›')
                   .fontSize(11)
-                  .fontColor('#FFFFFF')
+                  .fontColor(Theme.ACCENT)
                   .padding({ left: 11, right: 11, top: 5, bottom: 5 })
-                  .backgroundColor(Theme.ACCENT)
+                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                  .backgroundColor(Theme.accentAlpha(0.30))
+                  .border({ width: 1, color: Theme.accentAlpha(0.55) })
                   .borderRadius(11)
                   .onClick(() => {
                     const p: ActorParams = { id: this.actorId, name: this.data.name };
@@ -1034,35 +1048,26 @@ struct ActorDetailPage {
         .padding({ bottom: 0 })
       }
 
-      // 顶栏：返回 + 收藏。两枚按钮都压在大图上，用同一套半透明玻璃底。
-      Row() {
-        Text('‹')
-          .fontSize(24)
-          .fontColor('#FFFFFF')
-          .width(36)
-          .height(36)
-          .textAlign(TextAlign.Center)
-          .borderRadius(18)
-          .backgroundColor('#40000000')
-          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
-          .onClick(() => {
+      // 顶栏：返回 + 收藏（七十二改：换成与全站同一颗返回球 / 同一个字形方块）。
+      // 这两颗压在大图上，走 `scrim`（多垫一层 25% 黑），不然亮海报上箭头会糊掉。
+      Row({ space: 8 }) {
+        GlassBack({
+          scrim: true,
+          onTap: () => {
             router.back();
-          })
+          }
+        })
 
         Blank()
 
-        Text(this.fav ? '♥' : '♡')
-          .fontSize(18)
-          .fontColor(this.fav ? '#FF6B93' : '#FFFFFF')
-          .width(36)
-          .height(36)
-          .textAlign(TextAlign.Center)
-          .borderRadius(18)
-          .backgroundColor('#40000000')
-          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
-          .onClick(() => {
+        GlassGlyph({
+          glyph: this.fav ? '♥' : '♡',
+          active: this.fav,
+          glyphSize: 15,
+          onTap: () => {
             this.toggleFav();
-          })
+          }
+        })
       }
       .width('100%')
       .padding({ left: 12, right: 12, top: 8 })
@@ -1169,9 +1174,11 @@ struct ActorDetailPage {
                 })
               Text(this.addingPhoto ? '保存中…' : '保存直链')
                 .fontSize(12)
-                .fontColor('#FFFFFF')
+                .fontColor(Theme.ACCENT)
                 .padding({ left: 18, right: 18, top: 7, bottom: 7 })
-                .backgroundColor(Theme.ACCENT)
+                .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                .backgroundColor(Theme.accentAlpha(0.30))
+                .border({ width: 1, color: Theme.accentAlpha(0.55) })
                 .borderRadius(16)
                 .onClick(() => {
                   this.addPhoto();

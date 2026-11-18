@@ -3,6 +3,7 @@ import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
 import { Theme } from '../common/Theme';
 import { BuildConfig } from '../common/BuildConfig';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /**
  * 更新日志。数据源是 resources/rawfile/changelog.md —— 由 tools/version.py sync
@@ -336,54 +337,95 @@ struct ChangelogPage {
     .borderRadius(Theme.RADIUS)
   }
 
-  build() {
-    Column({ space: 14 }) {
+  @Builder
+  TitleBar() {
+    Column() {
       Row({ space: 10 }) {
-        Text('‹')
-          .fontSize(24)
-          .fontColor(Theme.TEXT)
-          .width(30)
-          .height(34)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            router.back();
-          })
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
+          }
+        })
         Column({ space: 2 }) {
-          Text('更新日志')
-            .fontSize(17)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(Theme.TEXT)
+          PageTitle({ text: '更新日志', fs: 18 })
           Text(`当前版本 ${this.current} · ${BuildConfig.CHANNEL === 'self' ? '自用线' : '公开发布'}`)
             .fontSize(10)
             .fontColor(Theme.TEXT_FAINT)
         }
         .alignItems(HorizontalAlign.Start)
       }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 4 })
-
-      Scroll() {
-        Column({ space: 10 }) {
-          if (this.failed) {
-            Text('读不到内置的更新日志（rawfile/changelog.md 缺失），重新构建前先跑 tools/version.py sync。')
-              .fontSize(12)
-              .fontColor(Theme.DANGER)
-              .lineHeight(18)
-              .width('100%')
-              .padding(14)
-              .backgroundColor(Theme.CARD)
-              .borderRadius(Theme.RADIUS)
-          }
-          ForEach(this.versions, (item: LogVersion) => {
-            this.VersionCard(item)
-          }, (item: LogVersion) => `${item.version}-${this.isOpen(item.version) ? 'o' : 'c'}`)
-        }
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 40 })
-      }
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
+      .padding({ left: 8, right: Theme.PAGE_PAD })
     }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
+
+  @StorageProp('amaneTopInset') topInset: number = 30;
+
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column({ space: 14 }) {
+
+        Scroll() {
+          Column({ space: 10 }) {
+
+          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
+          // 材质才有颜色可采样。
+          Blank().height(this.barH())
+            if (this.failed) {
+              Text('读不到内置的更新日志（rawfile/changelog.md 缺失），重新构建前先跑 tools/version.py sync。')
+                .fontSize(12)
+                .fontColor(Theme.DANGER)
+                .lineHeight(18)
+                .width('100%')
+                .padding(14)
+                .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                .backgroundColor('#1FFFFFFF')
+                .border({ width: 0.5, color: '#33FFFFFF' })
+                .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
+                .borderRadius(Theme.RADIUS)
+            }
+            ForEach(this.versions, (item: LogVersion) => {
+              this.VersionCard(item)
+            }, (item: LogVersion) => `${item.version}-${this.isOpen(item.version) ? 'o' : 'c'}`)
+          }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 40 })
+        }
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
+    }
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

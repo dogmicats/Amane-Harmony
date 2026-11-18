@@ -6,6 +6,7 @@ import { Theme } from '../common/Theme';
 import { Store } from '../common/Store';
 import { SubStyle, SUB_SIZE_OPTS, SUB_OUTLINE_OPTS, SUB_POS_OPTS, SUB_BG_OPTS, SubOpt } from '../common/SubStyle';
 import { httpGet, httpPost } from '../common/Http';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 import {
   PlayerPrefs, PlayerTuning, PresetOption, PRESETS, confText, presetTuning
 } from '../common/PlayerPrefs';
@@ -974,22 +975,17 @@ struct PlayerSettingsPage {
     .borderRadius(Theme.RADIUS)
   }
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
       Row({ space: 10 }) {
-        Text('‹')
-          .fontSize(24)
-          .fontColor(Theme.TEXT)
-          .width(30)
-          .height(34)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            router.back();
-          })
-        Text('播放设置')
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.TEXT)
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
+          }
+        })
+        PageTitle({ text: '播放设置', fs: 18 })
         Blank()
         Text(this.presetLabel())
           .fontSize(11)
@@ -998,190 +994,73 @@ struct PlayerSettingsPage {
           .backgroundColor(Theme.ACCENT_SOFT)
           .borderRadius(9)
       }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 8 })
+      .padding({ left: 8, right: Theme.PAGE_PAD })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
 
-      Scroll() {
-        Column({ space: 12 }) {
-          // ── 播放习惯（2026-11-15 重排：先放「怎么播」，性能参数收进下面的折叠区）──
-          this.SectionTitle('播放习惯', '下面这些改完立即生效，不用点保存')
+  @StorageProp('amaneTopInset') topInset: number = 30;
 
-          this.OpenModeRow()
-          this.JumpModeRow()
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
 
-          // 重力开关内联在 build 里（不用 @Builder 传值）：
-          // @Builder 按值传参不重建，「点了开关不动」这坑在抽卡那里踩过。
-          Row({ space: 12 }) {
-            Column({ space: 2 }) {
-              Text('重力自动切换')
-                .fontSize(14)
-                .fontColor(Theme.TEXT)
-              Text(this.autorotate
-                ? '竖着拿 = 顶部 16:9 播放器 + 下拉详情；横着拿 = 全屏'
-                : '播放页永远横屏全屏，竖着拿也不变')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .lineHeight(14)
-            }
-            .alignItems(HorizontalAlign.Start)
-            .layoutWeight(1)
-            Toggle({ type: ToggleType.Switch, isOn: this.autorotate })
-              .selectedColor(Theme.ACCENT)
-              .onChange((v: boolean) => {
-                this.autorotate = v;
-                Store.I.prefSetString('player_autorotate', v ? '1' : '0');
-              })
-          }
-          .width('100%')
-          .padding(14)
-          .backgroundColor(Theme.CARD)
-          .borderRadius(Theme.RADIUS)
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
 
-          this.SeekStepRow()
-          this.TempSpeedRow()
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
 
-          // ── 返回桌面后（2026-11-15）：两个互斥开关合成一个单选项 ──
-          // 偏好键与默认值一个都没变：都不选 = 关闭；player_bg_play=1 = 仅声音；player_pip_auto=1 = 画中画。
-          // 原来两个 Switch 各自带「开一个自动关另一个」，用户开了一个另一个突然关掉，看着像 bug。
-          this.SectionTitle('返回桌面后', '按 home 或切到别的应用时怎么办；选完立即生效')
+  build() {
+    Navigation(this.navStack) {
+      Column() {
 
-          Column({ space: 10 }) {
-            Row() {
-              Text('按 home 回桌面后')
-                .fontSize(14)
-                .fontColor(Theme.TEXT)
-                .layoutWeight(1)
-              Text(this.deskMode() === 'off' ? '关闭' : (this.deskMode() === 'bg' ? '仅声音' : '画中画'))
-                .fontSize(12)
-                .fontColor(Theme.ACCENT)
-            }
-            .width('100%')
+        Scroll() {
+          Column({ space: 12 }) {
 
-            Flex({ wrap: FlexWrap.Wrap }) {
-              Text('关闭')
-                .fontSize(12)
-                .fontColor(this.deskMode() === 'off' ? '#FFFFFF' : Theme.TEXT_DIM)
-                .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-                .backgroundColor(this.deskMode() === 'off' ? Theme.ACCENT : Theme.CARD_HI)
-                .borderRadius(13)
-                .margin({ right: 8, bottom: 4 })
-                .onClick(() => {
-                  this.pickDesk('off');
-                })
-              Text('只留声音')
-                .fontSize(12)
-                .fontColor(this.deskMode() === 'bg' ? '#FFFFFF' : Theme.TEXT_DIM)
-                .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-                .backgroundColor(this.deskMode() === 'bg' ? Theme.ACCENT : Theme.CARD_HI)
-                .borderRadius(13)
-                .margin({ right: 8, bottom: 4 })
-                .onClick(() => {
-                  this.pickDesk('bg');
-                })
-              Text('缩成小窗')
-                .fontSize(12)
-                .fontColor(this.deskMode() === 'pip' ? '#FFFFFF' : Theme.TEXT_DIM)
-                .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-                .backgroundColor(this.deskMode() === 'pip' ? Theme.ACCENT : Theme.CARD_HI)
-                .borderRadius(13)
-                .margin({ right: 8, bottom: 4 })
-                .onClick(() => {
-                  this.pickDesk('pip');
-                })
-            }
-            .width('100%')
+          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
+          // 材质才有颜色可采样。
+          Blank().height(this.barH())
+            // ── 播放习惯（2026-11-15 重排：先放「怎么播」，性能参数收进下面的折叠区）──
+            this.SectionTitle('播放习惯', '下面这些改完立即生效，不用点保存')
 
-            Text(this.deskMode() === 'off'
-              ? '回到桌面就停：声音和画面都不留（默认）。'
-              : (this.deskMode() === 'bg'
-                ? '回到桌面后画面没了、声音继续，不出现小窗。'
-                : '回到桌面后自动缩成桌面小窗，画面和声音都跟着走。'))
-              .fontSize(10)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .lineHeight(15)
-          }
-          .width('100%')
-          .padding(14)
-          .backgroundColor(Theme.CARD)
-          .borderRadius(Theme.RADIUS)
-          .alignItems(HorizontalAlign.Start)
+            this.OpenModeRow()
+            this.JumpModeRow()
 
-          // 应用内小窗（2.6.2.1）改成**只在播放器上点「画中画」时出现**（2026-11-13 21:12
-          // 用户口径：退出详情页不自动弹；回桌面走系统画中画）。原来那两个开关
-          // （「离开详情页继续小窗」与「回桌面出小窗」）已在 2026-11-15 合成上面那个单选项。
-
-          this.SectionTitle('弹幕', '播放时从右往左飞过画面的那层字；改完立即生效')
-          this.DanmuSection()
-
-          this.SectionTitle('字幕样式', '字号、描边、位置、背景；改完立刻生效，不用重播')
-          this.SubtitleStyleSection()
-
-          // ── 播放性能（2026-11-15：默认折叠）──
-          // 这些是「调参」，日常不用碰；收起来后第一屏只剩播放习惯、回桌面行为、字幕弹幕。
-          Row() {
-            Text(this.perfOpen ? '▾ 播放性能' : '▸ 播放性能')
-              .fontSize(12)
-              .fontColor(Theme.TEXT_DIM)
-              .layoutWeight(1)
-            Text(this.presetLabel())
-              .fontSize(10)
-              .fontColor(Theme.TEXT_FAINT)
-          }
-          .width('100%')
-          .padding({ top: 12, bottom: 6 })
-          .onClick(() => {
-            this.perfOpen = !this.perfOpen;
-          })
-
-          if (this.perfOpen) {
-            this.SectionTitle('预设', '一套数值对应一种网络环境，选完还能在下面单项微调')
-
-            Row({ space: 8 }) {
-              ForEach(PRESETS, (p: PresetOption) => {
-                Column({ space: 3 }) {
-                  Text(p.label)
-                    .fontSize(13)
-                    .fontColor(this.preset === p.key ? '#FFFFFF' : Theme.TEXT)
-                    .fontWeight(this.preset === p.key ? FontWeight.Medium : FontWeight.Normal)
-                  Text(p.desc)
-                    .fontSize(9)
-                    .fontColor(this.preset === p.key ? '#E6FFFFFF' : Theme.TEXT_FAINT)
-                    .maxLines(2)
-                    .textAlign(TextAlign.Center)
-                    .lineHeight(12)
-                }
-                .layoutWeight(1)
-                .padding({ left: 8, right: 8, top: 10, bottom: 10 })
-                .backgroundColor(this.preset === p.key ? Theme.ACCENT : Theme.CARD)
-                .borderRadius(12)
-                .onClick(() => {
-                  this.pickPreset(p.key);
-                })
-              }, (p: PresetOption) => `preset-${p.key}`)
-            }
-            .width('100%')
-
-            // 起播优先（2.6.1.57）：网页播放器那种「拿到第一帧就播」的观感
+            // 重力开关内联在 build 里（不用 @Builder 传值）：
+            // @Builder 按值传参不重建，「点了开关不动」这坑在抽卡那里踩过。
             Row({ space: 12 }) {
               Column({ space: 2 }) {
-                Text('起播优先')
+                Text('重力自动切换')
                   .fontSize(14)
                   .fontColor(Theme.TEXT)
-                Text('不等缓冲攒满就出画面，点开即播、拖进度也更快；' +
-                  '代价是网络很慢时画面上来会先顿一下')
+                Text(this.autorotate
+                  ? '竖着拿 = 顶部 16:9 播放器 + 下拉详情；横着拿 = 全屏'
+                  : '播放页永远横屏全屏，竖着拿也不变')
                   .fontSize(10)
                   .fontColor(Theme.TEXT_FAINT)
                   .lineHeight(14)
               }
               .alignItems(HorizontalAlign.Start)
               .layoutWeight(1)
-              Toggle({ type: ToggleType.Switch, isOn: this.startFast })
+              Toggle({ type: ToggleType.Switch, isOn: this.autorotate })
                 .selectedColor(Theme.ACCENT)
                 .onChange((v: boolean) => {
-                  this.startFast = v;
-                  this.refreshPreview();
-                  this.save();
+                  this.autorotate = v;
+                  Store.I.prefSetString('player_autorotate', v ? '1' : '0');
                 })
             }
             .width('100%')
@@ -1189,120 +1068,282 @@ struct PlayerSettingsPage {
             .backgroundColor(Theme.CARD)
             .borderRadius(Theme.RADIUS)
 
-            this.SwitchRow('硬件解码', '关了走软解。码率高、硬解花屏或卡住时再关', this.hwdec,
-              (v: boolean) => {
-                this.hwdec = v;
-              })
+            this.SeekStepRow()
+            this.TempSpeedRow()
 
-          this.SwitchRow('精确跳转', '关：拖到最近关键帧，起播最快（默认）。开：落在准确时间点，但要多解码一段',
-            this.hrSeek, (v: boolean) => {
-              this.hrSeek = v;
-              this.markPreset();
+            // ── 返回桌面后（2026-11-15）：两个互斥开关合成一个单选项 ──
+            // 偏好键与默认值一个都没变：都不选 = 关闭；player_bg_play=1 = 仅声音；player_pip_auto=1 = 画中画。
+            // 原来两个 Switch 各自带「开一个自动关另一个」，用户开了一个另一个突然关掉，看着像 bug。
+            this.SectionTitle('返回桌面后', '按 home 或切到别的应用时怎么办；选完立即生效')
+
+            Column({ space: 10 }) {
+              Row() {
+                Text('按 home 回桌面后')
+                  .fontSize(14)
+                  .fontColor(Theme.TEXT)
+                  .layoutWeight(1)
+                Text(this.deskMode() === 'off' ? '关闭' : (this.deskMode() === 'bg' ? '仅声音' : '画中画'))
+                  .fontSize(12)
+                  .fontColor(Theme.ACCENT)
+              }
+              .width('100%')
+
+              Flex({ wrap: FlexWrap.Wrap }) {
+                Text('关闭')
+                  .fontSize(12)
+                  .fontColor(this.deskMode() === 'off' ? '#FFFFFF' : Theme.TEXT_DIM)
+                  .padding({ left: 14, right: 14, top: 7, bottom: 7 })
+                  .backgroundColor(this.deskMode() === 'off' ? Theme.ACCENT : Theme.CARD_HI)
+                  .borderRadius(13)
+                  .margin({ right: 8, bottom: 4 })
+                  .onClick(() => {
+                    this.pickDesk('off');
+                  })
+                Text('只留声音')
+                  .fontSize(12)
+                  .fontColor(this.deskMode() === 'bg' ? '#FFFFFF' : Theme.TEXT_DIM)
+                  .padding({ left: 14, right: 14, top: 7, bottom: 7 })
+                  .backgroundColor(this.deskMode() === 'bg' ? Theme.ACCENT : Theme.CARD_HI)
+                  .borderRadius(13)
+                  .margin({ right: 8, bottom: 4 })
+                  .onClick(() => {
+                    this.pickDesk('bg');
+                  })
+                Text('缩成小窗')
+                  .fontSize(12)
+                  .fontColor(this.deskMode() === 'pip' ? '#FFFFFF' : Theme.TEXT_DIM)
+                  .padding({ left: 14, right: 14, top: 7, bottom: 7 })
+                  .backgroundColor(this.deskMode() === 'pip' ? Theme.ACCENT : Theme.CARD_HI)
+                  .borderRadius(13)
+                  .margin({ right: 8, bottom: 4 })
+                  .onClick(() => {
+                    this.pickDesk('pip');
+                  })
+              }
+              .width('100%')
+
+              Text(this.deskMode() === 'off'
+                ? '回到桌面就停：声音和画面都不留（默认）。'
+                : (this.deskMode() === 'bg'
+                  ? '回到桌面后画面没了、声音继续，不出现小窗。'
+                  : '回到桌面后自动缩成桌面小窗，画面和声音都跟着走。'))
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+                .lineHeight(15)
+            }
+            .width('100%')
+            .padding(14)
+            .backgroundColor(Theme.CARD)
+            .borderRadius(Theme.RADIUS)
+            .alignItems(HorizontalAlign.Start)
+
+            // 应用内小窗（2.6.2.1）改成**只在播放器上点「画中画」时出现**（2026-11-13 21:12
+            // 用户口径：退出详情页不自动弹；回桌面走系统画中画）。原来那两个开关
+            // （「离开详情页继续小窗」与「回桌面出小窗」）已在 2026-11-15 合成上面那个单选项。
+
+            this.SectionTitle('弹幕', '播放时从右往左飞过画面的那层字；改完立即生效')
+            this.DanmuSection()
+
+            this.SectionTitle('字幕样式', '字号、描边、位置、背景；改完立刻生效，不用重播')
+            this.SubtitleStyleSection()
+
+            // ── 播放性能（2026-11-15：默认折叠）──
+            // 这些是「调参」，日常不用碰；收起来后第一屏只剩播放习惯、回桌面行为、字幕弹幕。
+            Row() {
+              Text(this.perfOpen ? '▾ 播放性能' : '▸ 播放性能')
+                .fontSize(12)
+                .fontColor(Theme.TEXT_DIM)
+                .layoutWeight(1)
+              Text(this.presetLabel())
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+            }
+            .width('100%')
+            .padding({ top: 12, bottom: 6 })
+            .onClick(() => {
+              this.perfOpen = !this.perfOpen;
             })
 
-          this.SectionTitle('缓冲', '拖动进度条后要等多久恢复，主要看前两项')
+            if (this.perfOpen) {
+              this.SectionTitle('预设', '一套数值对应一种网络环境，选完还能在下面单项微调')
 
-          this.DiskCacheRow()
-
-          this.ChipRow('pauseWait', '恢复前缓冲', '拖动后先攒这么多秒再播。这是「拖动完卡一下」的主因，调大更抗抖但更慢')
-          this.ChipRow('readahead', '预读时长', '往后预读多少秒。网盘源建议 20~30')
-          this.ChipRow('maxMiB', '缓存上限', '占用的内存上限。64 MiB 约等于 8Mbps 片源 60 秒')
-          this.ChipRow('backMiB', '回退缓存', '往回拖时能不重新拉流的范围')
-
-          Row({ space: 10 }) {
-            Button('恢复推荐值')
-              .layoutWeight(1)
-              .height(40)
-              .backgroundColor(Theme.CARD)
-              .fontColor(Theme.TEXT)
-              .fontSize(13)
-              .onClick(() => {
-                this.resetDefault();
-              })
-            Button('保存')
-              .layoutWeight(1)
-              .height(40)
-              .backgroundColor(Theme.ACCENT)
-              .fontColor('#FFFFFF')
-              .fontSize(13)
-              .onClick(() => {
-                this.save();
-              })
-          }
-          .width('100%')
-          .margin({ top: 4 })
-          }
-
-          if (this.note.length > 0) {
-            Text(this.note)
-              .fontSize(11)
-              .fontColor('#8BD9A0')
+              Row({ space: 8 }) {
+                ForEach(PRESETS, (p: PresetOption) => {
+                  Column({ space: 3 }) {
+                    Text(p.label)
+                      .fontSize(13)
+                      .fontColor(this.preset === p.key ? '#FFFFFF' : Theme.TEXT)
+                      .fontWeight(this.preset === p.key ? FontWeight.Medium : FontWeight.Normal)
+                    Text(p.desc)
+                      .fontSize(9)
+                      .fontColor(this.preset === p.key ? '#E6FFFFFF' : Theme.TEXT_FAINT)
+                      .maxLines(2)
+                      .textAlign(TextAlign.Center)
+                      .lineHeight(12)
+                  }
+                  .layoutWeight(1)
+                  .padding({ left: 8, right: 8, top: 10, bottom: 10 })
+                  .backgroundColor(this.preset === p.key ? Theme.ACCENT : Theme.CARD)
+                  .borderRadius(12)
+                  .onClick(() => {
+                    this.pickPreset(p.key);
+                  })
+                }, (p: PresetOption) => `preset-${p.key}`)
+              }
               .width('100%')
-          }
 
-          // 高级：只读预览 + 额外参数。原始配置留给调试，日常不用碰。
-          Row() {
-            Text(this.advanced ? '▾ 高级（调试用）' : '▸ 高级（调试用）')
-              .fontSize(12)
-              .fontColor(Theme.TEXT_DIM)
-              .layoutWeight(1)
-          }
-          .width('100%')
-          .padding({ top: 10, bottom: 6 })
-          .onClick(() => {
-            this.advanced = !this.advanced;
-          })
-
-          if (this.advanced) {
-            Text('额外参数（一行一个 key=value，追加到配置末尾）')
-              .fontSize(10)
-              .fontColor(Theme.TEXT_FAINT)
+              // 起播优先（2.6.1.57）：网页播放器那种「拿到第一帧就播」的观感
+              Row({ space: 12 }) {
+                Column({ space: 2 }) {
+                  Text('起播优先')
+                    .fontSize(14)
+                    .fontColor(Theme.TEXT)
+                  Text('不等缓冲攒满就出画面，点开即播、拖进度也更快；' +
+                    '代价是网络很慢时画面上来会先顿一下')
+                    .fontSize(10)
+                    .fontColor(Theme.TEXT_FAINT)
+                    .lineHeight(14)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                Toggle({ type: ToggleType.Switch, isOn: this.startFast })
+                  .selectedColor(Theme.ACCENT)
+                  .onChange((v: boolean) => {
+                    this.startFast = v;
+                    this.refreshPreview();
+                    this.save();
+                  })
+              }
               .width('100%')
-            TextArea({ text: this.extra, placeholder: '例如\ntone-mapping=bt.2446a\nvd-lavc-threads=8' })
-              .height(96)
-              .fontSize(11)
-              .fontColor(Theme.TEXT)
-              .placeholderColor(Theme.TEXT_FAINT)
+              .padding(14)
               .backgroundColor(Theme.CARD)
-              .caretColor(Theme.ACCENT)
-              .borderRadius(10)
-              .onChange((v: string) => {
-                this.extra = v;
-                this.refreshPreview();
+              .borderRadius(Theme.RADIUS)
+
+              this.SwitchRow('硬件解码', '关了走软解。码率高、硬解花屏或卡住时再关', this.hwdec,
+                (v: boolean) => {
+                  this.hwdec = v;
+                })
+
+            this.SwitchRow('精确跳转', '关：拖到最近关键帧，起播最快（默认）。开：落在准确时间点，但要多解码一段',
+              this.hrSeek, (v: boolean) => {
+                this.hrSeek = v;
+                this.markPreset();
               })
 
-            Text('生成的 mpv.conf（只读，用来确认参数）')
+            this.SectionTitle('缓冲', '拖动进度条后要等多久恢复，主要看前两项')
+
+            this.DiskCacheRow()
+
+            this.ChipRow('pauseWait', '恢复前缓冲', '拖动后先攒这么多秒再播。这是「拖动完卡一下」的主因，调大更抗抖但更慢')
+            this.ChipRow('readahead', '预读时长', '往后预读多少秒。网盘源建议 20~30')
+            this.ChipRow('maxMiB', '缓存上限', '占用的内存上限。64 MiB 约等于 8Mbps 片源 60 秒')
+            this.ChipRow('backMiB', '回退缓存', '往回拖时能不重新拉流的范围')
+
+            Row({ space: 10 }) {
+              Button('恢复推荐值')
+                .layoutWeight(1)
+                .height(40)
+                .backgroundColor(Theme.CARD)
+                .fontColor(Theme.TEXT)
+                .fontSize(13)
+                .onClick(() => {
+                  this.resetDefault();
+                })
+              Button('保存')
+                .layoutWeight(1)
+                .height(40)
+                .backgroundColor(Theme.ACCENT)
+                .fontColor('#FFFFFF')
+                .fontSize(13)
+                .onClick(() => {
+                  this.save();
+                })
+            }
+            .width('100%')
+            .margin({ top: 4 })
+            }
+
+            if (this.note.length > 0) {
+              Text(this.note)
+                .fontSize(11)
+                .fontColor('#8BD9A0')
+                .width('100%')
+            }
+
+            // 高级：只读预览 + 额外参数。原始配置留给调试，日常不用碰。
+            Row() {
+              Text(this.advanced ? '▾ 高级（调试用）' : '▸ 高级（调试用）')
+                .fontSize(12)
+                .fontColor(Theme.TEXT_DIM)
+                .layoutWeight(1)
+            }
+            .width('100%')
+            .padding({ top: 10, bottom: 6 })
+            .onClick(() => {
+              this.advanced = !this.advanced;
+            })
+
+            if (this.advanced) {
+              Text('额外参数（一行一个 key=value，追加到配置末尾）')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+              TextArea({ text: this.extra, placeholder: '例如\ntone-mapping=bt.2446a\nvd-lavc-threads=8' })
+                .height(96)
+                .fontSize(11)
+                .fontColor(Theme.TEXT)
+                .placeholderColor(Theme.TEXT_FAINT)
+                .backgroundColor(Theme.CARD)
+                .caretColor(Theme.ACCENT)
+                .borderRadius(10)
+                .onChange((v: string) => {
+                  this.extra = v;
+                  this.refreshPreview();
+                })
+
+              Text('生成的 mpv.conf（只读，用来确认参数）')
+                .fontSize(10)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+                .margin({ top: 6 })
+              Text(this.confPreview)
+                .fontSize(9)
+                .fontFamily('monospace')
+                .fontColor(Theme.TEXT_DIM)
+                .width('100%')
+                .padding(10)
+                .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                .backgroundColor('#1FFFFFFF')
+                .border({ width: 0.5, color: '#33FFFFFF' })
+                .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
+                .borderRadius(10)
+            }
+
+            Text('播放习惯 / 返回桌面后 / 字幕与弹幕：改完立即生效。播放性能与高级参数：点「保存」后，下次进播放页生效。')
               .fontSize(10)
               .fontColor(Theme.TEXT_FAINT)
               .width('100%')
               .margin({ top: 6 })
-            Text(this.confPreview)
-              .fontSize(9)
-              .fontFamily('monospace')
-              .fontColor(Theme.TEXT_DIM)
-              .width('100%')
-              .padding(10)
-              .backgroundColor(Theme.CARD)
-              .borderRadius(10)
+
+            Blank().height(24)
           }
-
-          Text('播放习惯 / 返回桌面后 / 字幕与弹幕：改完立即生效。播放性能与高级参数：点「保存」后，下次进播放页生效。')
-            .fontSize(10)
-            .fontColor(Theme.TEXT_FAINT)
-            .width('100%')
-            .margin({ top: 6 })
-
-          Blank().height(24)
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
         }
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
       }
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)
   }
 }
-

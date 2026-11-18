@@ -1,4 +1,5 @@
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { Store } from '../common/Store';
 
 /** 大图查看器入参：剧照列表 + 起始下标。 */
@@ -32,6 +33,12 @@ struct ImageViewerPage {
       this.current = isFinite(idx) && idx >= 0 && idx < this.urls.length ? Math.trunc(idx) : 0;
       this.title = p.title === undefined || p.title === null ? '' : p.title;
     }
+  }
+
+  /** 七十二改：这页没有状态栏让位逻辑，**显式退回非全屏窗口** —— 
+   * 否则从全屏的二级页推过来，标题会被时钟压住。入口是谁都不怕。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), false);
   }
 
   build() {

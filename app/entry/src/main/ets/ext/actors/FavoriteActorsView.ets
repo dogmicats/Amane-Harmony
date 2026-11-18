@@ -24,8 +24,18 @@ export struct FavoriteActorsView {
   @Prop @Watch('onRefresh') refreshKey: number = 0;
   /** true = 3 列简版；false = 横版大行。 */
   @Prop grid: boolean = false;
+  /**
+   * 页内关键词（2026-11-18 四十七改）。
+   *
+   * 这个接口一次就把收藏的演员全拉回来了（`limit=200`），所以搜索**在本地过滤**：
+   * 不打服务端、不用防抖之外的东西，输入立刻见效。语义与清单页的 KeywordBox 一致 ——
+   * 「在当前列表里缩小范围」，不是跳去另一个搜索页。
+   */
+  @Prop @Watch('onKeyword') keyword: string = '';
 
   @State entities: FavEntity[] = [];
+  /** 未过滤的全量（`entities` 是过滤后的视图）。 */
+  private raw: FavEntity[] = [];
   @State loading: boolean = true;
   @State note: string = '';
 
@@ -35,6 +45,26 @@ export struct FavoriteActorsView {
 
   onRefresh(): void {
     this.load();
+  }
+
+  onKeyword(): void {
+    this.applyKeyword();
+  }
+
+  /** 按名称过滤（大小写不敏感，中文直接包含匹配）。 */
+  private applyKeyword(): void {
+    const kw: string = this.keyword.trim().toLowerCase();
+    if (kw.length === 0) {
+      this.entities = this.raw;
+      return;
+    }
+    const out: FavEntity[] = [];
+    for (let i = 0; i < this.raw.length; i++) {
+      if (this.raw[i].name.toLowerCase().indexOf(kw) >= 0) {
+        out.push(this.raw[i]);
+      }
+    }
+    this.entities = out;
   }
 
   private async load(): Promise<void> {
@@ -57,7 +87,8 @@ export struct FavoriteActorsView {
           badges: this.actorBadges(a)
         });
       }
-      this.entities = out;
+      this.raw = out;
+      this.applyKeyword();
       this.note = '';
     } catch (err) {
       const e = err as BusinessError;
@@ -102,6 +133,14 @@ export struct FavoriteActorsView {
       }
     }
     this.entities = rest;
+    // 全量里也去掉（四十七改）：否则下次关键词过滤会把它又捞回来
+    const restRaw: FavEntity[] = [];
+    for (let i = 0; i < this.raw.length; i++) {
+      if (this.raw[i].id !== e.id) {
+        restRaw.push(this.raw[i]);
+      }
+    }
+    this.raw = restRaw;
     try {
       await httpPost(`${Store.I.user}/api/user/actors/${e.id}/favorite`, Store.I.token,
         JSON.stringify({ favorite: false }));
@@ -129,14 +168,16 @@ export struct FavoriteActorsView {
       .justifyContent(FlexAlign.Center)
     } else if (this.entities.length === 0) {
       Column({ space: 10 }) {
-        Text('♥')
+        Text(this.keyword.length > 0 ? '◇' : '♥')
           .fontSize(30)
           .fontColor(Theme.TEXT_FAINT)
-        Text(this.note.length > 0 ? this.note : '还没有收藏的演员')
+        Text(this.note.length > 0
+          ? this.note
+          : (this.keyword.length > 0 ? `没有找到「${this.keyword}」` : '还没有收藏的演员'))
           .fontSize(13)
           .fontColor(Theme.TEXT_DIM)
         if (this.note.length === 0) {
-          Text('在演员详情页点右上角的心，喜欢的演员会集中到这里。')
+          Text(this.keyword.length > 0 ? '换个关键词试试' : '在演员详情页点右上角的心，喜欢的演员会集中到这里。')
             .fontSize(11)
             .fontColor(Theme.TEXT_FAINT)
             .textAlign(TextAlign.Center)

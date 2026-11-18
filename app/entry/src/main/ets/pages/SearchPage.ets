@@ -1,4 +1,5 @@
 import { router, promptAction } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpDelete, httpGet, httpPost } from '../common/Http';
 import { Store } from '../common/Store';
@@ -17,6 +18,7 @@ import {
 import { CollectionInfo, fetchCollections } from '../ext/collections/CollectionTypes';
 import { PosterCard } from '../view/PosterCard';
 import { BottomSheet, ChipGroup, ListToolbar, SortSheet } from '../view/ListSheets';
+import { GlassCapsule, GlassGlyph, GlassBack} from '../view/GlassKit';
 
 /** 联想 / 搜索可选的类型，顺序即 chip 顺序、也是结果分组顺序。 */
 const ALL_KINDS: string[] = ['film', 'actor', 'director', 'tag', 'series', 'studio'];
@@ -257,6 +259,15 @@ struct SearchPage {
   private sugSeq: number = 0;
   private sugTimer: number = -1;
   private clearTimer: number = -1;
+  /**
+   * 联想的两个「看得见」的状态（2026-11-17 九改）。
+   *
+   * 用户报「输入以后不会自动弹出联想了，不知道是不是外网卡」——
+   * 原来联想失败只在 console 里打一行，界面上什么都没有，于是「慢」和「挂」长得一模一样。
+   * 现在：请求在飞 → 空态里显示「正在联想…」；请求失败 → 显示错误码 + 一个「重试」。
+   */
+  @State sugLoading: boolean = false;
+  @State sugError: string = '';
 
   aboutToAppear(): void {
     this.loadHistory();
@@ -427,11 +438,14 @@ struct SearchPage {
     // 词变了，「放宽」这件事就不再成立：旧提示留着会让人以为新结果也是放宽来的
     this.relaxed = false;
     this.strictTotal = 0;
+    // 上一次的失败提示也跟着作废：新词还没求过就别摆旧错误
+    this.sugError = '';
 
     const text: string = value.trim();
     if (text.length === 0) {
       this.sugs = [];
       this.totals = emptySuggestTotals();
+      this.sugLoading = false;
       return;
     }
     this.sugTimer = setTimeout(() => {
@@ -578,23 +592,64 @@ struct SearchPage {
     }
   }
 
+  /** 打一次 suggest 接口（抽出来是为了失败时能换一种范围重试）。 */
+  private async fetchSuggest(text: string, types: string): Promise<SuggestResult> {
+    const url: string = `${Store.I.user}/api/user/suggest?q=${encodeURIComponent(text)}`
+      + `&types=${types}&per=3`;
+    const raw: string = await httpGet(url, Store.I.token);
+    return safeSuggestResult(JSON.parse(raw) as SuggestResult);
+  }
+
+  /**
+   * 搜索联想：输入即搜，不等点按钮。
+   *
+   * 2026-11-17 九改（用户报「联想不弹了」）：
+   * 1. **失败不再静默**：以前只在 console 打一行，界面看起来跟「还在等」一样。
+   *    现在有 `sugLoading` / `sugError` 两个状态，空态里直接显示。
+   * 2. **失败自动降级重试**：多类型联想里演员/标签那几类是扩展补的，
+   *    某个扩展没装好或挂了，服务端可能整条请求 500 —— 这时退一步只搜影片，
+   *    至少「番号/标题联想」还在。这是原来「一条都不弹」最可能的成因。
+   */
   private async suggest(text: string): Promise<void> {
     this.sugSeq++;
     const mine: number = this.sugSeq;
+    this.sugLoading = true;
     try {
-      const url: string = `${Store.I.user}/api/user/suggest?q=${encodeURIComponent(text)}`
-        + `&types=${this.scope.join(',')}&per=3`;
-      const raw: string = await httpGet(url, Store.I.token);
+      const result: SuggestResult = await this.fetchSuggest(text, this.scope.join(','));
       if (mine !== this.sugSeq) {
         return; // 已有更新的输入，丢弃过期结果
       }
-      const result: SuggestResult = safeSuggestResult(JSON.parse(raw) as SuggestResult);
+      this.sugError = '';
       this.applyCaps(result);
       this.sugs = result.items;
       this.totals = result.totals;
     } catch (err) {
+      // 混搜失败 → 只搜影片再来一次
+      if (this.scope.length > 1) {
+        try {
+          const only: SuggestResult = await this.fetchSuggest(text, 'film');
+          if (mine !== this.sugSeq) {
+            return;
+          }
+          this.sugs = only.items;
+          this.totals = only.totals;
+          this.sugError = only.items.length > 0 ? '' : '只联想了影片，其它类型这次没返回';
+          return;
+        } catch (err2) {
+          const e2 = err2 as BusinessError;
+          console.error(`[amane] suggest(film): ${e2.code} ${e2.message}`);
+        }
+      }
+      if (mine !== this.sugSeq) {
+        return;
+      }
       const e = err as BusinessError;
       console.error(`[amane] suggest: ${e.code} ${e.message}`);
+      this.sugError = `联想失败（${e.code}）`;
+    } finally {
+      if (mine === this.sugSeq) {
+        this.sugLoading = false;
+      }
     }
   }
 
@@ -1226,13 +1281,14 @@ struct SearchPage {
   EntStrip() {
     Column({ space: 4 }) {
       Row({ space: 6 }) {
-        Text('演员 / 分类')
+        // 七十二改：这两段（演员/分类 与 影片）本来就不能合并，但原来是「一个带操作提示的
+        // 说明行 + 一条横条」直接压在影片网格上，像两块拼起来的页面。
+        // 现在统一成同一套分组小标题（11 号 / TEXT_DIM / 带计数），两段读起来是并列的两组；
+        // 「点一项进列表 →」这类操作提示去掉 —— 它最强化「这是另一个东西」的观感。
+        Text(`相关演员 / 分类 · ${this.ents.length}`)
           .fontSize(11)
           .fontColor(Theme.TEXT_DIM)
         Blank()
-        Text('点一项进列表 →')
-          .fontSize(10)
-          .fontColor(Theme.TEXT_FAINT)
       }
       .width('100%')
       .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
@@ -1314,6 +1370,42 @@ struct SearchPage {
   @Builder
   IdlePanel() {
     Column({ space: 16 }) {
+      // 联想的两态提示（2026-11-17 九改）：慢网 / 服务端出错都得让人看见，
+      // 否则「还在等」和「已经失败」在界面上长得一模一样。
+      if (this.sugError.length > 0) {
+        Row({ space: 8 }) {
+          Text(this.sugError)
+            .fontSize(11)
+            .fontColor('#FFB74D')
+            .layoutWeight(1)
+          Text('重试')
+            .fontSize(11)
+            .fontColor(Theme.ACCENT)
+            .padding({ left: 6, right: 2, top: 2, bottom: 2 })
+            .onClick(() => {
+              const q: string = this.keyword.trim();
+              if (q.length > 0) {
+                this.suggest(q);
+              }
+            })
+        }
+        .width('100%')
+        .padding({ left: 10, right: 10, top: 7, bottom: 7 })
+        .backgroundColor('#26FFB74D')
+        .borderRadius(8)
+      } else if (this.sugLoading) {
+        Row({ space: 8 }) {
+          LoadingProgress()
+            .width(14)
+            .height(14)
+            .color(Theme.ACCENT)
+          Text('正在联想…')
+            .fontSize(11)
+            .fontColor(Theme.TEXT_FAINT)
+        }
+        .width('100%')
+      }
+
       if (this.hist.length > 0) {
         Column({ space: 8 }) {
           Row({ space: 6 }) {
@@ -1501,6 +1593,18 @@ struct SearchPage {
         this.EntStrip()
       }
       if (this.filmOn() && this.items.length > 0) {
+        // 七十二改：与上面的「相关演员 / 分类」用同一套分组小标题 —— 两段并列，而不是
+        // 一条横条直接怼进网格。只在两段同时存在时才加，单独搜影片时不显示这行废话。
+        if (this.ents.length > 0) {
+          Row({ space: 6 }) {
+            Text(`影片 · ${this.items.length}`)
+              .fontSize(11)
+              .fontColor(Theme.TEXT_DIM)
+            Blank()
+          }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
+        }
         Grid() {
           ForEach(this.items, (item: MediaItem) => {
             GridItem() {
@@ -1559,24 +1663,25 @@ struct SearchPage {
       .opacity(0)
   }
 
-  build() {
-    // Stack 只为把排序 / 筛选抽屉压在内容之上（与媒体库、收藏同一形态）。
-    Stack({ alignContent: Alignment.Bottom }) {
+  @Builder
+  TitleBar() {
     Column() {
       Row({ space: 8 }) {
-        Text('‹')
-          .fontSize(24)
-          .fontColor(Theme.TEXT)
-          .width(30)
-          .height(34)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            router.back();
-          })
+        // 四十一改：返回钮换成基底的字形胶囊（与二级页标准头同一颗）
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
+          }
+        })
         TextInput({ text: this.keyword, placeholder: '搜番号 / 标题 / 演员 / 标签…' })
           .layoutWeight(1)
           .height(38)
-          .backgroundColor(Theme.CARD)
+          // 输入框也走内容区兜底配方：模糊 + 12% 白 + 发丝亮边（原来是实色 Theme.CARD 块）
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+          .backgroundColor('#1FFFFFFF')
+          .border({ width: 0.5, color: '#33FFFFFF' })
+          .borderRadius(14)
           .fontColor(Theme.TEXT)
           .placeholderColor(Theme.TEXT_FAINT)
           .placeholderFont({ size: 13 })
@@ -1593,107 +1698,162 @@ struct SearchPage {
           .onSubmit(() => {
             this.commitSearch();
           })
-        Text('搜索')
-          .fontSize(13)
-          .fontColor(Theme.ACCENT)
-          .onClick(() => {
+        GlassCapsule({
+          label: '搜索',
+          active: true,
+          fs: 12,
+          padH: 11,
+          padV: 7,
+          radius: 12,
+          onTap: () => {
             this.commitSearch();
-          })
-      }
-      .width('100%')
-      .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 8 })
-
-      // 搜索前先定范围：多选，勾什么搜什么
-      this.ScopeBar()
-      // 结果工具条：与媒体库 / 分类墙 / 收藏同一件，只在有结果时出现
-      // （联想态 / 空态没有可筛的东西，摆一条工具条只是占地方）
-      if (this.searched) {
-        this.FilterBar()
-      }
-
-      if (this.legacy) {
-        Column({ space: 3 }) {
-          Text(`当前服务端${this.legacyVer.length > 0 ? ` ${this.legacyVer}` : ''} 只支持影片联想`)
-            .fontSize(10)
-            .fontWeight(FontWeight.Medium)
-            .fontColor('#FFB74D')
-          // 发布版不提测试端口：只说去改地址，别把内部端口号暴露给普通用户
-          Text(`连的是 ${this.legacyAddr}；按类型搜需要服务端 ≥ 1.3.12。\n到「我的 → 连接设置 → 用户数据服务地址」` +
-            '改成正确的那台' +
-            '后点「保存并重连」。')
-            .fontSize(9)
-            .fontColor('#CCFFB74D')
-        }
-        .alignItems(HorizontalAlign.Start)
-        .width('100%')
-        .padding({ left: 10, right: 10, top: 7, bottom: 7 })
-        .backgroundColor('#26FFB74D')
-        .borderRadius(8)
-        .margin({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 8 })
-      }
-
-      if (this.loading) {
-        Column() {
-          LoadingProgress()
-            .width(26)
-            .height(26)
-            .color(Theme.ACCENT)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.searched) {
-        this.Results()
-      } else if (this.sugs.length > 0) {
-        // 输入中：实时联想结果（按类型分堆，影片在前，实体都能点进列表）
-        this.SuggestList()
-      } else {
-        this.IdlePanel()
-      }
-    }
-    .width('100%')
-    .height('100%')
-
-    // 排序 / 筛选抽屉：与媒体库、分类墙、收藏同一套，遮罩 + 贴底面板
-    if (this.showSort || this.showFilter) {
-      Column()
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#99000000')
-        .onClick(() => {
-          this.showSort = false;
-          this.showFilter = false;
-        })
-
-      if (this.showSort) {
-        SortSheet({
-          options: this.sortOptions(),
-          current: this.sort,
-          order: this.order,
-          onPick: (key: string) => {
-            if (this.sort === key) {
-              this.showSort = false;
-              return;
-            }
-            this.sort = key;
-            this.order = sortDefOf(key);
-            this.rerun();
-            this.showSort = false;
-          },
-          onToggleOrder: () => {
-            this.order = this.order === 'asc' ? 'desc' : 'asc';
-            this.rerun();
-          },
-          onClose: () => {
-            this.showSort = false;
           }
         })
       }
-      if (this.showFilter) {
-        this.FilterSheet()
+      .height(46)
+      .alignItems(VerticalAlign.Center)
+      .width('100%')
+      .padding({ left: 10, right: Theme.PAGE_PAD })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
+
+  @StorageProp('amaneTopInset') topInset: number = 30;
+
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      // Stack 只为把排序 / 筛选抽屉压在内容之上（与媒体库、收藏同一形态）。
+      Stack({ alignContent: Alignment.Bottom }) {
+      Column() {
+
+  // 六十改：让出浮层标题栏的高度
+  Blank().height(this.barH())
+
+        // 搜索前先定范围：多选，勾什么搜什么
+        this.ScopeBar()
+        // 结果工具条：与媒体库 / 分类墙 / 收藏同一件，只在有结果时出现
+        // （联想态 / 空态没有可筛的东西，摆一条工具条只是占地方）
+        if (this.searched) {
+          this.FilterBar()
+        }
+
+        if (this.legacy) {
+          Column({ space: 3 }) {
+            Text(`当前服务端${this.legacyVer.length > 0 ? ` ${this.legacyVer}` : ''} 只支持影片联想`)
+              .fontSize(10)
+              .fontWeight(FontWeight.Medium)
+              .fontColor('#FFB74D')
+            // 发布版不提测试端口：只说去改地址，别把内部端口号暴露给普通用户
+            Text(`连的是 ${this.legacyAddr}；按类型搜需要服务端 ≥ 1.3.12。\n到「我的 → 连接设置 → 用户数据服务地址」` +
+              '改成正确的那台' +
+              '后点「保存并重连」。')
+              .fontSize(9)
+              .fontColor('#CCFFB74D')
+          }
+          .alignItems(HorizontalAlign.Start)
+          .width('100%')
+          .padding({ left: 10, right: 10, top: 7, bottom: 7 })
+          .backgroundColor('#26FFB74D')
+          .borderRadius(8)
+          .margin({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 8 })
+        }
+
+        if (this.loading) {
+          Column() {
+            LoadingProgress()
+              .width(26)
+              .height(26)
+              .color(Theme.ACCENT)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.searched) {
+          this.Results()
+        } else if (this.sugs.length > 0) {
+          // 输入中：实时联想结果（按类型分堆，影片在前，实体都能点进列表）
+          this.SuggestList()
+        } else {
+          this.IdlePanel()
+        }
       }
+      .width('100%')
+      .height('100%')
+
+      // 排序 / 筛选抽屉：与媒体库、分类墙、收藏同一套，遮罩 + 贴底面板
+      if (this.showSort || this.showFilter) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#99000000')
+          .onClick(() => {
+            this.showSort = false;
+            this.showFilter = false;
+          })
+
+        if (this.showSort) {
+          SortSheet({
+            options: this.sortOptions(),
+            current: this.sort,
+            order: this.order,
+            onPick: (key: string) => {
+              if (this.sort === key) {
+                this.showSort = false;
+                return;
+              }
+              this.sort = key;
+              this.order = sortDefOf(key);
+              this.rerun();
+              this.showSort = false;
+            },
+            onToggleOrder: () => {
+              this.order = this.order === 'asc' ? 'desc' : 'asc';
+              this.rerun();
+            },
+            onClose: () => {
+              this.showSort = false;
+            }
+          })
+        }
+        if (this.showFilter) {
+          this.FilterSheet()
+        }
+      }
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
-    }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

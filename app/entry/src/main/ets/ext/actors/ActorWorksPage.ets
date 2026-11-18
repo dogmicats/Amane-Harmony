@@ -1,4 +1,5 @@
 import { router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet } from '../../common/Http';
 import { Store } from '../../common/Store';
@@ -17,6 +18,7 @@ import {
   safeCastFindList, safeCoActors
 } from './ActorTypes';
 import { FacetItem, FacetList, safeFacetList } from '../facets/FacetTypes';
+import { GlassBack, GlassBox, GlassCapsule, GlassGlyph, GlassSearchBar, PageTitle } from '../../view/GlassKit';
 
 const PAGE: number = 24;
 
@@ -323,37 +325,6 @@ struct ActorWorksPage {
       x.my_rating === undefined ? 0 : x.my_rating);
   }
 
-  @Builder
-  Header() {
-    Row({ space: 10 }) {
-      Text('‹')
-        .fontSize(24)
-        .fontColor(Theme.TEXT)
-        .width(32)
-        .height(32)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          router.back();
-        })
-      Column({ space: 3 }) {
-        Text(`${this.actorName} · 作品筛选`)
-          .fontSize(16)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-        Text(this.filterCount() > 0 ? `${this.total} 部 · 已筛 ${this.filterCount()} 项` : `${this.total} 部`)
-          .fontSize(10)
-          .fontColor(Theme.TEXT_FAINT)
-          .width('100%')
-      }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
-    }
-    .width('100%')
-    .padding({ left: 10, right: Theme.PAGE_PAD, top: 10, bottom: 4 })
-  }
 
   /** 合作演员候选：有头像的给头像圈（女演员没头像也给占位圈，位置不跳），
    *  男演员没头像就只留名字 —— 男优头像库里本来就少，留空圈反而更乱。 */
@@ -569,181 +540,270 @@ struct ActorWorksPage {
     }
   }
 
-  build() {
-    Stack({ alignContent: Alignment.Bottom }) {
-      Column() {
-        this.Header()
-
-        Row() {
-          KeywordBox({
-            placeholder: '在 TA 的作品里搜番号 / 标题',
-            onCommit: (kw: string) => {
-              const next: string = kw.trim();
-              if (next === this.keyword) {
-                return;
-              }
-              this.keyword = next;
-              this.reload();
-            }
+  @Builder
+  TitleBar() {
+    // 七十二改：与标签详情页同一套规范 —— 第一行「返回球 + 演员胶囊 + 排序 + 筛选」，
+    // 第二行整条搜索胶囊。原来那两行（KeywordBox / ListToolbar）不透明底压在内容上，
+    // 网格永远做不到真全屏，这次一起搬进标题栏。
+    Column({ space: 0 }) {
+      Row({ space: 6 }) {
+        GlassBack({
+          mat: true,
+          onTap: () => {
+            router.back();
+          }
+        })
+        GlassBox({ radius: 23, padH: 14, padV: 9, mat: true }) {
+          PageTitle({
+            text: `${this.actorName.length > 0 ? this.actorName : '演员'} · 作品`,
+            fs: 18
           })
         }
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 4 })
-
-        ListToolbar({
-          label: this.keyword.length > 0 ? `「${this.keyword}」${this.total} 部` : `${this.total} 部`,
-          sortLabel: `${this.sortLabel()}${this.sortBy === 'random' ? '' : (this.order === 'asc' ? ' ↑' : ' ↓')}`,
-          filterCount: this.filterCount(),
-          showFilter: true,
-          onSort: () => {
+        Blank()
+        GlassCapsule({
+          label: `⇅ ${this.sortLabel()}`,
+          fs: 12,
+          padH: 11,
+          padV: 7,
+          radius: 12,
+          maxW: 100,
+          mat: true,
+          onTap: () => {
             this.showSort = true;
-          },
-          onFilter: () => {
+          }
+        })
+        GlassCapsule({
+          label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+          active: this.filterCount() > 0,
+          fs: 12,
+          padH: 11,
+          padV: 7,
+          radius: 12,
+          mat: true,
+          onTap: () => {
             this.showFilter = true;
           }
         })
+      }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
+      .width('100%')
 
-        if (this.loading) {
-          Column() {
-            LoadingProgress()
-              .width(28)
-              .height(28)
-              .color(Theme.ACCENT)
+      Row({ space: 5 }) {
+        GlassSearchBar({
+          placeholder: '在 TA 的作品里搜番号 / 标题',
+          boxH: 34,
+          rowH: 42,
+          radius: 17,
+          iconSize: 15,
+          mat: true,
+          onCommit: (kw: string) => {
+            const next: string = kw.trim();
+            if (next === this.keyword) {
+              return;
+            }
+            this.keyword = next;
+            this.reload();
           }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else if (this.error.length > 0) {
-          Column({ space: 10 }) {
-            Text(this.error)
-              .fontSize(13)
-              .fontColor(Theme.TEXT_DIM)
-              .onClick(() => {
-                this.loading = true;
-                this.load(0, false);
-              })
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else if (this.works.length === 0) {
-          Column({ space: 10 }) {
-            Text('▤')
-              .fontSize(32)
-              .fontColor(Theme.TEXT_FAINT)
-            Text(this.filterCount() > 0 ? '没有符合筛选条件的作品' : '暂无作品')
-              .fontSize(13)
-              .fontColor(Theme.TEXT_DIM)
-            if (this.filterCount() > 0) {
-              Text('重置筛选')
-                .fontSize(12)
-                .fontColor(Theme.ACCENT)
-                .padding({ left: 16, right: 16, top: 6, bottom: 6 })
-                .backgroundColor(Theme.ACCENT_SOFT)
-                .borderRadius(14)
+        })
+        .layoutWeight(1)
+        Text(this.filterCount() > 0 ? `${this.total} 部 · 已筛 ${this.filterCount()} 项` : `${this.total} 部`)
+          .fontSize(10)
+          .fontColor(Theme.TEXT_FAINT)
+          .maxLines(1)
+      }
+      .height(42)
+      .alignItems(VerticalAlign.Center)
+      .width('100%')
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: 10, right: Theme.PAGE_PAD, top: this.topInset - 8 })
+  }
+
+  @StorageProp('amaneTopInset') topInset: number = 30;
+
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。46 第一行 + 42 第二行。 */
+  private barH(): number {
+    return this.topInset + 88;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 88，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 88 + this.topInset
+    };
+  }
+
+  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Stack({ alignContent: Alignment.Bottom }) {
+        Column() {
+
+          // 七十二改：搜索 / 排序 / 筛选都搬进标题栏了，这里不再留死白 ——
+          // 让位放到网格自己的 padding 里（会随内容滚走），海报才能钻进两行玻璃底下。
+
+          if (this.loading) {
+            Column() {
+              LoadingProgress()
+                .width(28)
+                .height(28)
+                .color(Theme.ACCENT)
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .justifyContent(FlexAlign.Center)
+          } else if (this.error.length > 0) {
+            Column({ space: 10 }) {
+              Text(this.error)
+                .fontSize(13)
+                .fontColor(Theme.TEXT_DIM)
                 .onClick(() => {
-                  this.resetFilters();
+                  this.loading = true;
+                  this.load(0, false);
                 })
             }
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else {
-          Grid() {
-            ForEach(this.works, (x: CastFindItem) => {
-              GridItem() {
-                PosterCard({
-                  item: this.cardOf(x),
-                  fluid: true,
-                  onTap: () => {
-                    const p: DetailParams = { id: x.id };
-                    router.pushUrl({ url: 'pages/DetailPage', params: p });
-                  }
-                })
+            .width('100%')
+            .layoutWeight(1)
+            .justifyContent(FlexAlign.Center)
+          } else if (this.works.length === 0) {
+            Column({ space: 10 }) {
+              Text('▤')
+                .fontSize(32)
+                .fontColor(Theme.TEXT_FAINT)
+              Text(this.filterCount() > 0 ? '没有符合筛选条件的作品' : '暂无作品')
+                .fontSize(13)
+                .fontColor(Theme.TEXT_DIM)
+              if (this.filterCount() > 0) {
+                Text('重置筛选')
+                  .fontSize(12)
+                  .fontColor(Theme.ACCENT)
+                  .padding({ left: 16, right: 16, top: 6, bottom: 6 })
+                  .backgroundColor(Theme.ACCENT_SOFT)
+                  .borderRadius(14)
+                  .onClick(() => {
+                    this.resetFilters();
+                  })
               }
-            }, (x: CastFindItem) => `aw-${x.id}`)
-
-            if (this.works.length < this.total) {
-              GridItem() {
-                Column() {
-                  if (this.loadingMore) {
-                    LoadingProgress()
-                      .width(20)
-                      .height(20)
-                      .color(Theme.TEXT_FAINT)
-                  } else {
-                    Text('加载更多')
-                      .fontSize(11)
-                      .fontColor(Theme.TEXT_FAINT)
-                  }
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .justifyContent(FlexAlign.Center)
+          } else {
+            Grid() {
+              ForEach(this.works, (x: CastFindItem) => {
+                GridItem() {
+                  PosterCard({
+                    item: this.cardOf(x),
+                    fluid: true,
+                    onTap: () => {
+                      const p: DetailParams = { id: x.id };
+                      router.pushUrl({ url: 'pages/DetailPage', params: p });
+                    }
+                  })
                 }
-                .width('100%')
-                .height(120)
-                .justifyContent(FlexAlign.Center)
-                .onClick(() => {
-                  this.loadMore();
-                })
+              }, (x: CastFindItem) => `aw-${x.id}`)
+
+              if (this.works.length < this.total) {
+                GridItem() {
+                  Column() {
+                    if (this.loadingMore) {
+                      LoadingProgress()
+                        .width(20)
+                        .height(20)
+                        .color(Theme.TEXT_FAINT)
+                    } else {
+                      Text('加载更多')
+                        .fontSize(11)
+                        .fontColor(Theme.TEXT_FAINT)
+                    }
+                  }
+                  .width('100%')
+                  .height(120)
+                  .justifyContent(FlexAlign.Center)
+                  .onClick(() => {
+                    this.loadMore();
+                  })
+                }
               }
             }
+            .columnsTemplate(Personalize.colsTemplate(this.posterCols))
+            .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
+              Personalize.zoom(event.scale);
+            }))
+            .columnsGap(8)
+            .rowsGap(14)
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6, bottom: Theme.BOTTOM_SAFE })
+            .layoutWeight(1)
+            .scrollBar(BarState.Off)
+            .edgeEffect(EdgeEffect.Spring)
+            .onReachEnd(() => {
+              this.loadMore();
+            })
           }
-          .columnsTemplate(Personalize.colsTemplate(this.posterCols))
-          .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
-            Personalize.zoom(event.scale);
-          }))
-          .columnsGap(8)
-          .rowsGap(14)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
-          .layoutWeight(1)
-          .scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.Spring)
-          .onReachEnd(() => {
-            this.loadMore();
-          })
+        }
+        .width('100%')
+        .height('100%')
+
+        if (this.showSort || this.showFilter) {
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor('#99000000')
+            .onClick(() => {
+              this.showSort = false;
+              this.showFilter = false;
+            })
+
+          if (this.showSort) {
+            SortSheet({
+              options: this.sorts,
+              current: this.sortBy,
+              order: this.order,
+              tabInset: 0,
+              onPick: (key: string) => {
+                // 随机再点一次 = 重摇一批（服务端每次回不同窗口）；其余项只是切换
+                if (this.sortBy !== key) {
+                  this.sortBy = key;
+                  this.order = sortDefOf(key);
+                }
+                this.reload();
+                this.showSort = false;
+              },
+              onToggleOrder: () => {
+                this.order = this.order === 'asc' ? 'desc' : 'asc';
+                this.reload();
+              },
+              onClose: () => {
+                this.showSort = false;
+              }
+            })
+          }
+          if (this.showFilter) {
+            this.FilterSheet()
+          }
         }
       }
       .width('100%')
       .height('100%')
-
-      if (this.showSort || this.showFilter) {
-        Column()
-          .width('100%')
-          .height('100%')
-          .backgroundColor('#99000000')
-          .onClick(() => {
-            this.showSort = false;
-            this.showFilter = false;
-          })
-
-        if (this.showSort) {
-          SortSheet({
-            options: this.sorts,
-            current: this.sortBy,
-            order: this.order,
-            tabInset: 0,
-            onPick: (key: string) => {
-              // 随机再点一次 = 重摇一批（服务端每次回不同窗口）；其余项只是切换
-              if (this.sortBy !== key) {
-                this.sortBy = key;
-                this.order = sortDefOf(key);
-              }
-              this.reload();
-              this.showSort = false;
-            },
-            onToggleOrder: () => {
-              this.order = this.order === 'asc' ? 'desc' : 'asc';
-              this.reload();
-            },
-            onClose: () => {
-              this.showSort = false;
-            }
-          })
-        }
-        if (this.showFilter) {
-          this.FilterSheet()
-        }
-      }
+      .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

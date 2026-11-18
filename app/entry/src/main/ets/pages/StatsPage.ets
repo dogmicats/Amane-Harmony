@@ -1,10 +1,12 @@
 import { router, promptAction } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet, httpPost } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { SectionHead } from '../view/SectionHead';
 import { CalDay, HeatCalendar } from '../view/HeatCalendar';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /**
  * 观看统计（2.5.3 · 报表 v1）。
@@ -2161,42 +2163,6 @@ struct StatsPage {
 
   // ---------------------------------------------------------------- 视图
 
-  @Builder
-  Header() {
-    Row({ space: 10 }) {
-      Text('‹')
-        .fontSize(24)
-        .fontColor(Theme.TEXT)
-        .width(30)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          router.back();
-        })
-      Column({ space: 2 }) {
-        Text('观看统计')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
-        Text('只算这台设备看到的，看越多越准')
-          .fontSize(11)
-          .fontColor(Theme.TEXT_FAINT)
-      }
-      .alignItems(HorizontalAlign.Start)
-      Blank()
-      Text('⟳')
-        .fontSize(17)
-        .fontColor(Theme.TEXT_DIM)
-        .width(34)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          this.reload();
-        })
-    }
-    .width('100%')
-    .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 10 })
-  }
 
   /** 块标题：左边名字，右边一句小字（可信度 / 采样）。静态读 this，不吃传参。 */
   @Builder
@@ -3306,73 +3272,149 @@ struct StatsPage {
     })
   }
 
-  build() {
+  @Builder
+  TitleBar() {
     Column() {
-      this.Header()
-
-      Scroll() {
-        Column({ space: 12 }) {
-          // 老服务端（< 1.4.0）没有这组端点：说一次就够，别让五个块各喊一遍
-          if (this.offAny()) {
-            Row({ space: 8 }) {
-              Text('!')
-                .fontSize(10)
-                .fontWeight(FontWeight.Bold)
-                .fontColor(Theme.ON_ACCENT)
-                .width(16)
-                .height(16)
-                .textAlign(TextAlign.Center)
-                .backgroundColor(Theme.ACCENT)
-                .borderRadius(8)
-              Text('这台服务端还没有统计接口（需要 1.4.0 以上），升级后回来就有数了。')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_DIM)
-                .layoutWeight(1)
-            }
-            .width('100%')
-            .padding({ left: 10, right: 10, top: 8, bottom: 8 })
-            .backgroundColor(Theme.CARD_HI)
-            .borderRadius(10)
+      Row({ space: 10 }) {
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
           }
-
-          this.FilterBar()
-          this.CalendarBlock()
-          this.OverviewBlock()
-          this.TrendBlock()
-          this.WhenBlock()
-          this.HeatBlock()
-          this.TopBlock()
-          // 2.5.4：老服务端没有 tier 端点就整块不渲染（不占位、不报错）
-          if (this.tierSt !== ST_OFF) {
-            this.TierBlock()
-          }
-          // v2（2.5.3 延续）：四块新统计，各自独立取数与空态
-          this.DropBlock()
-          this.IdleBlock()
-          this.FunnelBlock()
-          this.ConflictBlock()
-
-          Text('数据只来自这台设备的观看记录；「看完」= 看到 95% 以上。')
-            .fontSize(9)
+        })
+        Column({ space: 2 }) {
+          PageTitle({ text: '观看统计', fs: 18 })
+          Text('只算这台设备看到的，看越多越准')
+            .fontSize(11)
             .fontColor(Theme.TEXT_FAINT)
-            .width('100%')
-            .padding({ top: 4, bottom: 24 })
         }
-        .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+        .alignItems(HorizontalAlign.Start)
+        Blank()
+        Text('⟳')
+          .fontSize(17)
+          .fontColor(Theme.TEXT_DIM)
+          .width(34)
+          .height(34)
+          .textAlign(TextAlign.Center)
+          .onClick(() => {
+            this.reload();
+          })
       }
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
+      .height(46)
+      .alignItems(VerticalAlign.Center)
+      .width('100%')
+      .padding({ left: 8, right: Theme.PAGE_PAD })
     }
     .width('100%')
     .height('100%')
+    .padding({ top: this.topInset })
+  }
+
+  @StorageProp('amaneTopInset') topInset: number = 30;
+
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Column() {
+
+        Scroll() {
+          Column({ space: 12 }) {
+
+          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
+          // 材质才有颜色可采样。
+          Blank().height(this.barH())
+            // 老服务端（< 1.4.0）没有这组端点：说一次就够，别让五个块各喊一遍
+            if (this.offAny()) {
+              Row({ space: 8 }) {
+                Text('!')
+                  .fontSize(10)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(Theme.ON_ACCENT)
+                  .width(16)
+                  .height(16)
+                  .textAlign(TextAlign.Center)
+                  .backgroundColor(Theme.ACCENT)
+                  .borderRadius(8)
+                Text('这台服务端还没有统计接口（需要 1.4.0 以上），升级后回来就有数了。')
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_DIM)
+                  .layoutWeight(1)
+              }
+              .width('100%')
+              .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+              .backgroundColor(Theme.CARD_HI)
+              .borderRadius(10)
+            }
+
+            this.FilterBar()
+            this.CalendarBlock()
+            this.OverviewBlock()
+            this.TrendBlock()
+            this.WhenBlock()
+            this.HeatBlock()
+            this.TopBlock()
+            // 2.5.4：老服务端没有 tier 端点就整块不渲染（不占位、不报错）
+            if (this.tierSt !== ST_OFF) {
+              this.TierBlock()
+            }
+            // v2（2.5.3 延续）：四块新统计，各自独立取数与空态
+            this.DropBlock()
+            this.IdleBlock()
+            this.FunnelBlock()
+            this.ConflictBlock()
+
+            Text('数据只来自这台设备的观看记录；「看完」= 看到 95% 以上。')
+              .fontSize(9)
+              .fontColor(Theme.TEXT_FAINT)
+              .width('100%')
+              .padding({ top: 4, bottom: 24 })
+          }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
+        }
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
+      .bindSheet($$this.hygieneSheet, this.HygieneSheet(), {
+        height: SheetSize.FIT_CONTENT,
+        dragBar: true,
+        showClose: false,
+        backgroundColor: Theme.BG_RAISED
+      })
+    }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
+    .width('100%')
+    .height('100%')
     .backgroundColor(Theme.BG)
-    .bindSheet($$this.hygieneSheet, this.HygieneSheet(), {
-      height: SheetSize.FIT_CONTENT,
-      dragBar: true,
-      showClose: false,
-      backgroundColor: Theme.BG_RAISED
-    })
   }
 }

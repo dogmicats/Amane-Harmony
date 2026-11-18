@@ -1,4 +1,5 @@
 import { router, promptAction } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet, httpPut } from '../common/Http';
 import { Store } from '../common/Store';
@@ -9,6 +10,7 @@ import { HomeData, HomeRow } from '../common/Types';
 import { safeHome } from '../common/Safe';
 import { Reason } from '../common/Reason';
 import { PoolFilterCard } from '../view/PoolFilterCard';
+import { GlassCapsule, NavHeader } from '../view/GlassKit';
 
 /**
  * 首页内容（2.5.2）：哪几行显示、从上到下怎么排。
@@ -113,7 +115,7 @@ struct SettingsHomePage {
   private baseEntries(home: HomeData): RowEntry[] {
     const out: RowEntry[] = [];
     if (BuildConfig.ENABLE_ACTORS) {
-      out.push({ key: 'cast', title: '找共演', desc: '特色入口：挑人找同台作品', on: true });
+      out.push({ key: 'cast', title: '甄选', desc: '多条件自由组合筛片', on: true });
     }
     out.push({
       key: 'continue',
@@ -169,7 +171,7 @@ struct SettingsHomePage {
 
   private titleOf(key: string): string {
     if (key === 'cast') {
-      return '找共演';
+      return '甄选';
     }
     if (key === 'continue') {
       return '继续观看';
@@ -223,39 +225,23 @@ struct SettingsHomePage {
 
   @Builder
   Header() {
-    Row({ space: 10 }) {
-      Text('‹')
-        .fontSize(24)
-        .fontColor(Theme.TEXT)
-        .width(30)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          router.back();
-        })
-      Column({ space: 2 }) {
-        Text('首页内容')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
-        Text('哪几行显示、从上到下怎么排；顶部大图取自哪里（刷一刷的范围在「设置 → 刷一刷」）')
-          .fontSize(11)
-          .fontColor(Theme.TEXT_FAINT)
-      }
-      .alignItems(HorizontalAlign.Start)
-      Blank()
-      Text('恢复默认')
-        .fontSize(11)
-        .fontColor(Theme.TEXT_DIM)
-        .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-        .backgroundColor(Theme.CARD)
-        .borderRadius(10)
-        .onClick(() => {
+    // 四十一改：二级页标准头（返回胶囊 + 标题 + 说明 + 右侧玻璃胶囊）
+    NavHeader({
+      title: '首页内容',
+      subtitle: '哪几行显示、从上到下怎么排；顶部大图取自哪里（刷一刷的范围在「设置 → 刷一刷」）',
+      padTop: 6
+    }) {
+      GlassCapsule({
+        label: '恢复默认',
+        fs: 12,
+        padH: 11,
+        padV: 6,
+        radius: 12,
+        onTap: () => {
           this.resetAll();
-        })
+        }
+      })
     }
-    .width('100%')
-    .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 10 })
   }
 
   @Builder
@@ -314,6 +300,12 @@ struct SettingsHomePage {
     .padding({ left: 14, right: 14, top: 11, bottom: 11 })
   }
 
+  /** 七十二改：这页没有状态栏让位逻辑，**显式退回非全屏窗口** —— 
+   * 否则从全屏的二级页推过来，标题会被时钟压住。入口是谁都不怕。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), false);
+  }
+
   build() {
     Column() {
       this.Header()
@@ -340,7 +332,10 @@ struct SettingsHomePage {
                 .fontColor(Theme.GOLD)
                 .width('100%')
                 .padding(12)
-                .backgroundColor(Theme.CARD)
+                .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                .backgroundColor('#1FFFFFFF')
+                .border({ width: 0.5, color: '#33FFFFFF' })
+                .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
                 .borderRadius(12)
             }
 

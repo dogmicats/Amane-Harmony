@@ -1,8 +1,10 @@
-﻿import { promptAction, router } from '@kit.ArkUI';
+import { promptAction, router } from '@kit.ArkUI';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { dropPageCache, httpGet, httpPost } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /** 一个自建分类（覆盖层里有、库里没有的名字）。 */
 interface VirtualFacet {
@@ -260,43 +262,6 @@ struct SelfFacetPage {
     }
   }
 
-  @Builder
-  Header() {
-    Row({ space: 10 }) {
-      Text('‹')
-        .fontSize(24)
-        .fontColor(Theme.TEXT)
-        .width(30)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          router.back();
-        })
-      Column({ space: 2 }) {
-        Text('自建标签 / 系列')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TEXT)
-        Text('只列你自己起的名字，库里的分类不在这里')
-          .fontSize(11)
-          .fontColor(Theme.TEXT_FAINT)
-      }
-      .alignItems(HorizontalAlign.Start)
-      Blank()
-      Text('＋')
-        .fontSize(24)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(Theme.ACCENT)
-        .width(40)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          this.openCreate();
-        })
-    }
-    .width('100%')
-    .padding({ left: 8, right: Theme.PAGE_PAD, top: 6, bottom: 8 })
-  }
 
   @Builder
   Group(kind: string, title: string, hint: string) {
@@ -452,9 +417,11 @@ struct SelfFacetPage {
             })
           Text(this.busy ? '…' : '确定')
             .fontSize(12)
-            .fontColor(Theme.ON_ACCENT)
+            .fontColor(Theme.ACCENT)
             .padding({ left: 16, right: 16, top: 7, bottom: 7 })
-            .backgroundColor(Theme.ACCENT)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor(Theme.accentAlpha(0.30))
+            .border({ width: 1, color: Theme.accentAlpha(0.55) })
             .borderRadius(10)
             .onClick(() => {
               this.doRename();
@@ -559,71 +526,146 @@ struct SelfFacetPage {
     .backgroundColor('#66000000')
   }
 
-  build() {
-    Stack({ alignContent: Alignment.Center }) {
-      Column() {
-      this.Header()
-
-      if (this.st === ST_OK) {
-        Scroll() {
-          Column({ space: 12 }) {
-            this.Group('series', '系列', '还没有自建的系列')
-            this.Group('tag', '标签', '还没有自建的标签')
-
-            Text('在影片的「编辑信息」里填一个库里没有的名字，保存时确认「新建」，它就会出现在这里。')
-              .fontSize(9)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .lineHeight(15)
-              .padding({ bottom: Theme.BOTTOM_SAFE })
+  @Builder
+  TitleBar() {
+    Column() {
+      Row({ space: 10 }) {
+        GlassBack({
+          mat: true,
+          onTap: () => {
+          router.back();
           }
-          .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4 })
+        })
+        Column({ space: 2 }) {
+          PageTitle({ text: '自建标签 / 系列', fs: 18 })
+          Text('只列你自己起的名字，库里的分类不在这里')
+            .fontSize(11)
+            .fontColor(Theme.TEXT_FAINT)
         }
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
-      } else {
-        Column({ space: 10 }) {
-          if (this.st === ST_LOADING) {
-            LoadingProgress()
-              .width(24)
-              .height(24)
-              .color(Theme.ACCENT)
-          } else {
-            Text(this.note)
-              .fontSize(12)
-              .fontColor(Theme.TEXT_DIM)
-              .textAlign(TextAlign.Center)
-              .padding({ left: 32, right: 32 })
-            Button('重试')
-              .height(34)
-              .backgroundColor(Theme.CARD)
-              .fontColor(Theme.TEXT)
-              .fontSize(12)
-              .onClick(() => {
-                this.load();
-              })
-          }
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Start)
+        Blank()
+        Text('＋')
+          .fontSize(24)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.ACCENT)
+          .width(40)
+          .height(34)
+          .textAlign(TextAlign.Center)
+          .onClick(() => {
+            this.openCreate();
+          })
       }
-      }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
-      .height('100%')
-      .backgroundColor(Theme.BG)
-
-      if (this.renameOpen) {
-        this.RenameSheet()
-      }
-
-      if (this.createOpen) {
-        this.CreateSheet()
-      }
+      .padding({ left: 8, right: Theme.PAGE_PAD })
     }
     .width('100%')
     .height('100%')
+    .padding({ left: 10, right: Theme.PAGE_PAD, top: this.topInset - 8 })
+  }
+
+  @StorageProp('amaneTopInset') topInset: number = 30;
+
+  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
+  private navStack: NavPathStack = new NavPathStack();
+
+  /** 标题栏实际高度（内容要让开这么多）。 */
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
+  }
+
+  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Stack({ alignContent: Alignment.Center }) {
+        Column() {
+
+        // 七十二改：让位落进滚动内容的 padding（随内容滚走），不再有死留白。
+
+        if (this.st === ST_OK) {
+          Scroll() {
+            Column({ space: 12 }) {
+              this.Group('series', '系列', '还没有自建的系列')
+              this.Group('tag', '标签', '还没有自建的标签')
+
+              Text('在影片的「编辑信息」里填一个库里没有的名字，保存时确认「新建」，它就会出现在这里。')
+                .fontSize(9)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+                .lineHeight(15)
+                .padding({ bottom: Theme.BOTTOM_SAFE })
+            }
+            .width('100%')
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6 })
+          }
+          .layoutWeight(1)
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring)
+        } else {
+          Column({ space: 10 }) {
+            if (this.st === ST_LOADING) {
+              LoadingProgress()
+                .width(24)
+                .height(24)
+                .color(Theme.ACCENT)
+            } else {
+              Text(this.note)
+                .fontSize(12)
+                .fontColor(Theme.TEXT_DIM)
+                .textAlign(TextAlign.Center)
+                .padding({ left: 32, right: 32 })
+              Button('重试')
+                .height(34)
+                .backgroundColor(Theme.CARD)
+                .fontColor(Theme.TEXT)
+                .fontSize(12)
+                .onClick(() => {
+                  this.load();
+                })
+            }
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        }
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor(Theme.BG)
+
+        if (this.renameOpen) {
+          this.RenameSheet()
+        }
+
+        if (this.createOpen) {
+          this.CreateSheet()
+        }
+      }
+      .width('100%')
+      .height('100%')
+    }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
+    .width('100%')
+    .height('100%')
+    .backgroundColor(Theme.BG)
   }
 }

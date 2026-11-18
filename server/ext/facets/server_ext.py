@@ -28,6 +28,16 @@ import urllib.request
 from urllib.parse import parse_qs, quote, unquote, urlparse
 import re
 
+# 搜索别名（2026-11-17 用户：「标签搜索栏的中文对照表又丢了，搜搜查官/女检察官、
+# NTR/寝取 的联想出不来」）。别名解析在核心 core.logic 里已经做好（三层并集：
+# data/alias.tsv 出厂 + user.db 的 search_alias + name_variant 折叠），这里直接复用，
+# 不在扩展里再造一份。老部署/独立环境 import 不到就降级成没有别名（联想仍可用，
+# 只是搜俗称联想不出别名目标）。
+try:
+    from core.logic import alias_targets as _core_alias_targets
+except Exception:  # noqa: BLE001
+    _core_alias_targets = None  # type: ignore[assignment]
+
 A = None  # type: ignore[assignment]
 
 # kind -> /api/metadata 的筛选参数名
@@ -304,12 +314,26 @@ def _agg_sql(kind: str, search: str, favorite: str, hidden: set | None = None,
     select_args: list = []
     rel = search and _has_rel()
     if search:
+        # 2026-11-17：俗称 → 库里真名（搜查官→女检察官、ntr→寝取）。
+        # alias_targets 返回 [(kind, 目标名)]；只取与当前 facet kind 相同的目标
+        # （搜「搜查官」在 tag 维度应该出女检察官，不该污染 series 维度）。
+        # 原词 + 别名目标用 OR 一起匹配，命中任一即可。
+        terms: list[str] = [search]
+        if _core_alias_targets is not None:
+            try:
+                for akind, target in _core_alias_targets(search):
+                    if akind == kind and target and target not in terms:
+                        terms.append(target)
+            except Exception as exc:  # noqa: BLE001
+                A.log(f"WARN facets 别名展开失败（忽略）: {exc}")
         if rel:
-            where.append("amane_rel(e.name, ?) IS NOT NULL")
-            args.append(search)
+            where.append("(" + " OR ".join(
+                ["amane_rel(e.name, ?) IS NOT NULL"] * len(terms)) + ")")
+            args.extend(terms)
         else:
-            where.append("e.name LIKE ? ESCAPE '\\'")
-            args.append(_like(search))
+            where.append("(" + " OR ".join(
+                ["e.name LIKE ? ESCAPE '\\'"] * len(terms)) + ")")
+            args.extend(_like(t) for t in terms)
     if favorite in ("true", "false"):
         where.append("e.is_favorite = ?")
         args.append(1 if favorite == "true" else 0)
