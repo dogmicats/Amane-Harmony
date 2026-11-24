@@ -1,5 +1,5 @@
 <p>
-  <img src="assets/hero-banner.jpg" alt="Amane-Harmony" width="100%">
+  <img src="assets/hero-banner.png" alt="Amane-Harmony" width="100%">
 </p>
 
 <p>
