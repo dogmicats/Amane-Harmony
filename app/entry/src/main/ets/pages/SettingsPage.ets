@@ -1,48 +1,26 @@
 import { router, promptAction } from '@kit.ArkUI';
-import { Store } from '../common/Store';
+import { Store, MODE_LAN, MODE_WAN } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { Personalize } from '../common/Personalize';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BuildConfig } from '../common/BuildConfig';
 import { AppLog } from '../common/AppLog';
 import { common } from '@kit.AbilityKit';
-import { GlassGlyph, GlassSearchBar, PageTitle, GlassBack} from '../view/GlassKit';
+import { GlassSearchBar, PageTitle, GlassBack } from '../view/GlassKit';
+import {
+  SettingsAmbientGlow, SettingsChevron, SettingsIconTile, SettingsRowDivider, SettingsSectionTitle
+} from '../view/SettingsKit';
 
-/**
- * 设置（一级页）：只做分区导航，不放具体设置项。
- *
- * 2026-11-15 重排（依据 `docs/ai-context/queue/agent1-mine-ia-catalog.md`）：原来的
- * 通用 / 外观 / 播放 / 我的内容 / 高级 / 重置 六组，改成按「用户想干什么」分的五组：
- *
- *   连接与服务 —— 这台手机怎么连上服务器（地址、Token、投屏钥匙）
- *   外观与浏览 —— 看起来是什么样、列表怎么摆
- *   播放       —— 与看片直接相关：播放方式、刷一刷、进度条预览
- *   存储与数据 —— 占了多少、留多大、怎么清、怎么备份
- *   维护与排障 —— 后台队列与日志，平时用不到
- *
- * 同轮做的三件去重 / 归拢：
- *  1. 「我的清单」「我的截帧」从设置里删掉 —— 收藏页的「管理清单」和「我的」页已有入口，
- *     同一个东西两处入口，改一处忘一处就是下一个「点进去还是旧版」的 bug。
- *  2. 「检索别名」+「自建标签 / 系列」合成 `资料整理`，「数据与入库」+「归档管理」合成 `管理工具`，
- *     一级页变短，二级页各自保留原页面（行为零变化）。
- *  3. 「清空所有自定义修改」从「重置」组搬进 `资料整理` 页底部危险区 —— 它清的就是那一页管的改动。
- *
- * 「关于 Amane / 检查更新 / 更新日志」2.6.1.7 起不在设置里：三行在「我的 → 关于」（`pages/AboutHubPage`）。
- * 别往这里加回来。
- *
- * 组内顺序：常用的在上、排障/偏门在下。新增设置先想清楚落在哪块；块内再拆二级页。
- */
 interface NavRow {
   key: string;
+  icon: Resource;
   label: string;
   desc: string;
   url: string;
   selfOnly: boolean;
   needOk?: boolean;
-  /** 仅在开着投屏（偏好 enable_cast）时显示；目前默认关 —— 没有真机能验。 */
   needCast?: boolean;
-  /** 仅在「入库」或「归档」至少有一个开着时显示（管理工具聚合页）。 */
-  /** 动作行（url 为空）右侧的动词，如「导出」；有它就不画 ›。 */
   action?: string;
-  /** 破坏性动作：标题用 DANGER 色，提醒「这一行不一样」。 */
   danger?: boolean;
 }
 
@@ -52,26 +30,17 @@ interface NavGroup {
   rows: NavRow[];
 }
 
-/**
- * 搜索用的同义词（2026-11-16，设置页搜索）。
- *
- * 用户找设置时想到的词和目标页的名字经常对不上：想看字幕去搜「字幕」，而它藏在「播放设置」里；
- * 想清缓存搜「空间」，而卡片叫「空间管理」。这张表就是补这层「联想」，
- * 键 = `NavRow.key`，值 = 空格分隔的同义词。没配的行只按 label/desc 匹配。
- *
- * 每组末尾还挂了**拼音全拼 + 首字母**（`zhuti zt`）：手机上打英文/首字母比切中文快得多，
- * 搜 `zt` 能出「主题」、`bf` 能出「播放设置」。这是手写的小表，不引拼音库。
- */
 const NAV_KEYWORDS: Record<string, string> = {
   'conn': '服务器 地址 端口 密码 令牌 token 局域网 外网 连接 重连 ping 测试 fuwuqi lianjie mima dk',
   'casttoken': '投屏 电视 令牌 只读 画面 touping tp',
   'appearance': '主题 配色 颜色 皮肤 列数 海报 剧照 光效 触感 震动 深色 浅色 暗色 夜色 日间 夜间 界面 外观 布局 玻璃 毛玻璃 材质 顶栏 沉浸 模糊 算力 waiguan zhuti peise lieshu zt ps boli cailiao',
   'home': '首页 大图 横幅 banner 推荐 行 排序 显示 刷一刷 筛选 shouye datu tuijian sy',
   'list': '抽卡 每轮 张数 列表 默认 开关 chouka liebiao ck',
-  'player': '播放 解码 硬解 软解 缓冲 代理 字幕 弹幕 后台 画中画 手势 bofang zimu danmu jiem a bf',
+  'player': '播放 解码 硬解 软解 缓冲 代理 字幕 弹幕 后台 画中画 手势 bofang zimu danmu jiema bf',
   'shorts': '刷一刷 后台 素材 占用 片段 预取 光晕 shuayishua sys',
   'preview': '进度条 预览 雪碧图 截帧 预生成 清理 磁盘 jindutiao yulan jdt',
   'cache': '空间 缓存 清理 容量 上限 占用 磁盘 图片 删除 清空 释放 重置 kongjian huancun qingli kj hc',
+  'subtitlemgr': '字幕 中字 外挂 健康检查 搜索队列 置信度 无字幕 外文 下载 zimu zizhang jiancha jk',
   'offline': '下载 离线 队列 wifi 限速 上限 空间 删除 xiazai lixian xz',
   'organize': '标签 系列 别名 检索 资料 自定义 整理 删除 重置 清空 ziliao zhengli biaoqian xilie bq',
   'backup': '备份 导出 导入 迁移 恢复 还原 收藏 评分 历史 beifen daoru daochu bf',
@@ -82,40 +51,37 @@ const NAV_KEYWORDS: Record<string, string> = {
 const GROUPS: NavGroup[] = [
   {
     key: 'conn', title: '连接与服务', rows: [
-      // 临时置顶（2026-11-17）：HDS 沉浸光感评估探针，评估完删这一行与对应页面
-      { key: 'hdsprobe', label: '★ HDS 沉浸光感评估（临时）', desc: '查设备材质能力，并演示 HDS 标题栏的材质/渐变模糊/光晕', url: 'pages/HdsProbePage', selfOnly: false },
-      { key: 'conn', label: '服务器连接', desc: '局域网 / 外网地址、API Token、测试与重连', url: 'pages/SettingsConnectionPage', selfOnly: false },
-      // 投屏（2.5.6）暂时隐藏：没有真机能验，先不对外开。
-      // 要开：设置里把偏好 `enable_cast` 置 true（详情页的「投屏」按钮读同一个开关）
-      { key: 'casttoken', label: '投屏令牌', desc: '投给电视时用的只读钥匙，12 小时过期，可随时吊销', url: 'pages/CastTokenPage', selfOnly: false, needCast: true }
+      { key: 'conn', icon: $r('sys.symbol.wifi'), label: '服务器连接', desc: '局域网与外网地址、Token', url: 'pages/SettingsConnectionPage', selfOnly: false },
+      { key: 'casttoken', icon: $r('sys.symbol.swap'), label: '投屏令牌', desc: '只读投屏钥匙，12 小时有效', url: 'pages/CastTokenPage', selfOnly: false, needCast: true }
     ]
   },
   {
     key: 'look', title: '外观与浏览', rows: [
-      { key: 'appearance', label: '外观与布局', desc: '8 套主题色、海报列数、剧照瀑布流列数，以及触感反馈', url: 'pages/SettingsAppearancePage', selfOnly: false },
-      { key: 'home', label: '首页内容', desc: '哪几行显示、从上到下怎么排；顶部大图取自哪里（刷一刷的范围在「刷一刷」那页）', url: 'pages/SettingsHomePage', selfOnly: false },
-      { key: 'list', label: '列表与抽卡', desc: '抽卡模式：每轮张数与默认开关', url: 'pages/SettingsListPage', selfOnly: false }
+      { key: 'appearance', icon: $r('sys.symbol.paintpalette'), label: '外观与布局', desc: '主题色、列数、顶栏材质与触感', url: 'pages/SettingsAppearancePage', selfOnly: false },
+      { key: 'home', icon: $r('sys.symbol.house'), label: '首页内容', desc: '分区排序、大图池与推荐取向', url: 'pages/SettingsHomePage', selfOnly: false },
+      { key: 'list', icon: $r('sys.symbol.rectangle_stack'), label: '列表与抽卡', desc: '剧照瀑布流每轮张数与开关', url: 'pages/SettingsListPage', selfOnly: false }
     ]
   },
   {
     key: 'player', title: '播放', rows: [
-      { key: 'player', label: '播放设置', desc: '播放方式、返回桌面后怎么办、字幕与弹幕；解码与缓冲在页内折叠', url: 'pages/PlayerSettingsPage', selfOnly: false },
-      { key: 'shorts', label: '刷一刷', desc: '后台准备素材的开关、占用上限、片段怎么挑的；负一屏提示光晕也在这里', url: 'pages/ShortsSettingsPage', selfOnly: false },
-      { key: 'preview', label: '进度条预览', desc: '闲时预生成开关、占用上限与清理', url: 'pages/PreviewSettingsPage', selfOnly: false }
+      { key: 'player', icon: $r('sys.symbol.play_circle'), label: '播放设置', desc: '播放方式、字幕弹幕与解码缓冲', url: 'pages/PlayerSettingsPage', selfOnly: false },
+      { key: 'shorts', icon: $r('sys.symbol.wand_and_stars'), label: '刷一刷', desc: '负一屏素材预备、范围与背景', url: 'pages/ShortsSettingsPage', selfOnly: false },
+      { key: 'preview', icon: $r('sys.symbol.film'), label: '进度条预览', desc: '雪碧图预生成与占用上限', url: 'pages/PreviewSettingsPage', selfOnly: false }
     ]
   },
   {
     key: 'data', title: '存储与数据', rows: [
-      { key: 'cache', label: '空间管理', desc: '这台手机与服务器各占多少：哪些能清、各留多大上限', url: 'pages/CachePage', selfOnly: false },
-      { key: 'offline', label: '下载管理', desc: '下到手机里的影片：进度、队列、仅 WiFi、上限与清理', url: 'pages/OfflinePage', selfOnly: false },
-      { key: 'organize', label: '资料整理', desc: '检索别名、自建标签与系列；清空自定义修改在最底', url: 'pages/OrganizePage', selfOnly: false },
-      { key: 'backup', label: '数据备份与迁移', desc: '收藏、评分、历史、稍后再看、清单的导出与导入（按番号匹配）', url: 'pages/BackupPage', selfOnly: false }
+      { key: 'cache', icon: $r('sys.symbol.externaldrive'), label: '空间管理', desc: '本机与服务端缓存占用与清理', url: 'pages/CachePage', selfOnly: false },
+      { key: 'subtitlemgr', icon: $r('sys.symbol.translate'), label: '字幕管理', desc: '中文字幕体检与批量队列', url: 'pages/SubtitleManagerPage', selfOnly: false },
+      { key: 'offline', icon: $r('sys.symbol.download'), label: '下载管理', desc: '离线影片队列与上限', url: 'pages/OfflinePage', selfOnly: false },
+      { key: 'organize', icon: $r('sys.symbol.folder'), label: '资料整理', desc: '别名、自建标签与系列', url: 'pages/OrganizePage', selfOnly: false },
+      { key: 'pending', icon: $r('sys.symbol.list_bullet_square'), label: '待下载决策记录', desc: '待下载影片与网盘进度', url: 'pages/PendingHistoryPage', selfOnly: true },
+      { key: 'backup', icon: $r('sys.symbol.cloud_and_arrow_up'), label: '数据备份与迁移', desc: '收藏、评分与历史导入导出', url: 'pages/BackupPage', selfOnly: false }
     ]
   },
   {
     key: 'ops', title: '维护与排障', rows: [
-      // 排查用：把最近运行日志存成 txt（用户手上没有电脑抓 hilog 时用）
-      { key: 'logexport', label: '诊断与日志', desc: '把最近几千条运行日志存成 txt，出问题时发给我就能定位', url: '', selfOnly: false, action: '导出' }
+      { key: 'logexport', icon: $r('sys.symbol.doc_text'), label: '诊断与日志', desc: '导出运行日志用于排查问题', url: '', selfOnly: false, action: '导出' }
     ]
   }
 ];
@@ -123,37 +89,79 @@ const GROUPS: NavGroup[] = [
 @Entry
 @Component
 struct SettingsPage {
-  /** 设置搜索的输入（2026-11-16）：空串 = 正常分组列表，非空 = 结果列表。 */
   @State q: string = '';
+  /** 从子页返回时刷新实时状态摘要（主题名、列数、连接地址、抽卡张数）。 */
+  @State themeName: string = Theme.paletteOf(Theme.paletteKey).name;
+  @State themeAccent: string = Theme.ACCENT;
+  @State themeInk: string = Theme.ACCENT_INK;
+  @State themeCard: string = Theme.CARD;
+  @State hostLabel: string = '';
+  @State onWan: boolean = false;
+  @State modeLabel: string = '自动';
+  @State posterCols: number = 3;
+  @State gachaCount: number = 10;
+  @State shortsBgLabel: string = '海报底';
+  @StorageProp('amaneTopInset') topInset: number = 30;
+  private navStack: NavPathStack = new NavPathStack();
+
+  private syncSummary(): void {
+    const pal = Theme.paletteOf(Theme.paletteKey);
+    this.themeName = pal.name;
+    this.themeAccent = pal.accent;
+    this.themeInk = pal.ink;
+    this.themeCard = pal.card;
+    this.hostLabel = Store.I.amane.replace('http://', '').replace('https://', '');
+    this.onWan = Store.I.onWan;
+    this.modeLabel = Store.I.mode === MODE_LAN ? '局域网' : (Store.I.mode === MODE_WAN ? '外网' : '自动');
+    this.posterCols = Personalize.cols();
+    this.gachaCount = Store.I.gachaCount;
+    this.shortsBgLabel = Store.I.prefString('shorts_poster_bg', '1') !== '0' ? '海报底' : '纯黑边';
+  }
+
+  aboutToAppear(): void {
+    this.syncSummary();
+  }
+
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+    this.syncSummary();
+  }
+
   private visible(row: NavRow): boolean {
-    // 投屏默认隐藏：这套要真机 + 同一局域网才能验，没验之前不摆给用户。
-    // 想试的时候把偏好 `enable_cast` 打开（详情页投屏按钮读同一个键）。
     if (row.needCast === true && Store.I.prefString('enable_cast', '0') !== '1') {
       return false;
     }
-    // 管理工具是聚合页：入库与「归档」都没开时，整行不显示（否则点进去是空页）。
     return true;
   }
 
-  /**
-   * 先过滤再渲染：只有「过滤后的第 0 行」才不画上分隔线。
-   * 直接在 ForEach 里按原始下标判断，会在「整组第一条恰好被隐藏」时（如 public 版没有入库）
-   * 画出第一条上方那条多余的分隔线。
-   */
   private rowsOf(g: NavGroup): NavRow[] {
     return g.rows.filter((r: NavRow) => this.visible(r));
   }
 
-  // ── 设置搜索（2026-11-16）──────────────────────────────────────────
-  /** 归一化：去掉空白、统一小写，让「 字幕 」和「字幕」等价。 */
+  /** 每行右侧真实摘要（纯本地即时状态，不编造假数据）。 */
+  private summaryOf(key: string): string {
+    if (key === 'conn') {
+      return `${this.modeLabel} · ${this.onWan ? '外网' : '局域网'}`;
+    }
+    if (key === 'appearance') {
+      return `${this.themeName} · ${this.posterCols}列`;
+    }
+    if (key === 'list') {
+      return `每轮 ${this.gachaCount} 张`;
+    }
+    if (key === 'player') {
+      return 'mpv';
+    }
+    if (key === 'shorts') {
+      return this.shortsBgLabel;
+    }
+    return '';
+  }
+
   private norm(s: string): string {
     return s.replace(/\s+/g, '').toLowerCase();
   }
 
-  /**
-   * 单行打分：0 = 不命中；分数越高越靠前。
-   * 权重按「用户最可能依据什么找」排：标题 > 同义词 > 描述。
-   */
   private scoreOf(r: NavRow, q: string): number {
     const query: string = this.norm(q);
     if (query.length === 0) {
@@ -176,7 +184,6 @@ struct SettingsPage {
     if (this.norm(r.desc).includes(query)) {
       return 40;
     }
-    // 退一步：多字查询按「首字逐字命中」算模糊（「播放字幕」→ 关键词里两处都能沾上）
     if (query.length >= 2 && kw.length > 0) {
       let hit: number = 0;
       for (let i = 0; i < query.length; i++) {
@@ -191,7 +198,6 @@ struct SettingsPage {
     return 0;
   }
 
-  /** 命中的行（跨分组），按分数降序；同分保持原有顺序。 */
   private hits(): NavRow[] {
     const out: NavRow[] = [];
     const scores: number[] = [];
@@ -202,7 +208,6 @@ struct SettingsPage {
         if (s <= 0) {
           continue;
         }
-        // 插入排序：命中数量很少（<30），没必要上 sort
         let pos: number = out.length;
         for (let i = 0; i < scores.length; i++) {
           if (s > scores[i]) {
@@ -217,7 +222,6 @@ struct SettingsPage {
     return out;
   }
 
-  /** 结果行下方的分组提示（「外观与浏览」这种），让人知道自己在找的东西属于哪一块。 */
   private groupTitleOf(key: string): string {
     for (let gi = 0; gi < GROUPS.length; gi++) {
       const rows: NavRow[] = GROUPS[gi].rows;
@@ -230,7 +234,6 @@ struct SettingsPage {
     return '';
   }
 
-  /** 点一行：动作行（导出日志）就地执行，其余进对应页面。抽出来给搜索和原列表共用。 */
   private open(row: NavRow): void {
     if (row.key === 'logexport') {
       this.exportLog();
@@ -247,6 +250,130 @@ struct SettingsPage {
     AppLog.mark('settings', `导出日志：${msg}`);
   }
 
+  /** 顶部快捷状态条：左进服务器连接，右进外观与布局。 */
+  @Builder
+  StatusStrip() {
+    Row({ space: 10 }) {
+      Row({ space: 10 }) {
+        Row()
+          .width(8)
+          .height(8)
+          .borderRadius(4)
+          .backgroundColor(this.onWan ? '#F4C97E' : '#45B075')
+        Column({ space: 2 }) {
+          Text(this.onWan ? '外网已连接' : '局域网已连接')
+            .fontSize(13.5)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Theme.TEXT)
+          Text(this.hostLabel)
+            .fontSize(10.5)
+            .fontColor(Theme.TEXT_FAINT)
+            .fontFeature('"tnum" 1')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+      }
+      .layoutWeight(1)
+      .alignItems(VerticalAlign.Center)
+      .onClick(() => {
+        router.pushUrl({ url: 'pages/SettingsConnectionPage' });
+      })
+
+      Divider()
+        .vertical(true)
+        .height(24)
+        .strokeWidth(0.5)
+        .color('#1CFFFFFF')
+
+      Row({ space: 7 }) {
+        Row()
+          .width(8)
+          .height(8)
+          .borderRadius(4)
+          .backgroundColor(this.themeAccent)
+        Text(this.themeName)
+          .fontSize(11)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.themeInk)
+          .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+          .backgroundColor(Theme.alphaOf(this.themeAccent, 0.18))
+          .border({ width: 0.5, color: Theme.alphaOf(this.themeInk, 0.44) })
+          .borderRadius(Theme.R_PILL)
+        SettingsChevron({ glyphSize: 12 })
+      }
+      .alignItems(VerticalAlign.Center)
+      .onClick(() => {
+        router.pushUrl({ url: 'pages/SettingsAppearancePage' });
+      })
+    }
+    .width('100%')
+    .padding({ left: 14, right: 12, top: 12, bottom: 12 })
+    .backgroundColor(this.themeCard)
+    .linearGradient({
+      angle: 140,
+      colors: [[Theme.alphaOf(this.themeAccent, 0.10), 0.0], ['#00000000', 0.60]]
+    })
+    .borderRadius(16)
+    .border({ width: 0.75, color: Theme.STROKE })
+  }
+
+  @Builder
+  NavRowView(r: NavRow, sub: string) {
+    Row({ space: 12 }) {
+      SettingsIconTile({
+        icon: r.icon,
+        tileSize: 36,
+        iconSize: 17,
+        accent: this.themeAccent,
+        ink: this.themeInk,
+        danger: r.danger === true
+      })
+      Column({ space: 2 }) {
+        Text(r.label)
+          .fontSize(14.5)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(r.danger === true ? Theme.DANGER : Theme.TEXT)
+        Text(sub)
+          .fontSize(11)
+          .fontColor(Theme.TEXT_FAINT)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+
+      if (r.action !== undefined) {
+        Text(r.action)
+          .fontSize(11)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(r.danger === true ? Theme.DANGER : this.themeInk)
+          .padding({ left: 11, right: 11, top: 5, bottom: 5 })
+          .backgroundColor(r.danger === true ? Theme.alphaOf(Theme.DANGER, 0.16) : Theme.alphaOf(this.themeAccent, 0.18))
+          .border({
+            width: 0.5,
+            color: r.danger === true ? Theme.alphaOf(Theme.DANGER, 0.42) : Theme.alphaOf(this.themeInk, 0.44)
+          })
+          .borderRadius(Theme.R_PILL)
+      } else {
+        if (this.summaryOf(r.key).length > 0) {
+          Text(this.summaryOf(r.key))
+            .fontSize(11.5)
+            .fontColor(Theme.TEXT_DIM)
+            .fontFeature('"tnum" 1')
+            .margin({ right: 2 })
+        }
+        SettingsChevron({ glyphSize: 13 })
+      }
+    }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 11, bottom: 11 })
+    .onClick(() => {
+      this.open(r);
+    })
+  }
+
   @Builder
   TitleBar() {
     Column() {
@@ -254,23 +381,21 @@ struct SettingsPage {
         GlassBack({
           mat: true,
           onTap: () => {
-          router.back();
+            router.back();
           }
         })
         PageTitle({ text: '设置', fs: 18 })
-        // 五十九改：搜索收成统一组件 `GlassSearchBar` —— 点放大镜那颗胶囊自己长成搜索栏，
-        // 与首页/收藏/演员/标签同一套交互、同一个图标（以前是内容区单独一条实色输入框）。
         GlassSearchBar({
           placeholder: '搜索设置',
-          boxH: 42,
+          boxH: 40,
           rowH: 46,
-          radius: 21,
-          iconSize: 18,
+          radius: 20,
+          iconSize: 17,
           onCommit: (kw: string) => {
             this.q = kw;
           }
         })
-        .layoutWeight(1)
+          .layoutWeight(1)
       }
       .height(46)
       .alignItems(VerticalAlign.Center)
@@ -282,17 +407,10 @@ struct SettingsPage {
     .padding({ top: this.topInset })
   }
 
-  @StorageProp('amaneTopInset') topInset: number = 30;
-
-  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
-  private navStack: NavPathStack = new NavPathStack();
-
-  /** 标题栏实际高度（内容要让开这么多）。 */
   private barH(): number {
     return this.topInset + 46;
   }
 
-  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
   private titleConfig(): NavigationCustomTitle {
     return {
       builder: () => {
@@ -304,137 +422,73 @@ struct SettingsPage {
 
   build() {
     Navigation(this.navStack) {
-      Column() {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow({ accent: this.themeAccent })
 
-        // 五十九改：原来这条常驻搜索框已撤 —— 搜索胶囊搬进了标题行（点一下自己长成搜索栏），
-        // 内容区不再被一条实色输入框压掉一截。
         Scroll() {
-          Column({ space: 18 }) {
+          Column({ space: 16 }) {
+            Blank().height(this.barH() + 6)
 
-          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
-          // 材质才有颜色可采样。
-          Blank().height(this.barH())
             if (this.q.trim().length > 0) {
-              // 搜索结果：一张卡，按相关度排序，行下补一行分组名
               Column() {
                 ForEach(this.hits(), (r: NavRow, idx: number) => {
                   Column() {
                     if (idx > 0) {
-                      Divider()
-                        .strokeWidth(1)
-                        .color(Theme.CARD_HI)
+                      SettingsRowDivider()
                     }
-                    Row({ space: 12 }) {
-                      Column({ space: 3 }) {
-                        Text(r.label)
-                          .fontSize(15)
-                          .fontColor(r.danger === true ? Theme.DANGER : Theme.TEXT)
-                        Text(`${this.groupTitleOf(r.key)} · ${r.desc}`)
-                          .fontSize(11)
-                          .fontColor(Theme.TEXT_FAINT)
-                          .maxLines(2)
-                      }
-                      .alignItems(HorizontalAlign.Start)
-                      .layoutWeight(1)
-                      if (r.action !== undefined) {
-                        Text(r.action)
-                          .fontSize(12)
-                          .fontColor(Theme.TEXT_DIM)
-                      } else {
-                        Text('›')
-                          .fontSize(20)
-                          .fontColor(Theme.TEXT_FAINT)
-                      }
-                    }
-                    .width('100%')
-                    .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-                    .onClick(() => {
-                      this.open(r);
-                    })
+                    this.NavRowView(r, `${this.groupTitleOf(r.key)} · ${r.desc}`)
                   }
                   .width('100%')
-                }, (r: NavRow) => `hit-${r.key}`)
+                }, (r: NavRow) => `hit-${r.key}-${this.themeName}`)
 
                 if (this.hits().length === 0) {
-                  Text('没有找到相关设置，换个说法试试（比如「字幕」→ 播放设置）')
+                  Text('没有找到相关设置，换个词试试（例如「字幕」「主题」）')
                     .fontSize(12)
                     .fontColor(Theme.TEXT_FAINT)
-                    .padding({ left: 14, right: 14, top: 16, bottom: 16 })
+                    .padding({ left: 16, right: 16, top: 18, bottom: 18 })
                     .width('100%')
                 }
               }
               .width('100%')
-              .backgroundColor(Theme.CARD)
-              .borderRadius(14)
+              .backgroundColor(this.themeCard)
+              .borderRadius(18)
+              .border({ width: 0.75, color: Theme.STROKE })
               .clip(true)
             } else {
-            ForEach(GROUPS, (g: NavGroup) => {
-              Column({ space: 8 }) {
-                Text(g.title)
-                  .fontSize(11)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .letterSpacing(1)
-                  .width('100%')
+              this.StatusStrip()
 
-                Column() {
-                  ForEach(this.rowsOf(g), (r: NavRow, idx: number) => {
+              ForEach(GROUPS, (g: NavGroup) => {
+                if (this.rowsOf(g).length > 0) {
+                  Column({ space: 8 }) {
+                    SettingsSectionTitle({ title: g.title })
+
                     Column() {
-                      // 行间用 1px 细线分隔（原来是 1px 的透底黑缝，像卡片被切成几段）
-                      if (idx > 0) {
-                        Divider()
-                          .strokeWidth(1)
-                          .color(Theme.CARD_HI)
-                      }
-                      Row({ space: 12 }) {
-                        Column({ space: 3 }) {
-                          Text(r.label)
-                            .fontSize(15)
-                            .fontColor(r.danger === true ? Theme.DANGER : Theme.TEXT)
-                          Text(r.desc)
-                            .fontSize(11)
-                            .fontColor(Theme.TEXT_FAINT)
-                            .maxLines(2)
+                      ForEach(this.rowsOf(g), (r: NavRow, idx: number) => {
+                        Column() {
+                          if (idx > 0) {
+                            SettingsRowDivider()
+                          }
+                          this.NavRowView(r, r.desc)
                         }
-                        .alignItems(HorizontalAlign.Start)
-                        .layoutWeight(1)
-                        // 动作行（导出 / 清空）用动词代替 ›，别让它看着像能进下一页
-                        if (r.action !== undefined) {
-                          Text(r.action)
-                            .fontSize(12)
-                            .fontColor(r.danger === true ? Theme.DANGER : Theme.TEXT_DIM)
-                        } else {
-                          Text('›')
-                            .fontSize(20)
-                            .fontColor(Theme.TEXT_FAINT)
-                        }
-                      }
-                      .width('100%')
-                      .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-                      .onClick(() => {
-                        this.open(r);
-                      })
+                        .width('100%')
+                      }, (r: NavRow) => `row-${r.key}-${this.themeName}-${this.posterCols}-${this.gachaCount}-${this.onWan ? 1 : 0}`)
                     }
                     .width('100%')
-                  }, (r: NavRow) => `row-${r.key}`)
+                    .backgroundColor(this.themeCard)
+                    .borderRadius(18)
+                    .border({ width: 0.75, color: Theme.STROKE })
+                    .clip(true)
+                  }
+                  .width('100%')
                 }
-                .width('100%')
-                .backgroundColor(Theme.CARD)
-                .borderRadius(14)
-                .clip(true)
-              }
-              .width('100%')
-            }, (g: NavGroup) => `g-${g.key}`)
-
-            Text(`当前连接：${Store.I.onWan ? '外网' : '局域网'} · ${Store.I.amane}`)
-              .fontSize(10)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
+              }, (g: NavGroup) => `g-${g.key}-${this.themeName}`)
             }
           }
           .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.pageBottomSafe() })
         }
-        .layoutWeight(1)
+        .width('100%')
+        .height('100%')
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
       }
@@ -442,6 +496,7 @@ struct SettingsPage {
       .height('100%')
       .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .mode(NavigationMode.Stack)
     .hideBackButton(true)
     .hideToolBar(true)

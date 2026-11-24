@@ -1,16 +1,13 @@
 /**
- * 全局小窗（2.6.2.x）——浮在应用最上层的那块播放画面。
+ * 全局小窗（2.8.3 液态玻璃升级）——浮在应用最上层的那块播放画面。
  *
- * 位置算法（2.6.1.25 重写，修「动一下就飞走 + 挡住详情页操作」）：
- *   - 用**绝对定位** `position({x, y})`，坐标来自屏幕尺寸（px2vp），不再靠父容器对齐 + offset；
- *   - 每次拖动都**夹在屏幕内**，松手只做「靠左/靠右」吸附，不再用写死的 ±360；
- *   - 根节点就是卡片本身（不铺满全屏），所以它不会吃掉页面的触摸。
+ * 位置算法：
+ *   - 用绝对定位 `position({x, y})`，坐标来自屏幕尺寸（px2vp），顶边避让状态栏（amaneTopInset + 8）；
+ *   - 每次拖动夹在屏幕内，松手靠左/靠右吸附；
+ *   - 根节点透明穿透（HitTestMode.Transparent），不吞下面页面的触摸。
  *
- * 两档：
- *   - `小窗` 208vp 16:9：**详情页发起的浮窗只允许这一档**（`compact = true`，双击不换档）；
- *   - `宽条` 横向拉满：只在允许换档的场景出现，纵向可拖（水平已拉满）。
- *
- * 三按钮：放大（全屏接着看）/ 回详情页（回这部片接着播）/ ×（停播留在当前页）。
+ * 铁律：FloatSurface 内的 XComponent 全程常驻、不包裹 `if`、父容器不加动画，
+ * 所有叠加控件仅切 visibility，绝不打断 mpv 画面输出。
  */
 import { Player, PlayerConfig, Media, SubtitleTrack, PlayerState } from '@mpv-ohos/mpv-arkts';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -21,29 +18,20 @@ import { FloatBox } from '../common/FloatBox';
 import { PlayerPrefs } from '../common/PlayerPrefs';
 import { Store } from '../common/Store';
 import { SubtitleClient } from '../common/Subtitles';
+import { Theme } from '../common/Theme';
 
-const CARD_W: number = 208;
+const CARD_W: number = 216;
 const EDGE: number = 12;
+const TAB_W: number = 36;
+const TAB_H: number = 58;
 
 /**
- * 贴底留白。
- *
- * 实测校准（CMM-AL10，1320×2848、密度 3.375）：底栏图标文字在 y=2639–2675，
- * 底栏容器顶边约 2579px；`BOTTOM_SAFE=68` 时小窗底边落在 2750px，**压住整个底栏**，
- * 「收藏」点不到。改成 125 后底边≈2530px，正好停在底栏上方。
- *
- * 注意：`display.getDefaultDisplaySync().height` 比窗口实际高度多出约 40vp，
- * 所以这里不能再按「底栏 56vp」去算，否则会偏下一截。
+ * 贴底留白：保证停在底部导航栏上方，不压住收藏/我的等底栏入口。
  */
 const BOTTOM_SAFE: number = 125;
 
 /**
- * 画面层单独一个组件。
- *
- * 目的：把 XComponent 和父组件的状态彻底隔开 —— 父组件（控件显隐、档位、拖动）
- * 每次 build 都不会重建这里，surface 因此不会被换掉。mpv 一收到 surface 销毁就直接停
- * （不是暂停），所以这一层必须绝对稳定。传进来的 `player` / `ctrl` 全程不变，
- * 回调用类字段箭头函数（每次 build 是同一个引用，不会触发子组件刷新）。
+ * 画面层单独一个组件：把 XComponent 与父组件状态彻底隔开，确保 surface 全程稳定不断流。
  */
 @Component
 struct FloatSurface {
@@ -80,7 +68,8 @@ struct FloatSurface {
 @Component
 export struct FloatPlayerCard {
   session: PlayHandoff = PlaySession.empty();
-  /** 只做小窗（详情页发起）：双击不换档、也不做宽条。由 `session.compact` 带进来。 */
+  @StorageProp('amaneTopInset') topInset: number = 0;
+  /** 只做小窗（详情页发起）：双击切播放/暂停，不切宽条。 */
   private compactOnly: boolean = true;
   /** 0 = 小窗，1 = 宽条。 */
   @State tier: number = 0;
@@ -88,14 +77,13 @@ export struct FloatPlayerCard {
   @State playing: boolean = false;
   @State firstFrame: boolean = false;
   @State dragging: boolean = false;
-  /** 已经起过播（onReady 与 attach 两条路都可能调 openMedia，只认第一次）。 */
+  @State progRatio: number = 0;
+  @State snappedLeft: boolean = false;
   private opened: boolean = false;
-  /** 拖动起点（px/py 的基线）：`GestureEvent.offsetX/Y` 是相对起点的累计值。 */
   private startPx: number = 0;
   private startPy: number = 0;
-  /** 收起成小条（点 × 之后）：**不销毁播放**，点小条能恢复 —— 手滑点到 × 不该丢播放。 */
+  /** 收起成边缘玻璃标签：不销毁播放，轻点即可恢复。 */
   @State collapsed: boolean = false;
-  /** 左上角坐标（vp），绝对定位用。 */
   @State px: number = 0;
   @State py: number = 0;
   private winW: number = 360;
@@ -103,13 +91,10 @@ export struct FloatPlayerCard {
   private xc: XComponentController = new XComponentController();
   private player: Player | undefined = undefined;
   private hideTimer: number = -1;
-  /** 传给 FloatSurface 的回调：类字段箭头函数，引用恒定，不会触发画面层重建。 */
+  private progTimer: number = -1;
+
   private markAttached = (): void => {
     this.firstFrame = true;
-    // 关键（2.6.1.41）：**不能等 Player 的 onReady**。
-    // 真机日志里 `NativePlayer SetClassRefs` 全程只出现一次 —— 浮窗第二次 `new Player()`
-    // 复用同一个 native 对象，`onReady` 不会再回调，于是 openMedia 永远不执行，
-    // 表现就是「小窗出来了、黑的、也没声音」。surface 一绑好就主动起播。
     console.info('[amane] float attached, start media');
     this.openMedia();
   };
@@ -147,6 +132,9 @@ export struct FloatPlayerCard {
       const e = err as BusinessError;
       console.error(`[amane] float player: ${e.code} ${e.message}`);
     }
+    this.progTimer = setInterval(() => {
+      this.syncProgress();
+    }, 500);
     this.armHideTimer();
   }
 
@@ -154,6 +142,10 @@ export struct FloatPlayerCard {
     if (this.hideTimer >= 0) {
       clearTimeout(this.hideTimer);
       this.hideTimer = -1;
+    }
+    if (this.progTimer >= 0) {
+      clearInterval(this.progTimer);
+      this.progTimer = -1;
     }
     try {
       this.player?.destroy();
@@ -164,59 +156,94 @@ export struct FloatPlayerCard {
     this.player = undefined;
   }
 
+  private syncProgress(): void {
+    const p: Player | undefined = this.player;
+    if (p === undefined) {
+      return;
+    }
+    try {
+      const st: PlayerState | undefined = p.state;
+      if (st === undefined || st === null) {
+        return;
+      }
+      if (st.duration > 0) {
+        const r: number = Math.max(0, Math.min(1, st.position / st.duration));
+        if (Math.abs(r - this.progRatio) >= 0.004) {
+          this.progRatio = r;
+        }
+      }
+      this.playing = st.playing;
+    } catch (err) {
+      // 忽略瞬时读取异常
+    }
+  }
+
+  private minY(): number {
+    return Math.max(EDGE, this.topInset + 8);
+  }
+
   private cardW(): number {
     if (this.collapsed) {
-      return 64;
+      return TAB_W;
     }
     return this.tier === 0 ? CARD_W : this.winW;
   }
 
   private cardH(): number {
     if (this.collapsed) {
-      return 40;
+      return TAB_H;
     }
-    return this.cardW() * 9 / 16;
+    return Math.round(this.cardW() * 9 / 16);
   }
 
-  /** 默认落点：小窗贴右下（避开底部导航），宽条贴顶下方 92vp。 */
   private placeDefault(): void {
+    if (this.collapsed) {
+      this.px = this.snappedLeft ? 0 : Math.max(0, this.winW - TAB_W);
+      this.py = Math.max(this.minY(), Math.min(this.winH - TAB_H - BOTTOM_SAFE, this.py > 0 ? this.py : this.winH * 0.46));
+      return;
+    }
     if (this.tier === 0) {
-      this.px = Math.max(EDGE, this.winW - CARD_W - EDGE);
-      this.py = Math.max(EDGE, this.winH - this.cardH() - BOTTOM_SAFE);
+      this.px = this.snappedLeft ? EDGE : Math.max(EDGE, this.winW - CARD_W - EDGE);
+      this.py = Math.max(this.minY(), this.winH - this.cardH() - BOTTOM_SAFE);
     } else {
       this.px = 0;
-      this.py = 92;
+      this.py = Math.max(this.minY(), 92);
     }
   }
 
-  /** 夹在屏幕内（宽条档 x 恒为 0）。 */
   private clampPos(): void {
     const w: number = this.cardW();
     const h: number = this.cardH();
+    const topSafe: number = this.minY();
     const maxX: number = Math.max(0, this.winW - w);
-    const maxY: number = Math.max(0, this.winH - h);
-    if (this.tier === 1) {
+    const maxY: number = Math.max(topSafe, this.winH - h - EDGE);
+    if (this.collapsed) {
+      this.px = this.snappedLeft ? 0 : maxX;
+    } else if (this.tier === 1) {
       this.px = 0;
     } else if (this.px < EDGE) {
       this.px = EDGE;
     } else if (this.px > maxX - EDGE) {
       this.px = Math.max(EDGE, maxX - EDGE);
     }
-    if (this.py < EDGE) {
-      this.py = EDGE;
-    } else if (this.py > maxY - EDGE) {
-      this.py = Math.max(EDGE, maxY - EDGE);
+    if (this.py < topSafe) {
+      this.py = topSafe;
+    } else if (this.py > maxY) {
+      this.py = maxY;
     }
   }
 
-  /** 松手吸附：小窗档只吸左右，纵向停在原处。 */
   private snapX(): void {
-    if (this.tier === 1) {
+    if (this.tier === 1 && !this.collapsed) {
       return;
     }
     const maxX: number = Math.max(0, this.winW - this.cardW());
-    this.px = this.px + this.cardW() / 2 < this.winW / 2
-      ? EDGE : Math.max(EDGE, maxX - EDGE);
+    this.snappedLeft = this.px + this.cardW() / 2 < this.winW / 2;
+    if (this.collapsed) {
+      this.px = this.snappedLeft ? 0 : maxX;
+    } else {
+      this.px = this.snappedLeft ? EDGE : Math.max(EDGE, maxX - EDGE);
+    }
   }
 
   private openMedia(): void {
@@ -254,18 +281,27 @@ export struct FloatPlayerCard {
     this.hideTimer = setTimeout(() => {
       this.controlsOn = false;
       this.hideTimer = -1;
-    }, 3000);
+    }, 3200);
   }
 
   private toggleControls(): void {
+    if (this.collapsed) {
+      this.expandFromCollapsed();
+      return;
+    }
     this.controlsOn = !this.controlsOn;
     if (this.controlsOn) {
       this.armHideTimer();
     }
   }
 
-  private toggleTier(): void {
+  private onDoubleTap(): void {
+    if (this.collapsed) {
+      this.expandFromCollapsed();
+      return;
+    }
     if (this.compactOnly) {
+      this.togglePlay();
       return;
     }
     this.tier = this.tier === 0 ? 1 : 0;
@@ -289,12 +325,7 @@ export struct FloatPlayerCard {
     this.armHideTimer();
   }
 
-  /**
-   * 点 ×：**只暂停 + 收成小条，不销毁浮窗**。
-   *
-   * 卡片只有 208×117，右上角那个 × 太容易手滑 —— 之前直接销毁浮窗，
-   * 用户体感就是「点一下小窗，播放没了」（2026-11-13）。收成小条后点一下就能回来。
-   */
+  /** 收起为侧边玻璃耳标：暂停但不销毁播放，点一下即恢复。 */
   private collapse(): void {
     const p: Player | undefined = this.player;
     if (p !== undefined && this.playing) {
@@ -317,7 +348,6 @@ export struct FloatPlayerCard {
     this.armHideTimer();
   }
 
-  /** 交接出去之前，把当前位置写回会话。 */
   private currentSession(): PlayHandoff {
     const h: PlayHandoff = this.session;
     const p: Player | undefined = this.player;
@@ -334,36 +364,57 @@ export struct FloatPlayerCard {
     return h;
   }
 
+  private cardRadius(): BorderRadiuses {
+    if (this.collapsed) {
+      if (this.snappedLeft) {
+        return { topLeft: 0, bottomLeft: 0, topRight: 18, bottomRight: 18 };
+      }
+      return { topLeft: 18, bottomLeft: 18, topRight: 0, bottomRight: 0 };
+    }
+    const r: number = this.tier === 0 ? 14 : 0;
+    return { topLeft: r, topRight: r, bottomLeft: r, bottomRight: r };
+  }
+
+  @Builder
+  MicroGlassBtn(sym: Resource, onTap: () => void) {
+    Stack({ alignContent: Alignment.Center }) {
+      SymbolGlyph(sym)
+        .fontSize(11)
+        .fontColor(['#F2FFFFFF'])
+    }
+    .width(23)
+    .height(23)
+    .borderRadius(12)
+    .backgroundColor('#99100D11')
+    .border({ width: 0.6, color: '#38FFFFFF' })
+    .onClick(() => {
+      onTap();
+    })
+  }
+
   build() {
-    // 外面这层全屏 Stack 是**为了不吃掉整页触摸**（2.6.1.41，真机反馈「整页动不了」）：
-    // 浮层挂在 OverlayManager 上时，承载节点默认按整屏算，空白区域会把点击/滚动全吞掉。
-    // `HitTestMode.Transparent` = 这一层自己不参与命中，但**子节点照常**响应，
-    // 所以卡片上的拖动/单击/按钮都还在，卡片以外的区域直接透给下面的页面。
     Stack({ alignContent: Alignment.TopStart }) {
       Column() {
         this.CardBody()
       }
       .width(this.cardW())
       .height(this.cardH())
-      .borderRadius(this.tier === 0 ? 12 : 0)
+      .borderRadius(this.cardRadius())
       .clip(true)
-      .backgroundColor('#000000')
-      .shadow({ radius: 18, color: '#40000000', offsetY: 4 })
-      // 绝对定位 + 夹边界：位置只由 px/py 决定，父容器不参与布局
+      .backgroundColor(this.collapsed ? '#D9141016' : '#000000')
+      .border({
+        width: this.tier === 0 || this.collapsed ? 0.75 : 0,
+        color: this.collapsed ? Theme.accentAlpha(0.45) : '#38FFFFFF'
+      })
+      .shadow({ radius: 22, color: '#80000000', offsetY: 6 })
       .position({ x: this.px, y: this.py })
-      // 拖动时的半透明**不加 animation**：给含 XComponent 的节点跑属性动画，
-      // 每帧都会重排/重建，真机上直接把 mpv 的画面输出打断（点一下停播就是这么来的）。
-      .opacity(this.dragging ? 0.72 : 1)
+      // 不给含 XComponent 的节点加动画，防止重建打断 mpv
+      .opacity(this.dragging ? 0.78 : 1)
       .gesture(
         GestureGroup(GestureMode.Parallel,
-          // 拖动阈值放到 16vp：8vp 时「轻点一下」也会被判成拖动，
-          // 于是每点一次都在改位置、改尺寸，画面层跟着重建（点一下就停播）。
           PanGesture({ fingers: 1, distance: 16 })
             .onActionStart(() => {
               this.dragging = true;
-              // 记起点：`ev.offsetX/Y` 是**相对手势起点**的累计位移，不是每帧增量。
-              // 之前写成 `this.px += ev.offsetX`，等于把累计值一帧帧叠上去，
-              // 手指走 100vp 小窗会跑出几百 vp —— 这就是「拖动不跟手」。
               this.startPx = this.px;
               this.startPy = this.py;
             })
@@ -376,25 +427,26 @@ export struct FloatPlayerCard {
               this.dragging = false;
               this.snapX();
               this.clampPos();
-            this.controlsOn = true;
-            this.armHideTimer();
-          }),
-        GestureGroup(GestureMode.Exclusive,
-          TapGesture({ count: 2 }).onAction(() => {
-            this.toggleTier();
-          }),
-          TapGesture({ count: 1 }).onAction(() => {
-            if (!this.dragging) {
-              this.toggleControls();
-            }
-          })
+              if (!this.collapsed) {
+                this.controlsOn = true;
+                this.armHideTimer();
+              }
+            }),
+          GestureGroup(GestureMode.Exclusive,
+            TapGesture({ count: 2 }).onAction(() => {
+              this.onDoubleTap();
+            }),
+            TapGesture({ count: 1 }).onAction(() => {
+              if (!this.dragging) {
+                this.toggleControls();
+              }
+            })
+          )
         )
       )
-    )
     }
     .width('100%')
     .height('100%')
-    // 关键：自身不参与命中（否则整页的点击/滚动都会被这层吞掉），子节点照常响应
     .hitTestBehavior(HitTestMode.Transparent)
   }
 
@@ -408,118 +460,139 @@ export struct FloatPlayerCard {
           attached: this.markAttached
         })
       }
-      // 占位（首帧前盖一层）：**常驻树里**，只切可见性 ——
-      // 用 `if` 会让兄弟节点整棵重建，XComponent 跟着重建就把 mpv 的画面输出打断了（点一下停播）。
-      Column() {
+
+      // 首帧前占位：常驻树里，只切可见性
+      Column({ space: 4 }) {
         Text(this.session.number.length > 0 ? this.session.number : '准备播放')
           .fontSize(11)
+          .fontWeight(FontWeight.Medium)
           .fontColor('#FFFFFF')
       }
       .width('100%')
       .height('100%')
       .justifyContent(FlexAlign.Center)
-      .backgroundColor('#000000')
-      .visibility(this.firstFrame ? Visibility.None : Visibility.Visible)
+      .backgroundColor('#0D0B0E')
+      .visibility(this.firstFrame || this.collapsed ? Visibility.None : Visibility.Visible)
       .hitTestBehavior(HitTestMode.None)
 
-      // 控件层**常驻**树里，只切 visibility —— 绝对不能用 `if`。
-      // 用 `if` 时点一下画面 = 增删一个兄弟节点 → ArkUI 重建这一层 → XComponent 跟着换 surface，
-      // mpv 收到 surface 销毁就直接停（用户反馈的就是「点一下真的停了，不是暂停」）。
-      Column() {
-        Row({ space: 6 }) {
+      // 展开态悬浮液态玻璃控件层（常驻，只切 visibility）
+      Stack({ alignContent: Alignment.Center }) {
+        // 顶部微条：番号 + 折叠 / 回详情 / 关闭三枚圆形玻璃按钮
+        Column() {
+          Row({ space: 5 }) {
             Text(this.session.number.length > 0 ? this.session.number : this.session.title)
               .fontSize(10)
-              .fontColor('#FFFFFF')
+              .fontWeight(FontWeight.Medium)
+              .fontColor('#F5FFFFFF')
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .layoutWeight(1)
-            Text('–')
-              .fontSize(14)
-              .fontColor('#FFFFFF')
-              .width(22)
-              .height(22)
-              .textAlign(TextAlign.Center)
-              .onClick(() => {
-                // 收起，不是关闭（关闭在下面那一排，需要明确点）
-                this.collapse();
-              })
+            this.MicroGlassBtn($r('sys.symbol.minus'), () => {
+              this.collapse();
+            })
+            this.MicroGlassBtn($r('sys.symbol.arrow_counterclockwise'), () => {
+              FloatBox.requestBackDetail(this.currentSession());
+            })
+            this.MicroGlassBtn($r('sys.symbol.xmark'), () => {
+              FloatBox.requestClose();
+            })
           }
           .width('100%')
-          .padding({ left: 8, right: 4, top: 4 })
+          .padding({ left: 8, right: 6, top: 6, bottom: 8 })
+          .linearGradient({ angle: 180, colors: [['#B309070B', 0.0], ['#0009070B', 1.0]] })
 
           Blank()
 
-          Row({ space: 6 }) {
-            Text(this.playing ? '暂停' : '播放')
-              .fontSize(10)
-              .fontColor('#FFFFFF')
-              .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-              .backgroundColor('#66000000')
-              .borderRadius(10)
-              .onClick(() => {
-                this.togglePlay();
-              })
+          // 右下角放大全屏圆形玻璃键
+          Row() {
             Blank()
-            Text('放大')
-              .fontSize(10)
-              .fontColor('#FFFFFF')
-              .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-              .backgroundColor('#66000000')
-              .borderRadius(10)
-              .onClick(() => {
-                FloatBox.requestExpand(this.currentSession());
-              })
-            Text('回详情页')
-              .fontSize(10)
-              .fontColor('#FFFFFF')
-              .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-              .backgroundColor('#66FFFFFF')
-              .borderRadius(10)
-              .onClick(() => {
-                FloatBox.requestBackDetail(this.currentSession());
-              })
-            Text('关闭')
-              .fontSize(10)
-              .fontColor('#FFFFFF')
-              .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-              .backgroundColor('#88000000')
-              .borderRadius(10)
-              .onClick(() => {
-                FloatBox.requestClose();
-              })
+            Stack({ alignContent: Alignment.Center }) {
+              SymbolGlyph($r('sys.symbol.full_screen'))
+                .fontSize(12)
+                .fontColor(['#F2FFFFFF'])
+            }
+            .width(26)
+            .height(26)
+            .borderRadius(13)
+            .backgroundColor('#99100D11')
+            .border({ width: 0.6, color: '#3DFFFFFF' })
+            .onClick(() => {
+              FloatBox.requestExpand(this.currentSession());
+            })
           }
           .width('100%')
-          .padding({ left: 8, right: 8, bottom: 6 })
+          .padding({ left: 8, right: 7, bottom: 9 })
         }
         .width('100%')
         .height('100%')
-        .backgroundColor('#33000000')
-        // 控件层铺满整张卡，必须设 Transparent：否则单击画面全部被它吃掉，
-        // 「点一下只显隐控件」变成了「点了没反应」（真机反馈）。
         .hitTestBehavior(HitTestMode.Transparent)
-        .visibility(this.controlsOn ? Visibility.Visible : Visibility.None)
 
-      // 控件收起时留一个「把手」：单击只收控件、不关浮窗，但画面若是黑的，
-      // 光靠猜看不见浮窗在哪 —— 有个小圆点就知道它还在、点回来就能操作（2026-11-13 反馈）。
-      // 同样是常驻 + visibility，避免点按时动结构。
-      Text('⋯')
-        .fontSize(12)
-        .fontColor('#D9FFFFFF')
-        .width(24)
-        .height(24)
-        .textAlign(TextAlign.Center)
-        .backgroundColor('#59000000')
-        .borderRadius(12)
-        .margin({ right: 6, bottom: 6 })
-        .align(Alignment.BottomEnd)
-        .visibility(this.controlsOn ? Visibility.None : Visibility.Visible)
+        // 中央 40×40 丝绒玻璃播放/暂停圆钮
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph(this.playing ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))
+            .fontSize(17)
+            .fontColor(['#FFFFFF'])
+        }
+        .width(40)
+        .height(40)
+        .borderRadius(20)
+        .backgroundColor(Theme.accentAlpha(0.32))
+        .backdropBlur(18)
+        .border({ width: 0.85, color: Theme.accentAlpha(0.75) })
+        .shadow({ radius: 14, color: Theme.accentAlpha(0.45), offsetY: 2 })
         .onClick(() => {
-          if (this.collapsed) {
-            this.expandFromCollapsed();
-          } else {
-            this.toggleControls();
-          }
+          this.togglePlay();
         })
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor('#3309070B')
+      .hitTestBehavior(HitTestMode.Transparent)
+      .visibility(this.controlsOn && !this.collapsed ? Visibility.Visible : Visibility.None)
+
+      // 底部极细 2.5vp 蔷薇渐变进度条（非折叠态常驻显示）
+      Column() {
+        Blank()
+        Stack({ alignContent: Alignment.Start }) {
+          Row()
+            .width('100%')
+            .height(2.5)
+            .backgroundColor('#38FFFFFF')
+          Row()
+            .width(`${Math.round(this.progRatio * 1000) / 10}%`)
+            .height(2.5)
+            .linearGradient(Theme.ctaGradient())
+        }
+        .width('100%')
+        .height(2.5)
+      }
+      .width('100%')
+      .height('100%')
+      .hitTestBehavior(HitTestMode.None)
+      .visibility(this.collapsed ? Visibility.None : Visibility.Visible)
+
+      // 折叠态贴边液态玻璃耳标（常驻，只切 visibility）
+      Column({ space: 6 }) {
+        Column()
+          .width(8)
+          .height(8)
+          .borderRadius(4)
+          .linearGradient(Theme.ctaGradient())
+          .shadow({ radius: 8, color: Theme.accentAlpha(0.75), offsetY: 0 })
+        SymbolGlyph(this.snappedLeft ? $r('sys.symbol.chevron_right') : $r('sys.symbol.chevron_left_2'))
+          .fontSize(13)
+          .fontColor(['#E6FFFFFF'])
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
+      .backgroundColor('#EB141016')
+      .backdropBlur(24)
+      .visibility(this.collapsed ? Visibility.Visible : Visibility.None)
+      .onClick(() => {
+        this.expandFromCollapsed();
+      })
     }
     .width('100%')
     .height('100%')

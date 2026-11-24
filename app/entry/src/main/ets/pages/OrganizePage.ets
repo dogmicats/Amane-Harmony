@@ -5,6 +5,7 @@ import { httpPost } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 
 /**
  * 设置 · 资料整理（二级页，2026-11-15 建立）。
@@ -160,7 +161,9 @@ struct OrganizePage {
 
   build() {
     Navigation(this.navStack) {
-      Column() {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
+        Column() {
 
         Scroll() {
           Column({ space: 18 }) {
@@ -170,9 +173,9 @@ struct OrganizePage {
           Blank().height(this.barH())
             Column({ space: 8 }) {
               Text('我起过的名字')
-                .fontSize(11)
-                .fontColor(Theme.TEXT_FAINT)
-                .letterSpacing(1)
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Theme.TEXT_DIM)
                 .width('100%')
               Column() {
                 this.NavRow(ROWS[0])
@@ -183,9 +186,10 @@ struct OrganizePage {
               }
               .width('100%')
               .backgroundColor(Theme.CARD)
-              .borderRadius(14)
+              .borderRadius(16)
+              .border({ width: 0.75, color: Theme.STROKE })
               .clip(true)
-              Text('这两处只影响你手机上的检索与分类，不改服务器里刮削到的原始数据。')
+              Text('仅影响客户端检索与分类，不改动原始刮削数据。')
                 .fontSize(10)
                 .fontColor(Theme.TEXT_FAINT)
                 .width('100%')
@@ -195,16 +199,16 @@ struct OrganizePage {
 
             Column({ space: 8 }) {
               Text('危险操作')
-                .fontSize(11)
-                .fontColor(Theme.TEXT_FAINT)
-                .letterSpacing(1)
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Theme.TEXT_DIM)
                 .width('100%')
               Row({ space: 12 }) {
                 Column({ space: 3 }) {
                   Text('清空所有自定义修改')
                     .fontSize(15)
                     .fontColor(Theme.DANGER)
-                  Text('把改过的片名/演员/标签与换过的封面全部还原成刮削原样（所有设备一起变）')
+                  Text('还原所有自定义名称、标签与封面（全设备同步）')
                     .fontSize(11)
                     .fontColor(Theme.TEXT_FAINT)
                     .maxLines(2)
@@ -218,7 +222,8 @@ struct OrganizePage {
               .width('100%')
               .padding({ left: 14, right: 14, top: 12, bottom: 12 })
               .backgroundColor(Theme.CARD)
-              .borderRadius(14)
+              .borderRadius(16)
+              .border({ width: 0.75, color: Theme.STROKE })
               .onClick(() => {
                 this.confirmResetMeta();
               })
@@ -226,13 +231,17 @@ struct OrganizePage {
             .width('100%')
           }
           .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.pageBottomSafe() })
         }
         .layoutWeight(1)
         // Scroll 里的 Column 默认会被垂直居中（真机实测：标题下空出一大块），必须显式靠上
         .align(Alignment.Top)
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
+      }
+      .width('100%')
+      .height('100%')
+
       }
       .width('100%')
       .height('100%')

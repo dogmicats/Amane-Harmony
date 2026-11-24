@@ -225,7 +225,7 @@ struct SeriesByTagPage {
             ForEach(this.filtered(), (o: TagOpt) => {
               Text(o.name)
                 .fontSize(12)
-                .fontColor(this.picked.indexOf(o.id) >= 0 ? '#FFFFFF' : Theme.TEXT_DIM)
+                .fontColor(this.picked.indexOf(o.id) >= 0 ? Theme.ON_ACCENT : Theme.TEXT_DIM)
                 .padding({ left: 11, right: 11, top: 6, bottom: 6 })
                 .backgroundColor(this.picked.indexOf(o.id) >= 0 ? Theme.ACCENT : Theme.CARD)
                 .borderRadius(12)
@@ -233,7 +233,7 @@ struct SeriesByTagPage {
                 .onClick(() => {
                   this.toggle(o.id);
                 })
-            }, (o: TagOpt) => 'opt-' + o.id)
+            }, (o: TagOpt) => `opt-${o.id}-${this.picked.indexOf(o.id) >= 0 ? 1 : 0}`)
           }
           .width('100%')
         }
@@ -297,7 +297,7 @@ struct SeriesByTagPage {
           }
           .width('100%')
           .layoutWeight(1)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.pageBottomSafe() })
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
         }

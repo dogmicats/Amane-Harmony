@@ -5,6 +5,7 @@ import { LikedClip, likedSorted, removeLiked } from '../common/LikedShorts';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 
 /**
  * 我的喜爱（刷一刷里点过心的片段）。
@@ -117,7 +118,9 @@ struct MyLikedShortsPage {
 
   build() {
     Navigation(this.navStack) {
-      Column() {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
+        Column() {
         // 顶部：标题 + 一句「和收藏不一样」的说明
 
   // 六十改：让出浮层标题栏的高度
@@ -167,6 +170,10 @@ struct MyLikedShortsPage {
           .padding({ left: 12, right: 12 })
           .scrollBar(BarState.Off)
         }
+      }
+      .width('100%')
+      .height('100%')
+
       }
       .width('100%')
       .height('100%')
@@ -252,7 +259,8 @@ struct MyLikedShortsPage {
     .width('100%')
     .padding(10)
     .backgroundColor(Theme.CARD)
-    .borderRadius(10)
+    .borderRadius(16)
+    .border({ width: 0.75, color: Theme.STROKE })
     .onClick(() => {
       this.openClip(c);
     })

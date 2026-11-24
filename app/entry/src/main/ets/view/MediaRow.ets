@@ -18,7 +18,7 @@ export struct MediaRow {
         Column() {
           Text(this.title)
             .fontSize(17)
-            .fontWeight(FontWeight.Medium)
+            .fontWeight(FontWeight.Bold)
             .fontColor(Theme.TEXT)
           if (this.subtitle.length > 0) {
             Text(this.subtitle)

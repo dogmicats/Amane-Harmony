@@ -63,11 +63,14 @@ class MineMixin(object):
         limit = int((query.get("limit") or ["60"])[0])
         offset = int((query.get("offset") or ["0"])[0])
         only_unfinished = (query.get("unfinished") or [""])[0] in ("1", "true")
+        # 2026-11-20：多一个排序口径 —— 「看了 5 遍」比「最近看过」更能说明喜欢。
+        order = (query.get("order") or ["recent"])[0]
         clause = "WHERE finished = 0" if only_unfinished else ""
+        order_sql = "plays DESC, played_at DESC" if order == "plays" else "played_at DESC"
         with user_db() as conn:
             rows = conn.execute(
-                f"SELECT metadata_id, position, duration, played_at, finished FROM history {clause} "
-                "ORDER BY played_at DESC LIMIT ? OFFSET ?",
+                f"SELECT metadata_id, position, duration, played_at, finished, plays FROM history {clause} "
+                f"ORDER BY {order_sql} LIMIT ? OFFSET ?",
                 (max(1, min(limit, 200)), max(0, offset)),
             ).fetchall()
             total = conn.execute(f"SELECT COUNT(*) FROM history {clause}").fetchone()[0]
@@ -82,6 +85,7 @@ class MineMixin(object):
             item["duration"] = round(r["duration"], 1)
             item["played_at"] = r["played_at"]
             item["finished"] = bool(r["finished"])
+            item["plays"] = int(r["plays"] or 0)
             items.append(item)
         self._json({"items": items, "total": total})
 
@@ -101,11 +105,18 @@ class MineMixin(object):
             return self._json({"ok": True, "skipped": True})
         with user_db() as conn:
             conn.execute(
-                "INSERT INTO history(metadata_id, position, duration, played_at, finished) VALUES(?,?,?,?,?) "
+                "INSERT INTO history(metadata_id, position, duration, played_at, finished, plays) "
+                "VALUES(?,?,?,?,?,1) "
                 # finished 一旦置 1 就不再回落：重看开头几秒不该把「已看完」抹掉
                 "ON CONFLICT(metadata_id) DO UPDATE SET position=excluded.position, "
                 "duration=excluded.duration, played_at=excluded.played_at, "
-                "finished=MAX(history.finished, excluded.finished)",
+                "finished=MAX(history.finished, excluded.finished), "
+                # 播放次数（2026-11-20）：只有距上次播放 ≥30 分钟才算「又看了一次」。
+                # 播放器心跳是秒级的，不加这个窗口，看一部片能记成几百次。
+                # 0.020833 天 = 30 分钟。
+                "plays=history.plays + "
+                "  (CASE WHEN julianday(excluded.played_at) - julianday(history.played_at) >= 0.020833 "
+                "        THEN 1 ELSE 0 END)",
                 (mid, position, duration, now_iso(), finished),
             )
             # 顺带采一个样（2.5.3）：老客户端只发 history、不发专用采样接口。有了这一行，

@@ -240,10 +240,20 @@ class SearchMixin(object):
     def search_index_status(self, query, *_) -> None:
         """看一眼拼音索引建好没有：条目数 + 表在不在。"""
         t = cjk_tables()
+        # stale / src_sig：让「新演员入库为什么搜不到」能一眼看出来，不用靠猜。
+        # 2.8.x 拼音索引会自愈，但要看它有没有跟上，得有个可读的状态位。
+        try:
+            stale = name_pinyin_stale()
+            src_sig = _source_name_sig()
+        except Exception:  # noqa: BLE001 - 状态端点不能因为主库抖动 500
+            stale, src_sig = False, ""
         self._json({
             "ok": True,
             "tables": {"t2s": len(t.t2s), "pinyin": len(t.py), "alias": len(t.alias)},
             "names": name_pinyin_count(),
+            "stale": stale,
+            "src_sig": src_sig,
+            "stored_sig": _stored_name_sig(),
             "qmode": "and|or（browse 的 qmode 参数）",
         })
 

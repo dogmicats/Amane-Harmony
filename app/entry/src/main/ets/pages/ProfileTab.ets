@@ -9,6 +9,7 @@ import { BuildConfig } from '../common/BuildConfig';
 import { UpdateWatch } from '../common/UpdateWatch';
 import { NavBarWatch } from '../common/NavBarWatch';
 import { GlassBox, PageTitle } from '../view/GlassKit';
+import { SettingsAmbientGlow, SettingsChevron, SettingsIconTile, SettingsRowDivider } from '../view/SettingsKit';
 
 @Component
 export struct ProfileTab {
@@ -16,17 +17,16 @@ export struct ProfileTab {
   /** 顶部状态栏高度（真全屏下顶栏要让出这么多，见 Index.readInsets）。 */
   @StorageProp('amaneTopInset') topInset: number = 30;
   @State stats: StatsInfo = { favorites: 0, history: 0, finished: 0, library_items: 0 };
-  @State serverLabel: string = '';
+  @State serverHost: string = '';
   @State appVersion: string = '';
   /**
    * 静默检测结果（`common/UpdateWatch.ets` 写，这里只读）。
-   * 两个红点分别代表：客户端有新包 / 服务端有新版本 —— 两者都能升的时候才是「两个」。
+   * 两个红点分别代表：客户端有新包 / 服务端有新版本。
    */
   @StorageProp('update_dot_client') dotClient: boolean = false;
   @StorageProp('update_dot_server') dotServer: boolean = false;
   @StorageProp('update_ver_client') verClient: string = '';
   @StorageProp('update_ver_server') verServer: string = '';
-  /** 主滚动区的控制器：底栏自动收起要用绝对偏移判断方向（见 HomeTab 同名注释）。 */
   /** 导航栈（五十七改）：整页套 Navigation 只为拿到标题栏这个材质落点。 */
   private navStack: NavPathStack = new NavPathStack();
   private sc: Scroller = new Scroller();
@@ -39,8 +39,20 @@ export struct ProfileTab {
     } catch (error) {
       const e = error as BusinessError;
       console.error(`[amane] version: ${e.code} ${e.message}`);
-      return '';
+      return BuildConfig.APP_VERSION;
     }
+  }
+
+  /** 短版本号（去掉 `-dev-fe-...` 后缀，放在身份卡胶囊里更利落）。 */
+  private shortVer(): string {
+    const raw: string = this.appVersion.length > 0 ? this.appVersion : BuildConfig.APP_VERSION;
+    const dash: number = raw.indexOf('-');
+    const clean: string = dash > 0 ? raw.substring(0, dash) : raw;
+    const parts: string[] = clean.split('.');
+    if (parts.length >= 3) {
+      return `v${parts[0]}.${parts[1]}.${parts[2]}`;
+    }
+    return `v${clean}`;
   }
 
   aboutToAppear(): void {
@@ -53,8 +65,7 @@ export struct ProfileTab {
   }
 
   private async load(): Promise<void> {
-    this.serverLabel = (Store.I.onWan ? '外网 · ' : '局域网 · ')
-      + Store.I.amane.replace('http://', '').replace('https://', '');
+    this.serverHost = Store.I.amane.replace('http://', '').replace('https://', '');
     try {
       const text: string = await httpGet(`${Store.I.user}/api/user/stats`, Store.I.token);
       this.stats = JSON.parse(text) as StatsInfo;
@@ -64,78 +75,145 @@ export struct ProfileTab {
     }
   }
 
-  /**
-   * 首屏那两格（观看记录 / 稍后再看）。
-   *
-   * 只有「观看记录」有数字（`stats.history`，和「我的内容」里那个「看过」是同一份数据）；
-   * 「稍后再看」没有计数接口，就写一句用途，别硬编一个数字。
-   */
+  /** 顶部私人影院身份卡：应用图标 + 连接状态 + 版本胶囊。 */
   @Builder
-  QuickCell(glyph: string, kind: string, title: string, action: () => void) {
-    Column({ space: 3 }) {
-      Text(glyph)
-        .fontSize(16)
-        .fontColor(Theme.ACCENT)
-      Text(title)
-        .fontSize(13)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(Theme.TEXT)
-      Text(kind === 'history' ? `${this.stats.history} 条 · 可续播` : '想看的先记一下')
-        .fontSize(10)
-        .fontColor(Theme.TEXT_FAINT)
-    }
-    .layoutWeight(1)
-    .height(84)
-    .justifyContent(FlexAlign.Center)
-    .onClick(() => {
-      action();
-    })
-  }
-
-  /** 会变的 desc 也在这里拼，别从外面传值进来。 */
-  private rowDesc(kind: string, fallback: string): string {
-    if (kind === 'server') {
-      return this.serverLabel;
-    }
-    return fallback;
-  }
-
-  @Builder
-  MenuRow(glyph: string, title: string, desc: string, kind: string, action: () => void) {
+  IdentityCard() {
     Row({ space: 12 }) {
-      Text(glyph)
-        .fontSize(16)
-        .fontColor(Theme.ACCENT)
-        .width(34)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .backgroundColor(Theme.ACCENT_SOFT)
-        .borderRadius(17)
-      Column({ space: 2 }) {
-        Text(title)
-          .fontSize(14)
+      Image($r('app.media.startIcon'))
+        .width(46)
+        .height(46)
+        .borderRadius(13)
+        .objectFit(ImageFit.Contain)
+        .backgroundColor(Theme.accentAlpha(0.10))
+        .border({ width: 0.75, color: Theme.inkAlpha(0.32) })
+
+      Column({ space: 4 }) {
+        Text('Amane 私人影院')
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
           .fontColor(Theme.TEXT)
-        Text(this.rowDesc(kind, desc))
-          .fontSize(10)
-          .fontColor(Theme.TEXT_FAINT)
+          .maxLines(1)
+        Row({ space: 6 }) {
+          Row()
+            .width(7)
+            .height(7)
+            .borderRadius(3.5)
+            .backgroundColor(Store.I.onWan ? '#F4C97E' : '#45B075')
+          Text(`${Store.I.onWan ? '外网已连接' : '局域网已连接'} · ${this.serverHost}`)
+            .fontSize(11)
+            .fontColor(Theme.TEXT_FAINT)
+            .fontFeature('"tnum" 1')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
-      Text('›')
-        .fontSize(16)
-        .fontColor(Theme.TEXT_FAINT)
+
+      Text(this.shortVer())
+        .fontSize(10.5)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Theme.TEXT_DIM)
+        .fontFeature('"tnum" 1')
+        .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+        .backgroundColor('#14FFFFFF')
+        .border({ width: 0.5, color: '#24FFFFFF' })
+        .borderRadius(Theme.R_PILL)
     }
     .width('100%')
-    .padding({ left: Theme.G_L, right: Theme.G_L, top: 10, bottom: 10 })
+    .padding({ left: 14, right: 14, top: 14, bottom: 14 })
     .backgroundColor(Theme.CARD)
-    .borderRadius(Theme.R_CARD)
-    .border({ width: 1, color: Theme.STROKE })
+    .linearGradient({
+      angle: 135,
+      colors: [[Theme.accentAlpha(0.12), 0.0], ['#00000000', 0.65]]
+    })
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
+    .onClick(() => {
+      router.pushUrl({ url: 'pages/SettingsConnectionPage' });
+    })
+  }
+
+  /** 高频 Bento 双磁贴（观看记录 / 稍后再看）。 */
+  @Builder
+  BentoTile(icon: Resource, kind: string, title: string, action: () => void) {
+    Column({ space: 12 }) {
+      Row() {
+        SettingsIconTile({ icon: icon, tileSize: 36, iconSize: 17 })
+        Blank()
+        SettingsChevron({ glyphSize: 13 })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Column({ space: 3 }) {
+        Text(title)
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.TEXT)
+          .maxLines(1)
+        Text(kind === 'history' ? `${this.stats.history} 条 · 可续播` : '想看的先记一下')
+          .fontSize(11)
+          .fontColor(Theme.TEXT_FAINT)
+          .fontFeature('"tnum" 1')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .width('100%')
+    }
+    .layoutWeight(1)
+    .padding({ left: 14, right: 14, top: 14, bottom: 14 })
+    .backgroundColor(Theme.CARD)
+    .linearGradient({
+      angle: 145,
+      colors: [[Theme.accentAlpha(0.08), 0.0], ['#00000000', 0.62]]
+    })
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
     .onClick(() => {
       action();
     })
   }
 
-  /** 一个小圆点（红点 / 橙点）。空 Row 画点最省事，不会带进文字基线。 */
+  /** 分组黑曜石卡内的单行菜单。 */
+  @Builder
+  GroupRow(icon: Resource, title: string, desc: string, badge: string, action: () => void) {
+    Row({ space: 12 }) {
+      SettingsIconTile({ icon: icon, tileSize: 36, iconSize: 17 })
+      Column({ space: 2 }) {
+        Text(title)
+          .fontSize(14.5)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.TEXT)
+        Text(desc)
+          .fontSize(11)
+          .fontColor(Theme.TEXT_FAINT)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+
+      if (badge.length > 0) {
+        Text(badge)
+          .fontSize(11)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.ACCENT_INK)
+          .margin({ right: 2 })
+      }
+      SettingsChevron({ glyphSize: 13 })
+    }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+    .onClick(() => {
+      action();
+    })
+  }
+
   @Builder
   Dot(size: number, color: string) {
     Row()
@@ -145,32 +223,28 @@ export struct ProfileTab {
       .backgroundColor(color)
   }
 
-  /**
-   * 「我的」右上角的更新入口（2026-11-14）。
-   *
-   * 只有检测到更新才出现：左点 = 客户端有新包（红），右点 = 服务端有新版本（橙、略小）。
-   * 点它弹菜单，给用户两条路：去更新 / **本次更新不提醒**（记下当前这组版本号，
-   * 下次真出了更新的版本仍会提示，不会一按就永久失聪）。
-   */
+  /** 「我的」右上角的更新入口：仅检测到更新时出现。 */
   @Builder
   UpdateEntry() {
-    Row({ space: 7 }) {
-      Row({ space: 3 }) {
-        if (this.dotClient) {
-          this.Dot(9, '#FF3B30')
-        }
-        if (this.dotServer) {
-          this.Dot(7, '#FF9F0A')
-        }
-      }
+    Row({ space: 6 }) {
       Text('更新')
         .fontSize(12)
+        .fontWeight(FontWeight.Medium)
         .fontColor(Theme.TEXT)
+      Row({ space: 3 }) {
+        if (this.dotClient) {
+          this.Dot(7, '#FF453A')
+        }
+        if (this.dotServer) {
+          this.Dot(6, '#FF9F0A')
+        }
+      }
     }
-    .padding({ left: 11, right: 12, top: 6, bottom: 6 })
-    .backgroundColor(Theme.CARD_HI)
+    .padding({ left: 12, right: 12, top: 7, bottom: 7 })
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+    .backgroundColor('#1AFFFFFF')
     .borderRadius(Theme.R_PILL)
-    .border({ width: 1, color: Theme.STROKE })
+    .border({ width: 0.75, color: '#2EFFFFFF' })
     .bindMenu([
       {
         value: this.verClient.length > 0 ? `去更新（${this.verClient}）` : '去更新',
@@ -193,11 +267,10 @@ export struct ProfileTab {
     ])
   }
 
-  /** 标题行（五十七改）：左上角「我的」装进规范胶囊（46 / 20 Bold，与媒体库同规格）。 */
   @Builder
   Header() {
     Row({ space: 8 }) {
-      GlassBox({ radius: 23, padH: 14, padV: 9, mat: true }) {
+      GlassBox({ radius: 23, padH: 15, padV: 9, mat: true }) {
         PageTitle({ text: '我的' })
       }
       Blank()
@@ -213,7 +286,7 @@ export struct ProfileTab {
   private titleConfig(): NavigationCustomTitle {
     return {
       builder: () => {
-        this.TitleShell()
+        this.TitleShell();
       },
       height: this.barH()
     };
@@ -229,94 +302,92 @@ export struct ProfileTab {
     .padding({ top: this.topInset, left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
   }
 
-  /** 顶栏占的高度（内容让位用）。 */
   private barH(): number {
     return this.topInset + 46;
   }
 
   build() {
-    // 五十七改：整页套 Navigation —— 标题胶囊要落在**标题栏**里才是真系统材质。
     Navigation(this.navStack) {
-    Scroll(this.sc) {
-      Column({ space: 12 }) {
-        // 标题已搬进标题栏（`Header`），这里留个等高的空位，内容才知道要让开多少
-        Blank().height(this.barH() + 8)
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
 
-        // 2026-11-15 用户重排：原来这三个数字（收藏 / 看过 / 库内条目）搬进「我的内容」，
-        // 这个位置让给**每天都会点**的两项：观看记录、稍后再看。
-        // 数字口径与接口都没动，只是换了展示位置（在 MyContentPage 里）。
-        Row() {
-          this.QuickCell('▶', 'history', '观看记录', () => {
-            router.pushUrl({ url: 'pages/HistoryPage' });
-          })
-          Divider()
-            .vertical(true)
-            .height(38)
-            .strokeWidth(1)
-            .color(Theme.CARD_HI)
-          this.QuickCell('◷', 'later', '稍后再看', () => {
-            router.pushUrl({ url: 'pages/WatchLaterPage' });
-          })
+        Scroll(this.sc) {
+          Column({ space: 14 }) {
+            Blank().height(this.barH() + 8)
+
+            // 私人影院身份卡
+            this.IdentityCard()
+
+            // 高频双磁贴（观看记录 / 稍后再看）
+            Row({ space: 12 }) {
+              this.BentoTile($r('sys.symbol.arrow_counterclockwise_clock'), 'history', '观看记录', () => {
+                router.pushUrl({ url: 'pages/HistoryPage' });
+              })
+              this.BentoTile($r('sys.symbol.bookmark'), 'later', '稍后再看', () => {
+                router.pushUrl({ url: 'pages/WatchLaterPage' });
+              })
+            }
+            .width('100%')
+
+            // 统一分组黑曜石卡：4 大主入口齐聚一张卡
+            Column() {
+              this.GroupRow($r('sys.symbol.square_grid_2x2'), '我的内容', '收藏、统计、夯到拉、评价与截帧', '', () => {
+                router.pushUrl({ url: 'pages/MyContentPage' });
+              })
+              SettingsRowDivider()
+              this.GroupRow($r('sys.symbol.doc_text'), '网页管理', '刮削、入库与任务队列', '', () => {
+                router.pushUrl({ url: 'pages/WebPage' });
+              })
+              SettingsRowDivider()
+              this.GroupRow(
+                $r('sys.symbol.gearshape'),
+                '设置',
+                '连接、外观、播放与存储',
+                Theme.paletteOf(Theme.paletteKey).name,
+                () => {
+                  router.pushUrl({ url: 'pages/SettingsPage' });
+                }
+              )
+              SettingsRowDivider()
+              this.GroupRow($r('sys.symbol.info_circle'), '关于', '版本、检查更新与日志', '', () => {
+                router.pushUrl({ url: 'pages/AboutHubPage' });
+              })
+            }
+            .width('100%')
+            .backgroundColor(Theme.CARD)
+            .borderRadius(18)
+            .border({ width: 0.75, color: Theme.STROKE })
+            .clip(true)
+
+            Column({ space: 4 }) {
+              Text(`Amane for HarmonyOS · ${this.appVersion}`)
+                .fontSize(10.5)
+                .fontColor(Theme.TEXT_FAINT)
+                .fontFeature('"tnum" 1')
+            }
+            .width('100%')
+            .padding({ top: 8, bottom: Theme.BOTTOM_SAFE })
+            .onClick(() => {
+              router.pushUrl({ url: 'pages/AboutPage' });
+            })
+          }
+          .width('100%')
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+          .constraintSize({ minHeight: '100%' })
+          .justifyContent(FlexAlign.Start)
         }
         .width('100%')
-        .backgroundColor(Theme.CARD)
-        .borderRadius(Theme.R_CARD)
-        .border({ width: 1, color: Theme.STROKE })
-        .clip(true)
-
-        Column({ space: 10 }) {
-          // 2026-11-15：评价 / 弹幕 / 截帧 / 统计 / 夯到拉 / 喜爱 + 三个数字统一收进这一页，
-          // 首屏只留高频入口。原来那 6 行是这一页最长的一段。
-          this.MenuRow('▦', '我的内容', '收藏、看过、库内条目 + 评价 / 弹幕 / 截帧 / 统计 / 夯到拉 / 喜爱', 'static', () => {
-            router.pushUrl({ url: 'pages/MyContentPage' });
-          })
-          this.MenuRow('▤', '网页管理', '刮削、入库、任务队列', 'static', () => {
-            router.pushUrl({ url: 'pages/WebPage' });
-          })
-          // 播放器仍在「设置」里（2026-11-11 去重）；「关于」2.6.1.7 起改成这一行入口。
-          this.MenuRow('⚙', '设置', '', 'server', () => {
-            router.pushUrl({ url: 'pages/SettingsPage' });
-          })
-          // 2.6.1.7：「关于 Amane / 检查更新 / 更新日志」三项原来压在设置的最末一组，
-          // 找不到；这里给一行明确入口，进去就是那三项（设置里那一组已移除）。
-          this.MenuRow('ⓘ', '关于', '版本、检查更新、更新日志', 'static', () => {
-            router.pushUrl({ url: 'pages/AboutHubPage' });
-          })
-        }
-        .width('100%')
-
-        Column({ space: 6 }) {
-          Text(`Amane for HarmonyOS ${this.appVersion} · ${BuildConfig.CHANNEL} · 服务端需 ≥ ${BuildConfig.MIN_SERVER}`)
-            .fontSize(11)
-            .fontColor(Theme.TEXT_FAINT)
-          Text(Store.I.user)
-            .fontSize(10)
-            .fontColor(Theme.TEXT_FAINT)
-        }
-        .width('100%')
-        .padding({ top: 10, bottom: Theme.BOTTOM_SAFE })
-        .onClick(() => {
-          router.pushUrl({ url: 'pages/AboutPage' });
+        .height('100%')
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+        .onScroll((x: number, y: number) => {
+          NavBarWatch.onOffset(this.sc.currentOffset().yOffset);
         })
       }
       .width('100%')
-      // 84 不够：「设置」是这一页最后一行，会被底部浮动胶囊栏压住一半（点不利索）。
-      // 统一用 Theme.BOTTOM_SAFE（TabBar + 手势条 + 余量），收藏页当初就是同一个坑。
-      .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
-      // Scroll 会把内容竖向居中，撑满最小高度才能贴顶
-      .constraintSize({ minHeight: '100%' })
-      .justifyContent(FlexAlign.Start)
-    }
-    .width('100%')
       .height('100%')
-      .scrollBar(BarState.Off)
-      // 往下看收起底栏、往回划弹回来（2026-11-15，学 piliplus）
-      .onScroll((x: number, y: number) => {
-        NavBarWatch.onOffset(this.sc.currentOffset().yOffset);
-      })
       .backgroundColor(Theme.BG)
     }
-    // 五十七改：Navigation 壳（barStyle STACK = 标题栏浮在内容之上）
     .mode(NavigationMode.Stack)
     .hideBackButton(true)
     .hideToolBar(true)

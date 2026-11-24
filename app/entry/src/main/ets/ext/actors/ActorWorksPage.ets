@@ -358,7 +358,7 @@ struct ActorWorksPage {
             .maxLines(1)
           Text(`${a.shared}`)
             .fontSize(10)
-            .fontColor(this.coId === a.id ? '#FFFFFF' : Theme.TEXT_FAINT)
+            .fontColor(this.coId === a.id ? Theme.ON_ACCENT : Theme.TEXT_FAINT)
         }
         .padding({ left: 4, right: 10, top: 3, bottom: 3 })
         .backgroundColor(this.coId === a.id ? Theme.ACCENT : Theme.CARD_HI)
@@ -390,7 +390,7 @@ struct ActorWorksPage {
           ForEach(this.tagHits, (t: FacetItem) => {
             Text(`${t.name} · ${t.count}`)
               .fontSize(11)
-              .fontColor(this.tagId === t.id ? '#FFFFFF' : Theme.TEXT_DIM)
+              .fontColor(this.tagId === t.id ? Theme.ON_ACCENT : Theme.TEXT_DIM)
               .padding({ left: 9, right: 9, top: 5, bottom: 5 })
               .backgroundColor(this.tagId === t.id ? Theme.ACCENT : Theme.CARD_HI)
               .borderRadius(11)
@@ -402,7 +402,7 @@ struct ActorWorksPage {
                 this.picking = '';
                 this.reload();
               })
-          }, (t: FacetItem) => `pick-tag-${t.id}`)
+          }, (t: FacetItem) => `pick-tag-${t.id}-${this.tagId === t.id ? 1 : 0}`)
         }
         .width('100%')
       } else {
@@ -459,7 +459,7 @@ struct ActorWorksPage {
       Row({ space: 8 }) {
         Text(this.tagId > 0 ? `标签 · ${this.tagName}` : '标签')
           .fontSize(11)
-          .fontColor(this.tagId > 0 ? '#FFFFFF' : Theme.TEXT_DIM)
+          .fontColor(this.tagId > 0 ? Theme.ON_ACCENT : Theme.TEXT_DIM)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .constraintSize({ maxWidth: 150 })
@@ -471,7 +471,7 @@ struct ActorWorksPage {
           })
         Text(this.coId > 0 ? `共演 · ${this.coName}` : '合作演员')
           .fontSize(11)
-          .fontColor(this.coId > 0 ? '#FFFFFF' : Theme.TEXT_DIM)
+          .fontColor(this.coId > 0 ? Theme.ON_ACCENT : Theme.TEXT_DIM)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .constraintSize({ maxWidth: 150 })
@@ -561,7 +561,7 @@ struct ActorWorksPage {
         }
         Blank()
         GlassCapsule({
-          label: `⇅ ${this.sortLabel()}`,
+          label: `${this.sortLabel()}`,
           fs: 12,
           padH: 11,
           padV: 7,
@@ -573,7 +573,7 @@ struct ActorWorksPage {
           }
         })
         GlassCapsule({
-          label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+          label: this.filterCount() > 0 ? `筛选 ${this.filterCount()}` : '筛选',
           active: this.filterCount() > 0,
           fs: 12,
           padH: 11,
@@ -679,9 +679,9 @@ struct ActorWorksPage {
             .justifyContent(FlexAlign.Center)
           } else if (this.works.length === 0) {
             Column({ space: 10 }) {
-              Text('▤')
-                .fontSize(32)
-                .fontColor(Theme.TEXT_FAINT)
+              SymbolGlyph($r('sys.symbol.film'))
+                .fontSize(28)
+                .fontColor([Theme.TEXT_FAINT])
               Text(this.filterCount() > 0 ? '没有符合筛选条件的作品' : '暂无作品')
                 .fontSize(13)
                 .fontColor(Theme.TEXT_DIM)
@@ -744,8 +744,9 @@ struct ActorWorksPage {
             }))
             .columnsGap(8)
             .rowsGap(14)
-            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6, bottom: Theme.BOTTOM_SAFE })
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6, bottom: Theme.pageBottomSafe() })
             .layoutWeight(1)
+            .cachedCount(6)
             .scrollBar(BarState.Off)
             .edgeEffect(EdgeEffect.Spring)
             .onReachEnd(() => {

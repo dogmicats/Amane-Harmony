@@ -36,9 +36,11 @@ const PILL_SHADOW: ShadowOptions = { radius: 8, color: '#80000000', offsetX: 0, 
  * 纯黑底上模糊几乎不画东西，靠这一层给出「这里有一颗胶囊」的轮廓；
  * 压在亮内容上又不至于变成一块奶白。数值与旧版工具条那层底色一致。
  */
-const PILL_BASE: string = '#1FFFFFFF';
-/** 发丝亮边：玻璃的第二个信号（第一个是模糊）。30% 白在亮图上才看得见。 */
-const PILL_EDGE: string = '#33FFFFFF';
+const PILL_BASE: string = '#21FFFFFF';
+/** 发丝亮边：玻璃的第二个信号（第一个是模糊）。35% 白在亮图与纯黑底上都清晰利落。 */
+const PILL_EDGE: string = '#38FFFFFF';
+/** 内容区兜底玻璃的柔阴影：让悬浮胶囊从内容中轻轻浮起。 */
+const PILL_FLOAT: ShadowOptions = { radius: 12, color: '#4D000000', offsetX: 0, offsetY: 3 };
 
 /**
  * 文字胶囊：一排动作按钮（排序 / 筛选 / 抽卡 / 清单 / 共演…）的最小单位。
@@ -69,23 +71,14 @@ export struct GlassCapsule {
     if (this.tint.length > 0) {
       return this.tint;
     }
-    return this.active ? Theme.accentAlpha(0.30) : PILL_BASE;
+    return this.active ? Theme.accentAlpha(0.22) : PILL_BASE;
   }
 
-  /**
-   * 材质着色（五十九改）：**未选中一律不着色**。
-   *
-   * 之前这里把兜底用的 12% 白一并当成材质色传了下去 → 标题栏底下是纯黑时，
-   * 那 12% 白就是一层「怪怪的灰」（用户 2026-11-18 02:11 指出）。
-   * 媒体库那三颗一直是传 `undefined` 的，所以它们干净；这次把判据统一到这条：
-   * 只有「选中 / 显式自定义色」才给材质着色，其余交给材质自己画。
-   * 兜底分支（没有材质/低算力）仍然铺 `PILL_BASE`，不然纯黑上胶囊会消失。
-   */
   private matFill(): string | undefined {
     if (this.tint.length > 0) {
       return this.tint;
     }
-    return this.active ? Theme.accentAlpha(0.30) : undefined;
+    return this.active ? Theme.accentAlpha(0.22) : undefined;
   }
 
   build() {
@@ -93,7 +86,7 @@ export struct GlassCapsule {
       Text(this.label)
         .fontSize(this.fs)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.active ? Theme.ACCENT : (this.dim ? Theme.TEXT_DIM : '#FFFFFF'))
+        .fontColor(this.active ? Theme.ACCENT_INK : (this.dim ? Theme.TEXT_DIM : '#FFFFFF'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .textAlign(TextAlign.Center)
@@ -111,7 +104,7 @@ export struct GlassCapsule {
       Text(this.label)
         .fontSize(this.fs)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.active ? Theme.ACCENT : (this.dim ? Theme.TEXT_DIM : '#FFFFFF'))
+        .fontColor(this.active ? Theme.ACCENT_INK : (this.dim ? Theme.TEXT_DIM : '#FFFFFF'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .textAlign(TextAlign.Center)
@@ -120,7 +113,8 @@ export struct GlassCapsule {
         .borderRadius(this.radius)
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .backgroundColor(this.fill())
-        .border({ width: 0.5, color: this.active ? Theme.accentAlpha(0.55) : PILL_EDGE })
+        .border({ width: 0.75, color: this.active ? Theme.inkAlpha(0.48) : PILL_EDGE })
+        .shadow(PILL_FLOAT)
         .textShadow(PILL_SHADOW)
         .onClick(() => {
           this.onTap();
@@ -146,46 +140,81 @@ export struct GlassGlyph {
   onTap: () => void = () => {};
 
   private fill(): string {
-    return this.active ? Theme.accentAlpha(0.30) : PILL_BASE;
+    return this.active ? Theme.accentAlpha(0.22) : PILL_BASE;
   }
 
   /** 材质着色：同 `GlassCapsule.matFill()` —— 未选中的字形胶囊不着色（否则纯黑底上发灰）。 */
   private matFill(): string | undefined {
-    return this.active ? Theme.accentAlpha(0.30) : undefined;
+    return this.active ? Theme.accentAlpha(0.22) : undefined;
   }
 
-  build() {
-    if (this.mat && ImmersiveGlass.pressMaterial(this.level, this.matFill()) !== undefined) {
-      Text(this.glyph)
+  /** 常用裸 Unicode 字形自动升级为鸿蒙原生 SymbolGlyph，保留调用方签名零改动。 */
+  private mappedSymbol(): Resource | undefined {
+    if (this.glyph === '♥') {
+      return $r('sys.symbol.heart_fill');
+    }
+    if (this.glyph === '♡') {
+      return $r('sys.symbol.heart');
+    }
+    if (this.glyph === '▦') {
+      return $r('sys.symbol.square_grid_2x2');
+    }
+    if (this.glyph === '☰') {
+      return $r('sys.symbol.list_bullet');
+    }
+    if (this.glyph === '↻') {
+      return $r('sys.symbol.arrow_clockwise');
+    }
+    if (this.glyph === '✕') {
+      return $r('sys.symbol.xmark');
+    }
+    return undefined;
+  }
+
+  @Builder
+  GlyphFace() {
+    if (this.mappedSymbol() !== undefined) {
+      SymbolGlyph(this.mappedSymbol() as Resource)
         .fontSize(this.glyphSize)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.active ? Theme.ACCENT : '#FFFFFF')
-        .textAlign(TextAlign.Center)
-        .width(this.boxW)
-        .height(this.boxH)
-        .borderRadius(this.radius)
-        .systemMaterial(ImmersiveGlass.pressMaterial(this.level, this.matFill()))
-        .clip(true)
-        .textShadow(PILL_SHADOW)
-        .onClick(() => {
-          this.onTap();
-        })
+        .fontColor([this.active ? Theme.ACCENT_INK : '#FFFFFF'])
     } else {
       Text(this.glyph)
         .fontSize(this.glyphSize)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.active ? Theme.ACCENT : '#FFFFFF')
+        .fontColor(this.active ? Theme.ACCENT_INK : '#FFFFFF')
         .textAlign(TextAlign.Center)
-        .width(this.boxW)
-        .height(this.boxH)
-        .borderRadius(this.radius)
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-        .backgroundColor(this.fill())
-        .border({ width: 0.5, color: this.active ? Theme.accentAlpha(0.55) : PILL_EDGE })
         .textShadow(PILL_SHADOW)
-        .onClick(() => {
-          this.onTap();
-        })
+    }
+  }
+
+  build() {
+    if (this.mat && ImmersiveGlass.pressMaterial(this.level, this.matFill()) !== undefined) {
+      Stack() {
+        this.GlyphFace()
+      }
+      .width(this.boxW)
+      .height(this.boxH)
+      .borderRadius(this.radius)
+      .systemMaterial(ImmersiveGlass.pressMaterial(this.level, this.matFill()))
+      .clip(true)
+      .onClick(() => {
+        this.onTap();
+      })
+    } else {
+      Stack() {
+        this.GlyphFace()
+      }
+      .width(this.boxW)
+      .height(this.boxH)
+      .borderRadius(this.radius)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+      .backgroundColor(this.fill())
+      .border({ width: 0.75, color: this.active ? Theme.accentAlpha(0.60) : PILL_EDGE })
+      .shadow(PILL_FLOAT)
+      .onClick(() => {
+        this.onTap();
+      })
     }
   }
 }
@@ -272,14 +301,14 @@ export struct GlassIcon {
   }
 
   build() {
-    if (this.mat && ImmersiveGlass.materialFor(this.level, this.tint) !== undefined) {
+    if (this.mat && ImmersiveGlass.pressMaterial(this.level, this.tint.length > 0 ? this.tint : undefined) !== undefined) {
       Stack() {
         this.Glyph()
       }
       .width(this.boxW)
       .height(this.boxH)
       .borderRadius(this.radius)
-      .systemMaterial(ImmersiveGlass.materialFor(this.level, this.tint))
+      .systemMaterial(ImmersiveGlass.pressMaterial(this.level, this.tint.length > 0 ? this.tint : undefined))
       .clip(true)
       .onClick(() => {
         this.onTap();
@@ -293,7 +322,8 @@ export struct GlassIcon {
       .borderRadius(this.radius)
       .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
       .backgroundColor(this.tint.length > 0 ? this.tint : PILL_BASE)
-      .border({ width: 0.5, color: PILL_EDGE })
+      .border({ width: 0.75, color: PILL_EDGE })
+      .shadow(PILL_FLOAT)
       .onClick(() => {
         this.onTap();
       })
@@ -357,8 +387,9 @@ export struct GlassBack {
       .height(this.boxH)
       .borderRadius(this.radius)
       .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-      .backgroundColor(this.scrim ? '#40000000' : PILL_BASE)
-      .border({ width: 0.5, color: PILL_EDGE })
+      .backgroundColor(this.scrim ? '#47000000' : PILL_BASE)
+      .border({ width: 0.75, color: PILL_EDGE })
+      .shadow(PILL_FLOAT)
       .onClick(() => {
         this.onTap();
       })
@@ -584,16 +615,18 @@ export struct GlassSearchBar {
           this.onCommit(this.text.trim());
         })
 
-      Text('✕')
-        .fontSize(13)
-        .fontColor('#B3FFFFFF')
-        .width(24)
-        .height(24)
-        .textAlign(TextAlign.Center)
-        .borderRadius(12)
-        .onClick(() => {
-          this.onX();
-        })
+      Stack() {
+        SymbolGlyph($r('sys.symbol.xmark'))
+          .fontSize(12)
+          .fontColor(['#CCFFFFFF'])
+          .fontWeight(FontWeight.Medium)
+      }
+      .width(24)
+      .height(24)
+      .borderRadius(12)
+      .onClick(() => {
+        this.onX();
+      })
     }
   }
 

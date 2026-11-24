@@ -102,7 +102,7 @@ docker compose -f deploy/compose.example.yml up -d
 浏览器打开 `http://你机器的地址:8770/api/user/ping`，看到类似这样就是成功：
 
 ```json
-{"ok": true, "version": "2.8.0", "time": "..."}
+{"ok": true, "version": "2.9.0", "time": "..."}
 ```
 
 版本号以你实际装到的那版为准，对得上就行。

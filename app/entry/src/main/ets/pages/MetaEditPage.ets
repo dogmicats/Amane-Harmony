@@ -762,7 +762,7 @@ struct MetaEditPage {
       if (this.st === ST_OK) {
         Text(this.busy ? '…' : '保存')
           .fontSize(12)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
           .padding({ left: 14, right: 14, top: 6, bottom: 6 })
           .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
           .backgroundColor(Theme.accentAlpha(0.30))
@@ -940,7 +940,8 @@ struct MetaEditPage {
             .width('100%')
             .padding(14)
             .backgroundColor(Theme.CARD)
-            .borderRadius(14)
+            .borderRadius(16)
+            .border({ width: 0.75, color: Theme.STROKE })
 
             Column({ space: 12 }) {
               EditList({
@@ -966,7 +967,8 @@ struct MetaEditPage {
             .width('100%')
             .padding(14)
             .backgroundColor(Theme.CARD)
-            .borderRadius(14)
+            .borderRadius(16)
+            .border({ width: 0.75, color: Theme.STROKE })
 
             Column({ space: 12 }) {
               EditList({
@@ -992,7 +994,8 @@ struct MetaEditPage {
             .width('100%')
             .padding(14)
             .backgroundColor(Theme.CARD)
-            .borderRadius(14)
+            .borderRadius(16)
+            .border({ width: 0.75, color: Theme.STROKE })
 
             Column({ space: 8 }) {
               Row({ space: 6 }) {
@@ -1022,7 +1025,8 @@ struct MetaEditPage {
             .width('100%')
             .padding(14)
             .backgroundColor(Theme.CARD)
-            .borderRadius(14)
+            .borderRadius(16)
+            .border({ width: 0.75, color: Theme.STROKE })
 
             Text('恢复默认')
               .fontSize(12)
@@ -1039,11 +1043,11 @@ struct MetaEditPage {
                 this.confirmReset();
               })
 
-            Text('改动存在你的服务端（旁挂库），换手机、重装都还在；amane 网页端读的是库里的原值，看不到这些修改。换封面在详情页那块。')
+            Text('改动存在服务端旁挂库，换设备不丢；换封面请到详情页。')
               .fontSize(9)
               .fontColor(Theme.TEXT_FAINT)
               .width('100%')
-              .padding({ bottom: Theme.BOTTOM_SAFE })
+              .padding({ bottom: Theme.pageBottomSafe() })
           }
           .width('100%')
           .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4 })
@@ -1106,7 +1110,7 @@ struct MetaEditPage {
               })
             Text('新建并保存')
               .fontSize(12)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
               .padding({ left: 16, right: 16, top: 7, bottom: 7 })
               .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
               .backgroundColor(Theme.accentAlpha(0.30))
@@ -1124,7 +1128,7 @@ struct MetaEditPage {
         .backgroundColor(Theme.CARD)
         .borderRadius({ topLeft: 14, topRight: 14 })
         .border({ width: 0.5, color: Theme.accentAlpha(0.35) })
-        .margin({ bottom: Theme.BOTTOM_SAFE })
+        .margin({ bottom: Theme.pageBottomSafe() })
       }
     }
     .width('100%')

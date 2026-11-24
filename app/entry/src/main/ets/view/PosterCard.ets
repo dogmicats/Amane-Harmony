@@ -1,6 +1,7 @@
 import { MediaItem } from '../common/Types';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { Motion } from '../common/Motion';
 import { scoreText } from '../common/Util';
 import { rateLabel, rateColor } from '../ext/ratings/RatingStars';
 import { MarkBadges } from './MarkBadges';
@@ -42,6 +43,11 @@ export struct PosterCard {
   /** 按下态（缩放反馈）。 */
   @State private press: boolean = false;
   @StorageProp('amaneFx') private fx: number = 2;
+  /** 海报框在屏幕上的实时位置（vp），点击进详情页时交给 Motion 做一镜到底。 */
+  private rectX: number = 0;
+  private rectY: number = 0;
+  private rectW: number = 0;
+  private rectH: number = 0;
 
   aboutToAppear(): void {
     const now: number = Date.now();
@@ -109,6 +115,14 @@ export struct PosterCard {
           }
 
           if (this.ratio() > 0) {
+            Column()
+              .width('100%')
+              .height(22)
+              .linearGradient({
+                angle: 180,
+                colors: [['#00000000', 0], ['#99000000', 1]]
+              })
+              .hitTestBehavior(HitTestMode.None)
             Progress({ value: this.ratio(), total: 100, type: ProgressType.Linear })
               .width('100%')
               .height(3)
@@ -121,6 +135,12 @@ export struct PosterCard {
         // 1px 描边：深色底上海报边缘会和背景糊在一起，加一道极淡的白边才有"卡片感"
         .border({ width: 1, color: Theme.STROKE })
         .clip(true)
+        .onAreaChange((_old: Area, cur: Area) => {
+          this.rectX = Number(cur.globalPosition.x) || 0;
+          this.rectY = Number(cur.globalPosition.y) || 0;
+          this.rectW = Number(cur.width) || 0;
+          this.rectH = Number(cur.height) || 0;
+        })
 
         // 右上角竖排两行：上行是标记 + 刮削评分，下行是「我的评价」。
         // 左下单放不下（会被圆角吃掉），右上角是唯一稳妥的位置。
@@ -133,13 +153,21 @@ export struct PosterCard {
                   MarkBadges({ marks: this.itemMarks(), max: 2, badgeSize: 8, fill: 'dark' })
                 }
                 if (scoreText(this.item.score).length > 0) {
-                  Text(scoreText(this.item.score))
-                    .fontSize(10)
-                    .fontColor(Theme.GOLD)
-                    .fontWeight(FontWeight.Medium)
-                    .padding({ left: 5, right: 5, top: 2, bottom: 2 })
-                    .backgroundColor('#B3000000')
-                    .borderRadius(6)
+                  Row({ space: 2 }) {
+                    SymbolGlyph($r('sys.symbol.star_fill'))
+                      .fontSize(9)
+                      .fontColor([Theme.GOLD])
+                    Text(scoreText(this.item.score))
+                      .fontSize(10)
+                      .fontColor(Theme.GOLD)
+                      .fontWeight(FontWeight.Medium)
+                      .fontFeature('"tnum" 1')
+                  }
+                  .alignItems(VerticalAlign.Center)
+                  .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+                  .backgroundColor('#BF0B0B0F')
+                  .border({ width: 0.5, color: '#26FFFFFF' })
+                  .borderRadius(6)
                 }
               }
             }
@@ -149,8 +177,9 @@ export struct PosterCard {
                 .fontSize(9)
                 .fontColor(rateColor(this.myRating()))
                 .fontWeight(FontWeight.Medium)
-                .padding({ left: 5, right: 5, top: 1, bottom: 1 })
-                .backgroundColor('#B3000000')
+                .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+                .backgroundColor('#BF0B0B0F')
+                .border({ width: 0.5, color: '#26FFFFFF' })
                 .borderRadius(6)
             }
           }
@@ -164,6 +193,7 @@ export struct PosterCard {
 
       Text(this.showNumber && this.item.number.length > 0 ? this.item.number : this.item.title)
         .fontSize(12)
+        .fontWeight(FontWeight.Medium)
         .fontColor(Theme.TEXT)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -172,8 +202,8 @@ export struct PosterCard {
 
       if (this.showTitle) {
         Text(this.showNumber ? (this.item.title.length > 0 ? this.item.title : ' ') : ' ')
-          .fontSize(10)
-          .fontColor(Theme.TEXT_FAINT)
+          .fontSize(10.5)
+          .fontColor(Theme.TEXT_DIM)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width(this.fluid ? '100%' : this.cardWidth)
@@ -181,8 +211,9 @@ export struct PosterCard {
       }
       if (this.showDate && this.item.release.length >= 4) {
         Text(this.item.release.substring(0, 10))
-          .fontSize(9)
+          .fontSize(9.5)
           .fontColor(Theme.TEXT_FAINT)
+          .fontFeature('"tnum" 1')
           .maxLines(1)
           .width(this.fluid ? '100%' : this.cardWidth)
           .margin({ top: 2 })
@@ -193,8 +224,8 @@ export struct PosterCard {
     .opacity(this.shown ? 1 : 0)
     .translate({ y: this.shown ? 0 : 10 })
     // 按压缩放（2026-11-14）：手指下去缩到 0.97，抬手回弹 —— 比"点完变色"更像实体按键
-    .scale({ x: this.press ? 0.97 : 1, y: this.press ? 0.97 : 1 })
-    .animation({ duration: 140, curve: Curve.EaseOut })
+    .scale({ x: this.press ? 0.96 : 1, y: this.press ? 0.96 : 1 })
+    .animation({ curve: Motion.springTap() })
     .onTouch((e: TouchEvent) => {
       if (e.type === TouchType.Down) {
         this.press = true;
@@ -203,6 +234,8 @@ export struct PosterCard {
       }
     })
     .onClick(() => {
+      Motion.markCover(this.item.id, this.item.poster, this.rectX, this.rectY,
+        this.rectW, this.rectH, Theme.R_IMG);
       this.onTap();
     })
   }

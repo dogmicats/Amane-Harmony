@@ -39,27 +39,27 @@ interface KindDef {
 const KIND_DEFS: KindDef[] = [
   {
     key: 'img', dir: 'img-cache', label: '图片缓存', hasCap: true, cleanable: true,
-    desc: '海报、剧照、演员头像的本地副本。留着翻列表不闪白；删掉会重新下载，内容一致。'
+    desc: '海报、剧照与头像的本地缓存，删后自动重新拉取。'
   },
   {
     key: 'page', dir: 'page-cache', label: '页面数据', hasCap: false, cleanable: true,
-    desc: '首页/媒体库/详情这些接口结果的副本，杀掉 App 后能先铺出来再刷新。删掉只是下次多等一次加载。'
+    desc: '首页与列表接口快照，用于冷启秒开。'
   },
   {
     key: 'offline', dir: 'offline', label: '离线影片', hasCap: false, cleanable: false,
-    desc: '你自己点「下载」存到手机里的片子，不是自动产生的缓存，所以永远不自动删除。要腾空间请去「下载管理」逐部删；删完如果这里还有占用，去那一页清「不在列表里的文件」。'
+    desc: '手动下载的离线片，永不自动清理；如需删除请前往「下载管理」。'
   },
   {
     key: 'picks', dir: 'picks', label: '抽卡 / 亮点截图', hasCap: false, cleanable: true,
-    desc: '刷一刷抽卡、亮点页面存下来的图片。删掉不影响影片本身，下次抽到会重新存。'
+    desc: '抽卡与亮点页缓存的图片，删后不影响原片。'
   },
   {
     key: 'export', dir: 'export', label: '导出的图片', hasCap: false, cleanable: true,
-    desc: '你手动「保存到相册」时生成的副本。相册里那份不受影响。'
+    desc: '保存到相册时生成的临时副本，不影响相册原图。'
   },
   {
     key: 'mpvconf', dir: 'mpvconf', label: '播放器配置', hasCap: false, cleanable: false,
-    desc: 'mpv 的运行配置，几 KB。删了就得重新生成，所以不给清。'
+    desc: 'mpv 运行配置（仅数 KB），受保护不可清理。'
   }
 ];
 

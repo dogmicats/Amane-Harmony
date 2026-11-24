@@ -10,6 +10,7 @@ import { PoolParams } from '../common/PoolParams';
 import { Theme } from '../common/Theme';
 import { PlayerPrefs } from '../common/PlayerPrefs';
 import { addLiked, removeLiked } from '../common/LikedShorts';
+import { GlassCapsule } from './GlassKit';
 
 /**
  * 短视频流（2.6.2.1）——「刷一刷」。
@@ -239,10 +240,19 @@ export struct ShortsView {
   @State leftHanded: boolean = false;
   private gripToken: number = -1;
 
+  /**
+   * 负一屏左上角「更多」胶囊（2026-11-20）：三个点（⋯）表示更多，点了**真跳转**到
+   * 「设置 → 刷一刷」页的筛选卡（ShortsSettingsPage）——不在负一屏上盖浮层。
+   * `scopeSig` 是当前刷片范围的签名，从设置页返回时比对：变了才按新范围重新取片段。
+   */
+  private scopeSig: string = '';
+
   aboutToAppear(): void {
     this.likes = Store.I.prefString('shorts_likes', '')
       .split(',')
       .filter((k: string) => k.length > 0);
+    // 记下进入时的范围签名，返回时比对（范围变了要重新取片段）
+    this.scopeSig = this.readScopeSig();
     // 适感握持（2026-11-16）：左手握着就把头像/喜爱/静音这一列挪到左边，
     // 右手就在右边。系统判不出来（老机器/没权限）就保持原来的右侧。
     this.gripToken = GripSense.get().subscribe((h: GripHand) => {
@@ -308,6 +318,14 @@ export struct ShortsView {
    * 通知这里：从详情页回来时重绑 surface + 继续播（2.6.1.82）。
    */
   onResumeTick(): void {
+    // 从「设置 → 刷一刷」返回：左上角 ⋯ 跳过去改过刷片范围（偏好已写），
+    // 这里比对签名，变了就作废缓存 + 按新范围重取——否则跳过去改了却还在刷旧范围。
+    const sig: string = this.readScopeSig();
+    if (sig !== this.scopeSig) {
+      this.scopeSig = sig;
+      resetShortsCache();
+      this.load();
+    }
     this.retryFaces();
     if (this.player === undefined) {
       this.initPlayer();
@@ -424,6 +442,15 @@ export struct ShortsView {
     this.loading = false;
     this.idx = 0;
     this.openAt(0);
+  }
+
+  /**
+   * 刷片范围签名：直接读设置页写的两项原始偏好（`shorts_pool_spec` / `shorts_pool`）。
+   * 用它比对「从设置页返回时范围有没有变」，变了才重取片段。
+   * 不拼人话摘要——摘要可能撞车（两个不同库都显示「2 个库」），签名必须精确。
+   */
+  private readScopeSig(): string {
+    return Store.I.prefString('shorts_pool_spec', '') + '|' + Store.I.prefString('shorts_pool', 'all');
   }
 
   private async load(): Promise<void> {
@@ -987,14 +1014,14 @@ export struct ShortsView {
       } else {
         this.StillLayer(it)
       }
-      // 底部压一层渐变，保证文字在亮画面上也看得清（不挡画面中间，2.6.1.81）
+      // 底部压一层三段平滑渐变，保证文字在亮画面上也看得清（不挡画面中间）
       Column()
         .width('100%')
-        .height(220)
+        .height(232)
         .align(Alignment.BottomStart)
         .linearGradient({
           angle: 180,
-          colors: [['#00000000', 0], ['#CC000000', 1]]
+          colors: [['#00000000', 0], ['#59000000', 0.45], ['#D9000000', 1]]
         })
         .hitTestBehavior(HitTestMode.None)
       Column({ space: 8 }) {
@@ -1004,17 +1031,22 @@ export struct ShortsView {
             .fontSize(13)
             .fontColor(Theme.GOLD)
             .fontWeight(FontWeight.Medium)
+            .textShadow({ radius: 6, color: '#80000000', offsetX: 0, offsetY: 1 })
           Text('看详情 ›')
             .fontSize(11)
-            .fontColor('#E6FFFFFF')
-            .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-            .backgroundColor('#4D000000')
-            .borderRadius(10)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#F2FFFFFF')
+            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor('#2E000000')
+            .border({ width: 0.75, color: '#3DFFFFFF' })
+            .borderRadius(12)
             .onClick(() => {
               this.gotoDetail(it.meta_id);
             })
         }
         .width('100%')
+        .alignItems(VerticalAlign.Center)
         Text(it.title.length > 0 ? it.title : it.number)
           .fontSize(16)
           .fontWeight(FontWeight.Bold)
@@ -1135,11 +1167,13 @@ export struct ShortsView {
         Text(this.clock(this.clipPos) + ' / ' + this.clock(this.spanOf(it)))
           .fontSize(11)
           .fontColor('#E6FFFFFF')
+          .fontFeature('"tnum" 1')
         Blank()
         // 原片时间轴只作为「这段出自哪儿」的线索，进度本身按片段算
         Text('原片 ' + this.clock(it.start))
           .fontSize(10)
-          .fontColor('#80FFFFFF')
+          .fontColor('#8CFFFFFF')
+          .fontFeature('"tnum" 1')
       }
       .width('100%')
 
@@ -1296,20 +1330,21 @@ export struct ShortsView {
     .height(50)
     .borderRadius(25)
     .backgroundColor('#40FFFFFF')
-    .border({ width: 1.5, color: '#CCFFFFFF' })
+    .border({ width: 1.5, color: '#E6FFFFFF' })
+    .shadow({ radius: 12, color: '#80000000', offsetY: 3 })
     .clip(true)
     .onClick(() => {
       this.openActor(it);
     })
   }
 
-  /** 爱心：喜欢是实心玫红，没喜欢是白描边（抖音那套手感）。 */
+  /** 爱心：悬浮液态玻璃圆底 + 喜欢时柔玫红光晕（手势与逻辑零改动）。 */
   @Builder
   LikeCell(it: ShortItem) {
     Column() {
       Image(this.liked(it) ? $r('app.media.ic_s_heart_on') : $r('app.media.ic_s_heart'))
-        .width(30)
-        .height(30)
+        .width(26)
+        .height(26)
         .objectFit(ImageFit.Contain)
         // 点亮时弹一下（用户 23:32 要动效）：1 → 1.15 用带摩擦的回弹，别用线性
         .scale({ x: this.liked(it) ? 1.15 : 1, y: this.liked(it) ? 1.15 : 1 })
@@ -1317,13 +1352,18 @@ export struct ShortsView {
     }
     .width(46)
     .height(46)
+    .borderRadius(23)
     .justifyContent(FlexAlign.Center)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+    .backgroundColor(this.liked(it) ? '#33FF5E8A' : '#2E000000')
+    .border({ width: 0.75, color: this.liked(it) ? '#80FF6B94' : '#3DFFFFFF' })
+    .shadow({ radius: 14, color: this.liked(it) ? '#66FF4D7D' : '#66000000', offsetY: 3 })
     .onClick(() => {
       this.toggleLike(it);
     })
   }
 
-  /** 静音开关：矢量喇叭（原来那个 emoji 用户说不好看）。 */
+  /** 静音开关：悬浮液态玻璃圆钮（矢量喇叭，手势与逻辑零改动）。 */
   @Builder
   MuteCell() {
     Column() {
@@ -1332,15 +1372,41 @@ export struct ShortsView {
         .height(20)
         .objectFit(ImageFit.Contain)
     }
-    .width(36)
-    .height(36)
-    .borderRadius(18)
+    .width(42)
+    .height(42)
+    .borderRadius(21)
     .justifyContent(FlexAlign.Center)
-    .backgroundColor('#33000000')
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+    .backgroundColor('#2E000000')
+    .border({ width: 0.75, color: '#3DFFFFFF' })
+    .shadow({ radius: 10, color: '#59000000', offsetY: 2 })
     .onClick(() => {
       this.muted = !this.muted;
       this.applyMute();
     })
+  }
+
+  /**
+   * 左上角「更多」胶囊（2026-11-20 用户定）：三个点（⋯）= 更多。
+   * 点一下**真跳转**到「设置 → 刷一刷」页，在那里改范围；不再盖浮层。
+   * 位置从顶边下移，避开状态栏/挖孔区（原先 top:14 太靠上）。
+   */
+  @Builder
+  ScopeCapsule() {
+    GlassCapsule({
+      label: '⋯',
+      fs: 18,
+      padH: 14,
+      padV: 7,
+      radius: 18,
+      tint: '#2E000000',
+      // 负一屏是全屏叠层（系统栏都隐藏了），内容区挂 systemMaterial 不出像素——
+      // 这里走 GlassCapsule 自己的半透明兜底玻璃，不传 mat。
+      onTap: () => {
+        router.pushUrl({ url: 'pages/ShortsSettingsPage' });
+      }
+    })
+      .margin({ top: 48, left: 16 })
   }
 
   build() {
@@ -1378,6 +1444,12 @@ export struct ShortsView {
             this.openAt(index);
           }
         })
+      }
+
+      // 3.5) 左上角「更多」胶囊（2026-11-20）：⋯ 真跳转到设置页的刷片范围筛选。
+      //      只有拿到片段时才显示——空态下没有范围可筛。
+      if (this.items.length > 0) {
+        this.ScopeCapsule()
       }
 
       // 4) 右侧栏（仿抖音，2.6.2.16）：女优头像 / 爱心 / 静音。

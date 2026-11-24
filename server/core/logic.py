@@ -331,6 +331,12 @@ CREATE TABLE IF NOT EXISTS name_pinyin (
 );
 CREATE INDEX IF NOT EXISTS idx_name_pinyin_initials ON name_pinyin(initials);
 CREATE INDEX IF NOT EXISTS idx_name_pinyin_pinyin ON name_pinyin(pinyin);
+-- 索引新鲜度快照（2.8.x）：记下上次重建时 amane 主库三类名字的规模。
+-- 只存一个签名字符串，不存名字本身 —— 检索时拿它和源库现况比，落后才重建。
+CREATE TABLE IF NOT EXISTS name_pinyin_state (
+    k TEXT PRIMARY KEY,
+    v TEXT NOT NULL
+);
 """
 
 _PY_BUILD_LOCK = threading.Lock()
@@ -338,6 +344,101 @@ _PY_BUILD_LOCK = threading.Lock()
 _PY_STAMP = 0                      # 每次重建 +1，用来作废查询缓存
 
 _PY_CACHE: dict[str, list[tuple[str, str]]] = {}
+
+# 自愈节流：拼音检索是高频路径，源库规模检查再便宜也不能每次都做。
+# 失败时（读不到主库）只记时间不重建，避免每请求都去撞一个坏库。
+_PY_FRESH_AT = 0.0
+_PY_FRESH_GAP = 10.0        # 秒：拼音 miss 很多，最快 10s 查一次源库规模
+_PY_FRESH_LOCK = threading.Lock()
+_PY_FRESH_PENDING = False   # 后台重建在跑，别重复派发
+
+def _source_name_sig() -> str:
+    """amane 主库三类名字的规模签名：每类的 (条数, 最大 id)。
+
+    为什么不用 hash 全表：签名只在「拼音检索没命中」时算一次，且要足够便宜。
+    COUNT + MAX(id) 走索引，几千到几万行也是毫秒级；条数变（新入库/删）或
+    id 上限变（改名重建）都能捕捉到。读不到主库返回空串，调用方据此跳过自愈。
+    """
+    parts: list[str] = []
+    with amane_db() as conn:
+        for _kind, sql in _PY_KINDS.items():
+            # 从 _PY_KINDS 的 SQL 里取表名，别再单独维护一份映射（改 SQL 就自动跟上）
+            match = re.search(r"\bFROM\s+(\w+)", sql)
+            if match is None:
+                return ""
+            table = match.group(1)
+            try:
+                row = conn.execute(
+                    f"SELECT COUNT(*), COALESCE(MAX(id), 0) FROM {table}").fetchone()
+                parts.append(f"{int(row[0])}:{int(row[1])}")
+            except sqlite3.Error:
+                # 上游某张表没有 id 列时退回纯条数：仍能发现「新入库」，
+                # 只是发现不了「改名重建」，总比整个签名失效强。
+                try:
+                    row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                    parts.append(f"{int(row[0])}:0")
+                except sqlite3.Error:
+                    return ""
+    return "|".join(parts)
+
+def _stored_name_sig() -> str:
+    try:
+        with user_db() as conn:
+            row = conn.execute(
+                "SELECT v FROM name_pinyin_state WHERE k='src_sig'").fetchone()
+        return str(row[0]) if row else ""
+    except sqlite3.Error:
+        return ""
+
+def name_pinyin_stale() -> bool:
+    """拼音索引是否落后于主库。空签名（表没建/读不到主库）不算落后，避免误触发。"""
+    stored = _stored_name_sig()
+    if not stored:
+        return False
+    now = _source_name_sig()
+    return bool(now) and now != stored
+
+def ensure_name_pinyin_fresh() -> bool:
+    """拼音未命中时的自愈钩子：索引落后就丢后台重建，返回是否已派发。
+
+    为什么不直接在这里同步重建：几千行逐字算读音要几秒，挂在检索请求上
+    用户会觉得「一搜就卡」。本次请求按旧索引返回（本来就是 0 命中），后台
+    建完后 `_PY_CACHE` 会清掉，下一次搜索就能命中新演员。
+
+    并发：10s 节流 + `_PY_FRESH_LOCK` 判重 + 后台线程；`build_name_pinyin`
+    内部还有 `_PY_BUILD_LOCK`，所以手动 reindex 和自愈不会打架。
+    """
+    global _PY_FRESH_AT, _PY_FRESH_PENDING
+    now = time.time()
+    if now - _PY_FRESH_AT < _PY_FRESH_GAP or _PY_FRESH_PENDING:
+        return False
+    with _PY_FRESH_LOCK:
+        if time.time() - _PY_FRESH_AT < _PY_FRESH_GAP or _PY_FRESH_PENDING:
+            return False
+        _PY_FRESH_AT = time.time()
+        try:
+            if not name_pinyin_stale():
+                return False
+        except Exception as exc:  # noqa: BLE001 - 自愈不能把检索带崩
+            log(f"WARN 拼音索引新鲜度检查失败: {exc}")
+            return False
+        _PY_FRESH_PENDING = True
+
+    def run() -> None:
+        global _PY_FRESH_PENDING
+        try:
+            out = build_name_pinyin()
+            if out.get("ok"):
+                log(f"拼音索引自愈重建（源库新增名字）："
+                    f"{out.get('count')} 条 / {out.get('ms')}ms")
+        except Exception as exc:  # noqa: BLE001
+            log(f"WARN 拼音索引自愈重建失败: {exc}")
+        finally:
+            with _PY_FRESH_LOCK:
+                _PY_FRESH_PENDING = False
+
+    threading.Thread(target=run, name="name-pinyin-refresh", daemon=True).start()
+    return True
 
 def name_pinyin_count() -> int:
     try:
@@ -354,6 +455,10 @@ def build_name_pinyin(force: bool = False) -> dict:
         return {"ok": False, "reason": "pinyin.tsv 缺失或为空"}
     with _PY_BUILD_LOCK:
         start = time.time()
+        # 先取源库签名，再读名字：若这中间有新演员入库，结果是「索引有它、
+        # 签名还没跟上」→ 下次检索会多重建一次（无害）；反过来（先读名字后取
+        # 签名）会漏掉这期间的新演员，而且签名显示不落后、再也不会自愈。
+        sig = _source_name_sig()
         rows: list[tuple[str, str, str, str]] = []
         with amane_db() as conn:
             for kind, sql in _PY_KINDS.items():
@@ -390,6 +495,12 @@ def build_name_pinyin(force: bool = False) -> dict:
             conn.executemany(
                 "INSERT OR REPLACE INTO name_pinyin(kind, name, initials, pinyin) "
                 "VALUES(?,?,?,?)", rows)
+            # 写的是这次重建开头取到的签名（见上）。中途崩了签名还是旧的，
+            # 下次检索会再判为落后、再重建一次，不会把新名字永久漏掉。
+            if sig:
+                conn.execute(
+                    "INSERT OR REPLACE INTO name_pinyin_state(k, v) VALUES('src_sig', ?)",
+                    (sig,))
         _PY_STAMP += 1
         _PY_CACHE.clear()
         variant = build_variants(rows)
@@ -448,8 +559,14 @@ def pinyin_names(token: str, limit: int = 12) -> list[tuple[str, str]]:
         return []
     cached = _PY_CACHE.get(tok)
     if cached is not None:
+        # 命中缓存也要给自愈一个机会：新演员入库后，之前查过的 token 会一直
+        # 命中旧缓存，永远走不到 miss 分支（2026-11-20 这个老问题的真正形态）。
+        # 检查是 10s 节流 + 一条 user.db 查询，命中路径的额外开销可忽略。
+        ensure_name_pinyin_fresh()
         return cached
     out: list[tuple[str, str]] = []
+    # 拼音没命中往往是「名字还没进索引」，同样触发自愈检查。
+    ensure_name_pinyin_fresh()
     # 2 个字的首字母（jr / rq / cn）只做**前缀**匹配：
     # 用包含匹配的话「jr」会把全库签名里任意位置出现 j…r 的名字都捞进来
     # （实测 jr 命中 1151 部、耗时 180ms，其中大半是噪音）。3 个字以上才允许包含。
@@ -934,7 +1051,10 @@ def init_user_db() -> None:
                 position    REAL NOT NULL DEFAULT 0,
                 duration    REAL NOT NULL DEFAULT 0,
                 played_at   TEXT NOT NULL,
-                finished    INTEGER NOT NULL DEFAULT 0
+                finished    INTEGER NOT NULL DEFAULT 0,
+                -- 播放次数（2026-11-20）：隔 30 分钟以上再上报才算新的一次（见 mine.py）。
+                -- 客户端心跳几秒一次，不按窗口判的话这个数会直接顶到几百。
+                plays       INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_history_played ON history(played_at DESC);
             -- 我自己写的评价：与上游 comments（amane.db 只读）完全分开存。
@@ -1022,6 +1142,13 @@ def init_user_db() -> None:
         if "file_key" not in cols:
             conn.execute(
                 "ALTER TABLE annotations ADD COLUMN file_key TEXT NOT NULL DEFAULT ''")
+        # 迁移（2026-11-20）：history 加 plays —— 「重复观看」是画像里最硬的一个信号，
+        # 也是用户能直接看懂的口径（看了 5 遍的片，比打 5 星更能说明问题）。
+        hcols = [r["name"] for r in conn.execute("PRAGMA table_info(history)").fetchall()]
+        if "plays" not in hcols:
+            conn.execute("ALTER TABLE history ADD COLUMN plays INTEGER NOT NULL DEFAULT 0")
+            # 老数据没有次数：把「看过的」一律算 1 次，至少不让排序出现一堆 0
+            conn.execute("UPDATE history SET plays = 1 WHERE plays = 0")
         conn.execute("DROP INDEX IF EXISTS idx_annotations_meta")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_annotations_file "
@@ -4158,11 +4285,13 @@ def _kick_banner_warm_ids(ids: list[int]) -> None:
 DAILY_ORDER: tuple = ("taste", "similar", "series", "studio", "era", "top", "fresh", "explore")
 
 DAILY_REASONS: dict = {
-    "taste":   "同演员：你给过 4~5 星或收藏过的人",
-    "similar": "同标签：你偏好的口味",
-    "series":  "同系列 / 同番号前缀",
-    "studio":  "常看厂牌",
-    "era":     "你偏好的年代",
+    # 2026-11-20：理由从「只有打分才说得出口」改成按证据强度分档 ——
+    # 给过高分 > 看过好几部 > 只是常出现。隐式行为（看完、重看）也算「看过」。
+    "taste":   "同演员：给过 4~5 星 / 收藏过 / 看过他好几部",
+    "similar": "同标签：你偏好的口味（按看过部数）",
+    "series":  "同系列 / 同番号前缀（收过几部就说几部）",
+    "studio":  "厂牌：你看过最多部的",
+    "era":     "年代：你看得最多的那十年",
     "top":     "库里评分高的（你还没看）",
     "fresh":   "新入库",
     "explore": "没接触过的演员",
@@ -4211,9 +4340,62 @@ def set_daily_preset(name: str) -> dict:
     os.replace(tmp, path)
     return {"preset": name}
 
+def daily_ratio() -> float | None:
+    """用户拖过滑杆的探索比例（0~0.5）。None = 跟着 preset 走（三档预设的默认配比）。"""
+    try:
+        path = os.path.join(DATA_DIR, "daily.json")
+        with open(path, encoding="utf-8") as fh:
+            v = (json.load(fh) or {}).get("explore_ratio")
+        if v is None:
+            return None
+        return max(0.0, min(0.5, float(v)))
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def set_daily_ratio(ratio: float) -> dict:
+    """存探索比例。用户要的是「别让算法越推越窄」—— 这个滑杆就是那个闸门。"""
+    f = max(0.0, min(0.5, float(ratio)))
+    path = os.path.join(DATA_DIR, "daily.json")
+    tmp = path + ".tmp"
+    data: dict = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh) or {}
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data["explore_ratio"] = round(f, 3)
+    data.setdefault("preset", daily_preset())
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=1)
+    os.replace(tmp, path)
+    return {"explore_ratio": data["explore_ratio"]}
+
+
 def daily_quotas(limit: int, preset: str | None = None) -> dict:
-    """把权重折算成整数配额（最大余数法），保证总数正好 = limit。"""
-    weights = DAILY_PRESETS.get(preset or daily_preset(), DAILY_PRESETS[DEFAULT_DAILY_PRESET])
+    """把权重折算成整数配额（最大余数法），保证总数正好 = limit。
+
+    2026-11-20：滑杆拖过就以 `explore_ratio` 为准 —— 探索份额先切走，
+    剩下的按 preset 里其余理由的相对权重分。没拖过则完全按 preset。
+    """
+    weights = dict(DAILY_PRESETS.get(preset or daily_preset(),
+                                    DAILY_PRESETS[DEFAULT_DAILY_PRESET]))
+    ratio = daily_ratio()
+    if ratio is not None:
+        ex = max(0, min(limit, int(round(limit * ratio))))
+        base = {k: v for k, v in weights.items() if k != "explore" and v > 0}
+        total = sum(base.values()) or 1
+        rest = limit - ex
+        raw = {k: (rest * v / total) for k, v in base.items()}
+        out: dict = {k: int(v) for k, v in raw.items()}
+        out["explore"] = ex
+        gap = limit - sum(out.values())
+        for k, _v in sorted(raw.items(), key=lambda kv: -(kv[1] - int(kv[1])))[:max(0, gap)]:
+            out[k] = out.get(k, 0) + 1
+        return {k: v for k, v in out.items() if v > 0}
     total = sum(w for w in weights.values() if w > 0) or 1
     raw = {k: (limit * w / total) for k, w in weights.items() if w > 0}
     out = {k: int(v) for k, v in raw.items()}
@@ -4221,6 +4403,19 @@ def daily_quotas(limit: int, preset: str | None = None) -> dict:
     for k, _v in sorted(raw.items(), key=lambda kv: -(kv[1] - int(kv[1])))[:max(0, rest)]:
         out[k] = out.get(k, 0) + 1
     return out
+
+def _age_days(iso_ts) -> float:
+    """`played_at` 距今多少天。解析不出来按「很久以前」算（衰减到最低档）。"""
+    if not iso_ts:
+        return 999.0
+    try:
+        dt = datetime.fromisoformat(str(iso_ts))
+    except ValueError:
+        return 999.0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - dt).total_seconds() / 86400.0)
+
 
 def _daily_profile() -> dict:
     """口味画像 —— 每日推荐的**理由来源**（2026-11-15）。
@@ -4233,7 +4428,15 @@ def _daily_profile() -> dict:
     """
     prof: dict = {"stars": {}, "seen": set(), "disliked": set(),
                   "actors": {}, "actor_seed": {}, "tags": {}, "series": {},
-                  "studios": {}, "eras": {}, "prefixes": {}, "seeds": {}}
+                  "studios": {}, "eras": {}, "prefixes": {}, "seeds": {},
+                  # 隐式行为累加进来的片（2026-11-20）：{metadata_id: 权重}
+                  "implicit": {},
+                  # 理由用的**整数计数**（2026-11-20）：权重是给排序的，说给用户听要
+                  # 「你看过她的 4 部」这种能对上号的事实，不能报小数权重。
+                  "actor_hits": {}, "tag_hits": {}, "series_hits": {},
+                  "studio_hits": {}, "era_hits": {},
+                  # 重看过的片：{metadata_id: plays}，理由里优先说这件事
+                  "rewatch": {}}
     try:
         with user_db() as conn:
             ratings = conn.execute("SELECT metadata_id, score FROM user_ratings").fetchall()
@@ -4269,22 +4472,114 @@ def _daily_profile() -> dict:
         for name in _json_list(row["actors"])[:4]:
             if name:
                 prof["actors"][name] = prof["actors"].get(name, 0) + 1
+                prof["actor_hits"][name] = prof["actor_hits"].get(name, 0) + 1
                 if name not in prof["actor_seed"]:
                     prof["actor_seed"][name] = (_short_title(row["title"]), stars_of_row)
         for name in _json_list(row["tags"])[:6]:
             if name:
                 prof["tags"][name] = prof["tags"].get(name, 0) + 1
+                prof["tag_hits"][name] = prof["tag_hits"].get(name, 0) + 1
         if row["series"]:
             prof["series"][row["series"]] = prof["series"].get(row["series"], 0) + 1
+            prof["series_hits"][row["series"]] = prof["series_hits"].get(row["series"], 0) + 1
         if row["studio"]:
             prof["studios"][row["studio"]] = prof["studios"].get(row["studio"], 0) + 1
+            prof["studio_hits"][row["studio"]] = prof["studio_hits"].get(row["studio"], 0) + 1
         year = str(row["release"] or "")[:4]
         if year.isdigit():
             era = f"{(int(year) // 10) * 10}s"
             prof["eras"][era] = prof["eras"].get(era, 0) + 1
+            prof["era_hits"][era] = prof["era_hits"].get(era, 0) + 1
         prefix = (row["number"] or "").split("-")[0].strip().upper()
         if prefix:
             prof["prefixes"][prefix] = prof["prefixes"].get(prefix, 0) + 1
+
+    # ── 隐式行为（2026-11-20）：完成度 / 跳过 / 时间衰减 ─────────────────────
+    # 为什么要加：107 部看过里只有 35 部打过星 —— 评分是少数派。剩下那些
+    # 「看了多久」的信号以前全扔掉，等于把大半行为数据浪费了。
+    try:
+        with user_db() as conn:
+            hrows = conn.execute(
+                "SELECT metadata_id, position, duration, played_at, finished, plays "
+                "FROM history"
+            ).fetchall()
+    except sqlite3.Error as exc:
+        hrows = []
+        log(f"WARN 每日推荐画像：读不到观看历史 {exc}")
+    implicit: dict[int, float] = {}
+    for h in hrows:
+        try:
+            mid = int(h["metadata_id"])
+        except (TypeError, ValueError):
+            continue
+        dur = float(h["duration"] or 0)
+        pos = float(h["position"] or 0)
+        ratio = (pos / dur) if dur > 1 else 0.0
+        fin = int(h["finished"] or 0)
+        try:
+            plays = int(h["plays"] or 0)
+        except (TypeError, ValueError):
+            plays = 0
+        if fin or ratio >= 0.85:
+            w = 0.8
+        elif ratio >= 0.4:
+            w = 0.35
+        elif 0 < ratio < 0.15:
+            w = -0.5          # 点开就走：弱负信号
+        else:
+            w = 0.0
+        # 重复观看（2026-11-20）：看了 2 遍以上，每多一遍补 0.15，最多 +0.5。
+        # 这是最硬的信号 —— 一部片能被反复打开，比打 5 星更能说明问题。
+        if plays >= 2 and w >= 0:
+            w += min(0.5, 0.15 * (plays - 1))
+        if w == 0.0:
+            continue
+        # 时间衰减：一个月内算「现在喜欢」，三个月内打六折，更早只留四分之一。
+        # 不做衰减的话，三年前看过的一批片会一直压在最新口味上。
+        age = _age_days(h["played_at"])
+        decay = 1.0 if age <= 30 else (0.6 if age <= 90 else 0.25)
+        implicit[mid] = implicit.get(mid, 0.0) + w * decay
+
+    # 只把**正**信号拿去学特征：负信号（点开就走）不进排行，否则某个标签
+    # 只要有几部被点开就走，整类都会被拉黑 —— 那正是用户说的「越推越窄」。
+    extra = [m for m, w in implicit.items() if w > 0 and m not in stars and m not in favs][:200]
+    if extra:
+        try:
+            with amane_db() as conn:
+                marks = ",".join("?" * len(extra))
+                rows2 = conn.execute(
+                    f"SELECT {META_COLUMNS} FROM metadata m WHERE m.id IN ({marks})", extra
+                ).fetchall()
+        except sqlite3.Error as exc:
+            rows2 = []
+            log(f"WARN 每日推荐画像：读不到隐式片 {exc}")
+        for row in rows2:
+            w = min(0.8, float(implicit.get(int(row["id"]), 0.0)))
+            if w <= 0:
+                continue
+            prof["implicit"][int(row["id"])] = round(w, 2)
+            for name in _json_list(row["actors"])[:4]:
+                if name:
+                    prof["actors"][name] = prof["actors"].get(name, 0) + w
+                    prof["actor_hits"][name] = prof["actor_hits"].get(name, 0) + 1
+            for name in _json_list(row["tags"])[:6]:
+                if name:
+                    prof["tags"][name] = prof["tags"].get(name, 0) + w
+                    prof["tag_hits"][name] = prof["tag_hits"].get(name, 0) + 1
+            if row["series"]:
+                prof["series"][row["series"]] = prof["series"].get(row["series"], 0) + w
+                prof["series_hits"][row["series"]] = prof["series_hits"].get(row["series"], 0) + 1
+            if row["studio"]:
+                prof["studios"][row["studio"]] = prof["studios"].get(row["studio"], 0) + w
+                prof["studio_hits"][row["studio"]] = prof["studio_hits"].get(row["studio"], 0) + 1
+            year = str(row["release"] or "")[:4]
+            if year.isdigit():
+                era = f"{(int(year) // 10) * 10}s"
+                prof["eras"][era] = prof["eras"].get(era, 0) + w
+                prof["era_hits"][era] = prof["era_hits"].get(era, 0) + 1
+            prefix = (row["number"] or "").split("-")[0].strip().upper()
+            if prefix:
+                prof["prefixes"][prefix] = prof["prefixes"].get(prefix, 0) + w
     return prof
 
 def _daily_pool(where: str, params: tuple, order: str = "m.updated_at DESC",
@@ -4299,6 +4594,15 @@ def _daily_pool(where: str, params: tuple, order: str = "m.updated_at DESC",
 
 def _by_score(items: list[dict]) -> list[dict]:
     return sorted(items, key=lambda x: -float(x.get("score") or 0))
+
+
+def _score_text(x: dict) -> str:
+    """分数文案。0 分 = 库里没评分，别把「0.0 分」当理由说给用户听。"""
+    try:
+        s = float(x.get("score") or 0)
+    except (TypeError, ValueError):
+        return ""
+    return f"{s:.1f} 分" if s > 0 else ""
 
 def build_daily(limit: int = 12, day: date | None = None) -> list[dict]:
     """每日推荐：**理由先定、片子后挑**（2026-11-15 用户定 · 可扩展登记表）。
@@ -4318,7 +4622,23 @@ def build_daily(limit: int = 12, day: date | None = None) -> list[dict]:
     quota = daily_quotas(limit)
     today_ord: int = d.toordinal()
 
-    def take(items: list[dict], kind: str, text_of, need: int) -> int:
+    # 多样性闸（2026-11-20）：同一演员最多 2 部、同一系列最多 1 部。
+    # 不加的话「常看演员」那一档会把同一个人的片连着铺开（12 部里 5 部同演员），
+    # 就是用户说的「越推越窄」。挑不满时由后面的 top / fresh 桶兜底。
+    actor_cap = 2
+    series_cap = 1
+    # 番号前缀也限一道（2026-11-20 实测发现）：JMSZ-94/95/97 这种同厂同系列的片，
+    # 如果 series 字段没填，series_cap 拦不住，结果 12 部里连着三部同一批货，
+    # 理由还一模一样。前缀最多 2 部。
+    prefix_cap = 2
+    actor_hit: dict = {}
+    series_hit: dict = {}
+    prefix_hit: dict = {}
+
+    def take(items: list[dict], kind: str, text_of, need: int,
+             actor_cap_local: int = -1, series_cap_local: int = -1) -> int:
+        acap = actor_cap if actor_cap_local < 0 else actor_cap_local
+        scap = series_cap if series_cap_local < 0 else series_cap_local
         n = 0
         for x in items:
             if n >= need:
@@ -4326,7 +4646,23 @@ def build_daily(limit: int = 12, day: date | None = None) -> list[dict]:
             mid = x.get("id")
             if mid in used or mid in seen or not x.get("poster"):
                 continue
+            acts = _json_list(x.get("actors"))[:2]
+            ser = str(x.get("series") or "").strip()
+            pref = str(x.get("number") or "").split("-")[0].strip().upper()
+            if ser and series_hit.get(ser, 0) >= scap:
+                continue
+            if pref and prefix_hit.get(pref, 0) >= prefix_cap:
+                continue
+            if acts and all(actor_hit.get(a, 0) >= acap for a in acts):
+                continue
             used.add(mid)
+            for a in acts:
+                if a:
+                    actor_hit[a] = actor_hit.get(a, 0) + 1
+            if ser:
+                series_hit[ser] = series_hit.get(ser, 0) + 1
+            if pref:
+                prefix_hit[pref] = prefix_hit.get(pref, 0) + 1
             x["reason_kind"] = kind
             x["reason_text"] = text_of(x)
             out.append(x)
@@ -4353,9 +4689,16 @@ def build_daily(limit: int = 12, day: date | None = None) -> list[dict]:
                 break
             rows = rot(_by_score(_daily_pool(DAILY_ACTOR_WHERE, (actor,))),
                        f"taste:{actor}")
-            st, _ss = prof["actor_seed"].get(actor, ("", 5))
-            if st:
-                text_of = (lambda t, a: (lambda x: f"你给《{t}》5 星 · 同演员 {a}"))(st, actor)
+            st, ss = prof["actor_seed"].get(actor, ("", 0))
+            hits = prof["actor_hits"].get(actor, 0)
+            # 理由按「证据强度」挑一句（2026-11-20）：
+            #   明确给过高分 > 看过好几部 > 只是常出现。
+            # 以前只有第一档和第三档，中间那些「看完但没打分」的片就只剩一句
+            # 「常看的演员」—— 用户看着像废话。
+            if st and ss >= 4:
+                text_of = (lambda t, s, a: (lambda x: f"你给《{t}》{s} 星 · 同演员 {a}"))(st, ss, actor)
+            elif hits >= 2:
+                text_of = (lambda a, n: (lambda x: f"你看过 {a} 的 {n} 部"))(actor, hits)
             else:
                 text_of = (lambda a: (lambda x: f"常看的演员 {a}"))(actor)
             left -= take(rows, "taste", text_of, left)
@@ -4369,9 +4712,12 @@ def build_daily(limit: int = 12, day: date | None = None) -> list[dict]:
             if left <= 0:
                 break
             rows = rot(_by_score(_daily_pool(DAILY_TAG_WHERE, (tag,))), f"similar:{tag}")
-            left -= take(rows, "similar",
-                         (lambda t, g: (lambda x: f"《{t}》那种口味 · 同标签 {g}"))(seed_title, tag),
-                         left)
+            hits = prof["tag_hits"].get(tag, 0)
+            if hits >= 3:
+                text_of = (lambda g, n: (lambda x: f"你偏好的「{g}」· 看过 {n} 部"))(tag, hits)
+            else:
+                text_of = (lambda t, g: (lambda x: f"《{t}》那种口味 · 同标签 {g}"))(seed_title, tag)
+            left -= take(rows, "similar", text_of, left)
         return need - left
 
     def p_series(need: int) -> int:
@@ -4382,8 +4728,12 @@ def build_daily(limit: int = 12, day: date | None = None) -> list[dict]:
             if left <= 0:
                 break
             rows = rot(_by_score(_daily_pool("m.series = ?", (name,))), f"series:{name}")
-            left -= take(rows, "series",
-                         (lambda s: (lambda x: f"《{s}》同一系列"))(name), left)
+            hits = prof["series_hits"].get(name, 0)
+            if hits >= 2:
+                text_of = (lambda s, n: (lambda x: f"《{s}》系列 · 你已经收了 {n} 部"))(name, hits)
+            else:
+                text_of = (lambda s: (lambda x: f"《{s}》同一系列"))(name)
+            left -= take(rows, "series", text_of, left)
         for pref, _cnt in prefixes[:3]:
             if left <= 0:
                 break
@@ -4399,7 +4749,12 @@ def build_daily(limit: int = 12, day: date | None = None) -> list[dict]:
             if left <= 0:
                 break
             rows = rot(_by_score(_daily_pool("m.studio = ?", (name,))), f"studio:{name}")
-            left -= take(rows, "studio", (lambda s: (lambda x: f"你常看 {s}"))(name), left)
+            hits = prof["studio_hits"].get(name, 0)
+            if hits >= 2:
+                text_of = (lambda s, n: (lambda x: f"你看过 {s} 的 {n} 部"))(name, hits)
+            else:
+                text_of = (lambda s: (lambda x: f"你常看 {s}"))(name)
+            left -= take(rows, "studio", text_of, left)
         return need - left
 
     def p_era(need: int) -> int:
@@ -4412,21 +4767,47 @@ def build_daily(limit: int = 12, day: date | None = None) -> list[dict]:
             rows = rot(_by_score(_daily_pool(
                 "substr(m.release, 1, 4) BETWEEN ? AND ?",
                 (str(base), str(base + 9)), "m.release DESC", 40)), f"era:{era}")
-            left -= take(rows, "era", (lambda e: (lambda x: f"你偏好的 {e} 年代"))(era), left)
+            hits = prof["era_hits"].get(era, 0)
+            if hits >= 2:
+                text_of = (lambda e, n: (lambda x: f"你 {e} 的片看过 {n} 部"))(era, hits)
+            else:
+                text_of = (lambda e: (lambda x: f"你偏好的 {e} 年代"))(era)
+            left -= take(rows, "era", text_of, left)
         return need - left
 
-    def p_top(need: int) -> int:
-        rows = rot(_by_score(_daily_pool("", (), "m.updated_at DESC", 160)), "top")
-        return take(rows, "top",
-                    lambda x: f"库内高分 {float(x.get('score') or 0):.1f} · 你还没看", need)
+    def p_top(need: int, strict: bool = False) -> int:
+        pool = _daily_pool("", (), "m.updated_at DESC", 160)
+        scored = [x for x in pool if float(x.get("score") or 0) > 0]
+        if strict and not scored:
+            # 整池都没有评分 = 这一档说不出「库内高分」。主配额时直接让位（由调用方
+            # 转给探索），别硬凑十几条「你还没看」；兜底时才允许用它填满。
+            return 0
+        rows = rot(_by_score(scored or pool), "top")
+
+        # 库里很多片没有评分（score=0）：那种情况说「库内高分 0.0」等于自曝其短。
+        # 但也不能十几条都说「你还没看」—— 那看着像没写理由。退一步给个能对上号的
+        # 事实：这是哪一年的片。
+        def _top_text(x: dict) -> str:
+            sc = _score_text(x)
+            if sc:
+                return f"库内高分 {sc} · 你还没看"
+            year = str(x.get("release") or "")[:4]
+            if year.isdigit():
+                return f"{year} 年的片 · 你还没看"
+            return "你还没看过的片"
+        return take(rows, "top", _top_text, need)
 
     def p_fresh(need: int) -> int:
         cutoff = (d - timedelta(days=45)).isoformat()
         rows = rot(_by_score(_daily_pool("m.updated_at >= ?", (cutoff,), "m.updated_at DESC", 60)),
                    "fresh")
-        return take(rows, "fresh",
-                    lambda x: f"新入库 {(today_ord - _ord_of(x.get('updated_at')))} 天 · "
-                              f"{float(x.get('score') or 0):.1f} 分", need)
+
+        def _fresh_text(x: dict) -> str:
+            days = today_ord - _ord_of(x.get("updated_at"))
+            sc = _score_text(x)
+            base = f"新入库 {days} 天" if days > 0 else "今天刚入库"
+            return f"{base} · {sc}" if sc else base
+        return take(rows, "fresh", _fresh_text, need)
 
     def p_explore(need: int) -> int:
         pool = rot(_by_score(_daily_pool("", (), "m.updated_at DESC", 120)), "explore")
@@ -4436,9 +4817,11 @@ def build_daily(limit: int = 12, day: date | None = None) -> list[dict]:
         def explore_text(x: dict) -> str:
             ac = x.get("actors") or []
             name = ac[0] if ac else ""
-            sc = f"{float(x.get('score') or 0):.1f} 分"
+            sc = _score_text(x)
             # 没写演员的片子说「没看过的 演员」很怪，换个说法
-            return f"没看过的 {name} · {sc}" if name else f"没碰过的片子 · {sc}"
+            if name:
+                return f"没看过的 {name} · {sc}" if sc else f"没看过的 {name}"
+            return f"没碰过的片子 · {sc}" if sc else "没碰过的片子"
 
         return take(strangers, "explore", explore_text, need)
 
@@ -4451,6 +4834,13 @@ def build_daily(limit: int = 12, day: date | None = None) -> list[dict]:
         if need <= 0 or kind not in pickers:
             continue
         try:
+            if kind == "top":
+                # top 是唯一「理由可能说不出口」的档（库里没评分时）：
+                # 拿不满的部分转给探索，别用「你还没看」硬填。
+                got = p_top(need, strict=True)
+                if got < need:
+                    p_explore(need - got)
+                continue
             pickers[kind](need)
         except Exception as exc:      # noqa: BLE001
             log(f"WARN 每日推荐 {kind} 桶失败（跳过）: {exc}")
@@ -5091,8 +5481,12 @@ def _bootstrap_name_pinyin() -> None:
     """
     def run() -> None:
         try:
-            if name_pinyin_count() > 0:
+            if name_pinyin_count() > 0 and _stored_name_sig():
+                # 表里有数据、也有上次重建时的源库签名：交给检索时的自愈钩子，
+                # 启动不再白做一次全量重建。
                 return
+            # 空表（首次装）或老版本升级上来没签名：无条件建一次，把签名补上。
+            # 不这样做的话，老库会一直「有索引但没签名 → 自愈判不出落后」。
             build_name_pinyin()
         except Exception as exc:  # noqa: BLE001
             log(f"WARN 拼音索引初始化失败: {exc}")

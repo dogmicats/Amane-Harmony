@@ -1638,6 +1638,12 @@ def facets_media(handler, query, kind, facet_id, *_):
             "sort_by": sort_by,
         })
 
+    # 搜索（2026-11-20）：「我的标签」下的待下载片大多没有 media_files，
+    # 核心 browse 索引不到，搜索只能留在 facets/media 这条链上。上游
+    # /api/metadata 的搜索参数是 search=（不是 q=），实测 search=MOON 精确命中。
+    search = _one(query, "search").strip()
+    if search:
+        params["search"] = search
     # 与影片库一致的筛选口径：字幕 / 马赛克 / 分辨率
     if _one(query, "has_subtitle") in ("true", "1"):
         params["has_subtitle"] = "true"

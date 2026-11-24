@@ -7,6 +7,7 @@ import { Theme } from '../common/Theme';
 import { DetailParams } from '../common/Types';
 import { clock } from '../common/Util';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 
 /**
  * 我的弹幕（R23 汇总页，两级）。
@@ -262,9 +263,10 @@ struct MyAnnotationsPage {
           Text(this.fileCountOf(g) > 1 ? `${g.items.length} 条 · ${this.fileCountOf(g)} 个版本`
             : `${g.items.length} 条`)
             .fontSize(9)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .padding({ left: 5, right: 5, top: 1, bottom: 1 })
-            .backgroundColor(Theme.ACCENT_SOFT)
+            .backgroundColor(Theme.accentAlpha(0.16))
+            .border({ width: 0.5, color: Theme.inkAlpha(0.38) })
             .borderRadius(5)
         }
         .width('100%')
@@ -289,7 +291,7 @@ struct MyAnnotationsPage {
         if (g.items.length > 3) {
           Text(`还有 ${g.items.length - 3} 条 ›`)
             .fontSize(9)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .width('100%')
         }
       }
@@ -332,13 +334,13 @@ struct MyAnnotationsPage {
             .textOverflow({ overflow: TextOverflow.Ellipsis })
           Text(`${this.detailGroup() === undefined ? 0 : this.detailGroup()!.items.length} 条弹幕`)
             .fontSize(9)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
         Text('从头播')
           .fontSize(11)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
           .padding({ left: 12, right: 12, top: 6, bottom: 6 })
           .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
           .backgroundColor(Theme.accentAlpha(0.30))
@@ -357,7 +359,8 @@ struct MyAnnotationsPage {
       .width('100%')
       .padding(10)
       .backgroundColor(Theme.CARD)
-      .borderRadius(12)
+      .borderRadius(16)
+      .border({ width: 0.75, color: Theme.STROKE })
 
       List({ space: 8 }) {
         ForEach(this.detailFiles(), (fg: AnnoFileGroup) => {
@@ -384,7 +387,7 @@ struct MyAnnotationsPage {
               Row({ space: 10 }) {
                 Text(clock(a.t_ms / 1000.0))
                   .fontSize(10)
-                  .fontColor(Theme.ACCENT)
+                  .fontColor(Theme.ACCENT_INK)
                   .width(46)
                 Text(a.body)
                   .fontSize(12)
@@ -398,7 +401,8 @@ struct MyAnnotationsPage {
               .width('100%')
               .padding(10)
               .backgroundColor(Theme.CARD)
-              .borderRadius(10)
+              .borderRadius(16)
+              .border({ width: 0.75, color: Theme.STROKE })
               .onClick(() => {
                 this.jump(a.metadata_id, a.t_ms / 1000.0, a.number, a.title,
                   a.file_key, a.file_name);
@@ -485,7 +489,9 @@ struct MyAnnotationsPage {
 
   build() {
     Navigation(this.navStack) {
-      Column() {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
+        Column() {
 
   // 六十改：让出浮层标题栏的高度
   Blank().height(this.barH())
@@ -493,7 +499,7 @@ struct MyAnnotationsPage {
         if (this.note.length > 0) {
           Text(this.note)
             .fontSize(10)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .padding({ left: Theme.PAGE_PAD, bottom: 4 })
             .width('100%')
         }
@@ -534,9 +540,13 @@ struct MyAnnotationsPage {
           }
           .width('100%')
           .layoutWeight(1)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.pageBottomSafe() })
           .scrollBar(BarState.Off)
         }
+      }
+      .width('100%')
+      .height('100%')
+
       }
       .width('100%')
       .height('100%')

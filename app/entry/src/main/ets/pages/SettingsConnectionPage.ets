@@ -7,14 +7,13 @@ import {
   DEFAULT_AMANE, DEFAULT_USER, DEFAULT_WAN_AMANE, DEFAULT_TOKEN
 } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BuildConfig } from '../common/BuildConfig';
-import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { PageTitle, GlassBack } from '../view/GlassKit';
+import {
+  SettingsAmbientGlow, SettingsRowDivider, SettingsSectionTitle, VelvetChip
+} from '../view/SettingsKit';
 
-/**
- * 从一条地址里取「scheme://host」（2026-11-15）：给「本机实例 :本地端口」换端口用。
- * 只换端口、不换机器 —— 所以必须先把主机名摘干净（去掉端口、路径、尾部斜杠）。
- * 解析不出来返回空串，调用方不要瞎拼地址。
- */
 function hostOf(raw: string): string {
   const s: string = raw.trim();
   if (s.length === 0) {
@@ -26,69 +25,34 @@ function hostOf(raw: string): string {
   return host.length > 0 ? `${https ? 'https://' : 'http://'}${host}` : '';
 }
 
-/**
- * 设置页小胶囊：必须是 @Component（@Builder 传值不重建，点了看不出选中）。
- */
-@Component
-struct SettingChip {
-  @Prop label: string = '';
-  @Prop active: boolean = false;
-  onTap: () => void = () => {};
-
-  build() {
-    Text(this.label)
-      .fontSize(12)
-      .fontColor(this.active ? '#FFFFFF' : Theme.TEXT_DIM)
-      .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-      .backgroundColor(this.active ? Theme.ACCENT : Theme.CARD_HI)
-      .borderRadius(14)
-      .onClick(() => {
-        this.onTap();
-      })
-  }
-}
-
 @Entry
 @Component
 struct SettingsConnectionPage {
   @State draftAmane: string = Store.I.lanAmane;
   @State draftUser: string = Store.I.lanUser;
-  /**
-   * 本机开发实例（本地端口）的开关状态（2026-11-15）。
-   *
-   * 但每次手改地址太烦，人就爱抄近路（昨天就有一个会话为了测红点，把验收环境
-   *
-   * 只**换端口**、主机沿用你当前填的那条 —— 开发实例跑在哪台机器上由你决定，
-   * 不写死任何机器 IP（写死就会跟着发布版一起出去）。
-   */
   @State devActive: boolean = Store.I.prefString('dev_local_active', '0') === '1';
   @State draftWan: string = Store.I.wanAmane;
   @State draftWanUser: string = Store.I.wanUser;
-  /**
-   * 外网用户数据走哪条路：
-   *   domain —— 跟随域名，由隧道按路径分流到 8770（默认，等价于以前）
-   *   custom —— 自己写完整地址，**可以带端口和路径**（把某个端口直接映射到公网时用）
-   */
   @State wanPreset: string = 'domain';
   @State draftToken: string = Store.I.token;
+  @State showToken: boolean = false;
   @State draftMode: string = Store.I.mode;
   @State testResult: string = '';
+  @State testOk: boolean = true;
+  @State pingMs: number = -1;
+  @State serverVer: string = '';
   @State testing: boolean = false;
-  /** 部署说明默认折叠（Docker 命令这类东西平时用不到）。 */
   @State deployOpen: boolean = false;
   @State crashText: string = '';
-  /** 抽卡模式：改了立刻生效并落盘，不跟「保存并重连」绑在一起（那个会跳回首页）。 */
-  @State draftGachaCount: number = Store.I.gachaCount;
-  @State draftGachaAuto: boolean = Store.I.gachaAuto;
+  @StorageProp('amaneTopInset') topInset: number = 30;
+  private navStack: NavPathStack = new NavPathStack();
 
   aboutToAppear(): void {
     this.refreshCrash();
-    // 从已保存的地址反推当前是哪种走法，用户再进来看到的还是自己上次选的
     const u: string = Store.I.wanUser.trim();
     if (u.length === 0) {
       this.wanPreset = 'domain';
     } else if (BuildConfig.CHANNEL === 'self' && u.endsWith('/dev')) {
-      // 'dev' 只有自用线才有这个 chip；发布版把带 /dev 的地址当普通自定义地址
       this.wanPreset = 'dev';
     } else {
       this.wanPreset = 'custom';
@@ -100,7 +64,7 @@ struct SettingsConnectionPage {
     const ctx = getContext(this) as common.UIAbilityContext;
     const info: CrashInfo = crashInfo(ctx);
     this.crashText = info.exists
-      ? `崩溃日志 ${info.lines} 行 / ${info.bytes} 字符（启动后会静默上报）`
+      ? `崩溃日志 ${info.lines} 行 / ${info.bytes} 字符`
       : '暂无崩溃日志';
   }
 
@@ -109,9 +73,10 @@ struct SettingsConnectionPage {
     const n: number = await uploadCrashLog(ctx);
     if (n > 0) {
       this.refreshCrash();
-      this.testResult = `已上报 ${n} 字符的崩溃日志`;
+      this.testOk = true;
+      this.testResult = `已上报 ${n} 字符崩溃日志`;
     } else {
-      this.crashText = '没有可上报的日志，或服务不可达（本地文件已保留）';
+      this.crashText = '无可上报日志或服务不可达';
     }
   }
 
@@ -121,119 +86,24 @@ struct SettingsConnectionPage {
     this.refreshCrash();
   }
 
-  /** 抽卡参数是列表页的全局默认值，改了马上存，不依赖下面那个「保存并重连」。 */
-  private applyGachaCount(n: number): void {
-    this.draftGachaCount = n;
-    Store.I.gachaCount = n;
-    Store.I.save();
-  }
-
-  private applyGachaAuto(on: boolean): void {
-    this.draftGachaAuto = on;
-    Store.I.gachaAuto = on;
-    Store.I.save();
-  }
-
-  @Builder
-  Field(label: string, value: string, hint: string, onChange: (v: string) => void) {
-    Column({ space: 6 }) {
-      Text(label)
-        .fontSize(11)
-        .fontColor(Theme.TEXT_FAINT)
-        .width('100%')
-      TextInput({ text: value, placeholder: hint })
-        .height(42)
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-        .backgroundColor('#1FFFFFFF')
-        .border({ width: 0.5, color: '#33FFFFFF' })
-        .fontColor(Theme.TEXT)
-        .fontSize(13)
-        .placeholderColor(Theme.TEXT_FAINT)
-        .caretColor(Theme.ACCENT)
-        .onChange((v: string) => {
-          onChange(v);
-        })
+  private toggleDevLocal(nextOn: boolean): void {
+    if (!nextOn) {
+      const back: string = Store.I.prefString('dev_local_before', '');
+      this.draftUser = back.length > 0 ? back : DEFAULT_USER;
+      Store.I.prefSetString('dev_local_active', '0');
+      this.devActive = false;
+      return;
     }
-    .width('100%')
-  }
-
-  @Builder
-  ModeChip(label: string, value: string) {
-    Text(label)
-      .fontSize(13)
-      .fontColor(this.draftMode === value ? '#FFFFFF' : Theme.TEXT_DIM)
-      .layoutWeight(1)
-      .height(34)
-      .textAlign(TextAlign.Center)
-      .borderRadius(10)
-      .backgroundColor(this.draftMode === value ? Theme.ACCENT : Color.Transparent)
-      .onClick(() => {
-        this.draftMode = value;
-      })
-  }
-
-  @Builder
-  WanChip(label: string, key: string) {
-    Text(label)
-      .fontSize(11)
-      .fontColor(this.wanPreset === key ? '#FFFFFF' : Theme.TEXT_DIM)
-      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-      .backgroundColor(this.wanPreset === key ? Theme.ACCENT : Theme.CARD_HI)
-      .borderRadius(12)
-      .onClick(() => {
-        this.wanPreset = key;
-      })
-  }
-
-  /** 本机开发实例的 chip：一下切到 本地端口，再一下切回原来那条地址。 */
-  @Builder
-  DevChip() {
-    Text(this.devActive ? '本机实例 :本地端口 ✓' : '本机实例 :本地端口')
-      .fontSize(11)
-      .fontColor(this.devActive ? '#FFFFFF' : Theme.TEXT_DIM)
-      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-      .backgroundColor(this.devActive ? Theme.ACCENT : Theme.CARD_HI)
-      .borderRadius(12)
-      .onClick(() => {
-        if (this.devActive) {
-          // 切回原地址：切走时记在偏好里，重启 App 也还记得
-          const back: string = Store.I.prefString('dev_local_before', '');
-          this.draftUser = back.length > 0 ? back : DEFAULT_USER;
-          Store.I.prefSetString('dev_local_active', '0');
-          this.devActive = false;
-          return;
-        }
-        Store.I.prefSetString('dev_local_before', this.draftUser);
-        const host: string = hostOf(this.draftUser);
-        if (host.length === 0) {
-          return;
-        }
-        this.draftUser = `${host}:本地端口`;
-        Store.I.prefSetString('dev_local_active', '1');
-        this.devActive = true;
-      })
-  }
-
-  /**
-   * 本机实例一行：chip + 一句人话。
-   * 主机沿用上面那条地址 —— 开发实例通常就跑在你自己的电脑上，IP 换了把它改一下即可，
-   * 不动端口。
-   */
-  @Builder
-  DevRow() {
-    Row({ space: 8 }) {
-      this.DevChip()
-      Text('切到本机开发实例（端口 本地端口），主机沿用上面这条；改完点下面「保存并重连」')
-        .fontSize(10)
-        .fontColor(Theme.TEXT_FAINT)
-        .layoutWeight(1)
-        .lineHeight(14)
+    Store.I.prefSetString('dev_local_before', this.draftUser);
+    const host: string = hostOf(this.draftUser);
+    if (host.length === 0) {
+      return;
     }
-    .width('100%')
-    .alignItems(VerticalAlign.Center)
+    this.draftUser = `${host}:本地端口`;
+    Store.I.prefSetString('dev_local_active', '1');
+    this.devActive = true;
   }
 
-  /** 按当前选择算出「外网用户数据地址」；空串 = 跟随外网地址（走隧道默认分流）。 */
   private wanUserBase(): string {
     const domain: string = normalizeBase(this.draftWan, 'https');
     if (this.wanPreset === 'dev') {
@@ -245,21 +115,16 @@ struct SettingsConnectionPage {
     return '';
   }
 
-  /** 三种走法各说各的原理；发布版不提 /dev 与端口号（那是本仓库的部署细节）。 */
   private wanHint(): string {
     if (this.wanPreset === 'dev') {
       return '该预设不在发布版提供。';
     }
     if (this.wanPreset === 'custom') {
-      return '填完整地址，端口和路径都按你写的来；前提是那个端口真的能从公网连上（路由器 / 反向代理有映射）。';
+      return '填写完整公网地址与端口';
     }
-    if (BuildConfig.CHANNEL === 'self') {
-      return '跟随外网地址：媒体与用户数据同一个域名，由隧道按路径分流（用户数据 → 8770）。';
-    }
-    return '跟随外网地址：媒体与用户数据都用上面这一个地址（默认，不用额外设置）。';
+    return BuildConfig.CHANNEL === 'self' ? '同域名按路径分流至用户服务' : '默认复用上方外网地址';
   }
 
-  /** 探一次 /api/user/ping 拿版本号；连不上返回空串（用来区分 1.3.6 和 1.3.14）。 */
   private async pingVersion(base: string): Promise<string> {
     if (base.length === 0) {
       return '';
@@ -274,17 +139,114 @@ struct SettingsConnectionPage {
     }
   }
 
+  private statusSubLine(): string {
+    const parts: string[] = [];
+    if (this.pingMs >= 0) {
+      parts.push(`延迟 ${this.pingMs} ms`);
+    }
+    if (this.serverVer.length > 0) {
+      parts.push(`服务 ${this.serverVer}`);
+    }
+    if (parts.length > 0) {
+      return parts.join(' · ');
+    }
+    return Store.I.amane.replace('http://', '').replace('https://', '');
+  }
+
   @Builder
-  GachaChip(label: string, active: boolean, onTap: () => void) {
-    Text(label)
-      .fontSize(12)
-      .fontColor(active ? '#FFFFFF' : Theme.TEXT_DIM)
-      .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-      .backgroundColor(active ? Theme.ACCENT : Theme.CARD_HI)
-      .borderRadius(14)
+  StatusBanner() {
+    Row({ space: 10 }) {
+      Row()
+        .width(8)
+        .height(8)
+        .borderRadius(4)
+        .backgroundColor(Store.I.onWan ? '#F4C97E' : '#45B075')
+      Column({ space: 3 }) {
+        Text(`已连接 · ${Store.I.onWan ? '外网' : '局域网'}`)
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.TEXT)
+        Text(this.statusSubLine())
+          .fontSize(11)
+          .fontColor(Theme.TEXT_FAINT)
+          .fontFeature('"tnum" 1')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+
+      Row({ space: 5 }) {
+        SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+          .fontSize(12)
+          .fontColor([this.testing ? Theme.TEXT_FAINT : Theme.ACCENT_INK])
+        Text(this.testing ? '测速中' : '测速')
+          .fontSize(11.5)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.testing ? Theme.TEXT_FAINT : Theme.TEXT)
+      }
+      .padding({ left: 11, right: 12, top: 6, bottom: 6 })
+      .backgroundColor('#16FFFFFF')
+      .border({ width: 0.75, color: '#24FFFFFF' })
+      .borderRadius(Theme.R_PILL)
       .onClick(() => {
-        onTap();
+        if (!this.testing) {
+          this.test();
+        }
       })
+    }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 13, bottom: 13 })
+    .backgroundColor(Theme.CARD)
+    .linearGradient({
+      angle: 140,
+      colors: [[Theme.accentAlpha(0.11), 0.0], ['#00000000', 0.62]]
+    })
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
+  }
+
+  @Builder
+  ModeChip(label: string, value: string) {
+    Text(label)
+      .fontSize(12.5)
+      .fontWeight(this.draftMode === value ? FontWeight.Medium : FontWeight.Normal)
+      .fontColor(this.draftMode === value ? Theme.ACCENT_INK : Theme.TEXT_DIM)
+      .layoutWeight(1)
+      .height(34)
+      .textAlign(TextAlign.Center)
+      .borderRadius(Theme.R_PILL)
+      .backgroundColor(this.draftMode === value ? Theme.accentAlpha(0.22) : Color.Transparent)
+      .border({
+        width: this.draftMode === value ? 0.75 : 0,
+        color: this.draftMode === value ? Theme.inkAlpha(0.52) : Color.Transparent
+      })
+      .onClick(() => {
+        this.draftMode = value;
+      })
+  }
+
+  @Builder
+  FormField(label: string, value: string, hint: string, onChange: (v: string) => void) {
+    Column({ space: 6 }) {
+      Text(label)
+        .fontSize(11)
+        .fontColor(Theme.TEXT_DIM)
+        .width('100%')
+      TextInput({ text: value, placeholder: hint })
+        .height(40)
+        .backgroundColor('#141114')
+        .border({ width: 0.75, color: '#1EFFFFFF' })
+        .borderRadius(12)
+        .fontColor(Theme.TEXT)
+        .fontSize(13)
+        .placeholderColor(Theme.TEXT_FAINT)
+        .caretColor(Theme.ACCENT_INK)
+        .onChange((v: string) => {
+          onChange(v);
+        })
+    }
+    .width('100%')
   }
 
   @Builder
@@ -294,10 +256,11 @@ struct SettingsConnectionPage {
         GlassBack({
           mat: true,
           onTap: () => {
-          router.back();
+            router.back();
           }
         })
-        PageTitle({ text: '连接', fs: 18 })
+        PageTitle({ text: '服务器连接', fs: 18 })
+        Blank()
       }
       .height(46)
       .alignItems(VerticalAlign.Center)
@@ -309,17 +272,10 @@ struct SettingsConnectionPage {
     .padding({ top: this.topInset })
   }
 
-  @StorageProp('amaneTopInset') topInset: number = 30;
-
-  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
-  private navStack: NavPathStack = new NavPathStack();
-
-  /** 标题栏实际高度（内容要让开这么多）。 */
   private barH(): number {
     return this.topInset + 46;
   }
 
-  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
   private titleConfig(): NavigationCustomTitle {
     return {
       builder: () => {
@@ -329,243 +285,336 @@ struct SettingsConnectionPage {
     };
   }
 
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
   build() {
     Navigation(this.navStack) {
-      Column({ space: 14 }) {
+      Stack({ alignContent: Alignment.Bottom }) {
+        Stack({ alignContent: Alignment.Top }) {
+          SettingsAmbientGlow()
 
-        Scroll() {
-          Column({ space: 14 }) {
+          Scroll() {
+            Column({ space: 14 }) {
+              Blank().height(this.barH() + 6)
 
-          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
-          // 材质才有颜色可采样。
-          Blank().height(this.barH())
-            Row({ space: 6 }) {
-              this.ModeChip('自动', MODE_AUTO)
-              this.ModeChip('局域网', MODE_LAN)
-              this.ModeChip('外网', MODE_WAN)
-            }
-            .width('100%')
-            .padding(4)
-            .backgroundColor(Theme.CARD)
-            .borderRadius(12)
+              this.StatusBanner()
 
-            Text('局域网')
-              .fontSize(12)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(Theme.TEXT_DIM)
-              .width('100%')
-              .margin({ top: 4 })
-
-            this.Field('amane 地址（媒体与播放）', this.draftAmane, DEFAULT_AMANE, (v: string) => {
-              this.draftAmane = v;
-            })
-            this.Field('用户数据服务地址（收藏/历史）', this.draftUser, DEFAULT_USER, (v: string) => {
-              this.draftUser = v;
-            })
-
-            // 本机开发实例（本地端口）：只有自用通道才有这个 chip —— 发布版没有本机实例这回事
-            if (BuildConfig.CHANNEL === 'self') {
-              this.DevRow()
-            }
-
-            Text('外网')
-              .fontSize(12)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(Theme.TEXT_DIM)
-              .width('100%')
-              .margin({ top: 4 })
-
-            this.Field('外网地址（媒体、播放；用户数据默认也走它）', this.draftWan, DEFAULT_WAN_AMANE,
-              (v: string) => {
-                this.draftWan = v;
-              })
-
-            // 外网用户数据默认跟随外网地址（隧道按路径分流）。
-            // 「自定义」两条通道都开：发布版用户可以填自己的域名/端口/反代前缀。
-            // 不该出现在发布版里 —— 端口号和前缀是部署细节，不是用户该关心的事。
-            Text('外网用户数据走哪儿')
-              .fontSize(11)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-            Row({ space: 7 }) {
-              this.WanChip(BuildConfig.CHANNEL === 'self' ? '跟随域名 8770' : '跟随外网地址', 'domain')
-              if (BuildConfig.CHANNEL === 'self') {
+              if (this.testResult.length > 0) {
+                Text(this.testResult)
+                  .fontSize(11.5)
+                  .fontColor(this.testOk ? '#8EE6B4' : Theme.DANGER)
+                  .width('100%')
+                  .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+                  .backgroundColor(this.testOk ? '#1845B075' : Theme.alphaOf(Theme.DANGER, 0.14))
+                  .border({
+                    width: 0.5,
+                    color: this.testOk ? '#4045B075' : Theme.alphaOf(Theme.DANGER, 0.36)
+                  })
+                  .borderRadius(12)
               }
-              this.WanChip('自定义', 'custom')
-            }
-            .width('100%')
 
-            if (this.wanPreset === 'custom') {
-              this.Field('外网用户数据地址（可带端口 / 路径）', this.draftWanUser,
-                BuildConfig.CHANNEL === 'self'
-                  ? 'https://域名:端口/前缀'
-                  : 'https://域名:端口/前缀，留空则同外网地址',
-                (v: string) => {
-                  this.draftWanUser = v;
-                })
-            }
-
-            Text(this.wanHint())
-              .fontSize(10)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .lineHeight(16)
-
-            Text('API Token')
-              .fontSize(11)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .margin({ top: 4 })
-            TextInput({ text: this.draftToken })
-              .height(42)
-              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-              .backgroundColor('#1FFFFFFF')
-              .border({ width: 0.5, color: '#33FFFFFF' })
-              .fontColor(Theme.TEXT)
-              .fontSize(13)
-              .caretColor(Theme.ACCENT)
-              .onChange((v: string) => {
-                this.draftToken = v;
-              })
-
-            Text('自动模式：启动时先探局域网（1.5 秒），连不上就走外网；回家再启动会自动切回来。外网下媒体走「外网地址」，用户数据按上面选的走。')
-              .fontSize(10)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .lineHeight(16)
-
-            Text(`当前使用：${Store.I.onWan ? '外网' : '局域网'}` +
-              ` · 媒体 ${Store.I.amane}` +
-              (Store.I.user === Store.I.amane ? '' : ` · 用户 ${Store.I.user}`))
-              .fontSize(10)
-              .fontColor(Store.I.onWan ? '#FFB454' : '#8BD9A0')
-              .width('100%')
-
-            if (this.testResult.length > 0) {
-              Text(this.testResult)
-                .fontSize(11)
-                .fontColor(this.testResult.startsWith('连接正常') ? '#8BD9A0' : Theme.DANGER)
-                .width('100%')
-            }
-
-            Row({ space: 10 }) {
-              Button('测试连接')
-                .layoutWeight(1)
-                .height(42)
-                .backgroundColor(Theme.CARD)
-                .fontColor(Theme.TEXT)
-                .fontSize(13)
-                .enabled(!this.testing)
-                .onClick(() => {
-                  this.test();
-                })
-              Button('保存并重连')
-                .layoutWeight(1)
-                .height(42)
-                .backgroundColor(Theme.ACCENT)
-                .fontColor('#FFFFFF')
-                .fontSize(13)
-                .onClick(() => {
-                  this.save();
-                })
-            }
-            .width('100%')
-            .margin({ top: 4 })
-
-            Button('恢复默认地址')
-              .width('100%')
-              .height(38)
-              .backgroundColor(Color.Transparent)
-              .fontColor(Theme.TEXT_FAINT)
-              .fontSize(12)
-              .onClick(() => {
-                this.draftAmane = DEFAULT_AMANE;
-                this.draftUser = DEFAULT_USER;
-                this.draftWan = DEFAULT_WAN_AMANE;
-                this.draftWanUser = '';
-                this.draftToken = DEFAULT_TOKEN;
-              })
-
-            // ── 部署说明（2026-11-15：Docker 命令、容器路径这类东西集中在这里，默认折叠）──
-            Row() {
-              Text(this.deployOpen ? '▾ 部署说明（服务器侧）' : '▸ 部署说明（服务器侧）')
-                .fontSize(12)
-                .fontColor(Theme.TEXT_DIM)
-                .layoutWeight(1)
-            }
-            .width('100%')
-            .padding({ top: 14, bottom: 6 })
-            .onClick(() => {
-              this.deployOpen = !this.deployOpen;
-            })
-
-            if (this.deployOpen) {
-              Column({ space: 6 }) {
-                Text('给容器加一个挂载（例如把预览/打分缓存放大的盘）')
-                  .fontSize(11)
+              // 网络模式分段器
+              Column({ space: 10 }) {
+                Text('网络模式')
+                  .fontSize(13.5)
+                  .fontWeight(FontWeight.Medium)
                   .fontColor(Theme.TEXT)
                   .width('100%')
-                Text('1. 宿主机先建目录（挑空间大的卷）：')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_DIM)
-                  .width('100%')
-                Text('     mkdir -p <宿主机目录>')
-                  .fontSize(10)
+                Row({ space: 4 }) {
+                  this.ModeChip('自动', MODE_AUTO)
+                  this.ModeChip('仅局域网', MODE_LAN)
+                  this.ModeChip('仅外网', MODE_WAN)
+                }
+                .width('100%')
+                .padding(4)
+                .backgroundColor('#141114')
+                .border({ width: 0.5, color: '#18FFFFFF' })
+                .borderRadius(Theme.R_PILL)
+
+                Text('自动模式优先探局域网（1.5s），不通自动切外网。')
+                  .fontSize(10.5)
                   .fontColor(Theme.TEXT_FAINT)
                   .width('100%')
-                Text('2. 在 amane-user 的 compose 里给 volumes 加一行（左边宿主机、右边容器内）：')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_DIM)
-                  .width('100%')
-                Text('     - <宿主机目录>:/cache')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .width('100%')
-                Text('3. 重建容器让映射生效：')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_DIM)
-                  .width('100%')
-                Text('     docker compose up -d --force-recreate')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .width('100%')
-                Text('4. 回到「进度条预览」把缓存路径填成容器内那个目录（例如 /cache）再保存。')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_DIM)
-                  .width('100%')
-                Text('注意：路径必须已经挂进容器，否则写了也存不进去 —— 界面上会直接报红。')
-                  .fontSize(10)
-                  .fontColor(Theme.GOLD)
-                  .width('100%')
-                  .lineHeight(15)
               }
               .width('100%')
-              .padding(12)
+              .padding(14)
               .backgroundColor(Theme.CARD)
-              .borderRadius(12)
-              .alignItems(HorizontalAlign.Start)
-            }
+              .borderRadius(18)
+              .border({ width: 0.75, color: Theme.STROKE })
 
-            Text('播放设置已经独立成页（设置 → 播放 → 播放设置）')
-              .fontSize(10)
-              .fontColor(Theme.TEXT_FAINT)
+              // 局域网地址分组卡
+              Column({ space: 12 }) {
+                Text('局域网地址')
+                  .fontSize(13.5)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Theme.TEXT)
+                  .width('100%')
+
+                this.FormField('媒体服务地址', this.draftAmane, DEFAULT_AMANE, (v: string) => {
+                  this.draftAmane = v;
+                })
+                this.FormField('用户数据服务', this.draftUser, DEFAULT_USER, (v: string) => {
+                  this.draftUser = v;
+                })
+
+                if (BuildConfig.CHANNEL === 'self') {
+                  Row({ space: 10 }) {
+                    SymbolGlyph($r('sys.symbol.slider_horizontal_2'))
+                      .fontSize(15)
+                      .fontColor([Theme.ACCENT_INK])
+                    Text('本机开发实例 :本地端口')
+                      .fontSize(12.5)
+                      .fontColor(Theme.TEXT)
+                      .layoutWeight(1)
+                    Toggle({ type: ToggleType.Switch, isOn: this.devActive })
+                      .selectedColor(Theme.ACCENT)
+                      .onChange((v: boolean) => {
+                        if (v !== this.devActive) {
+                          this.toggleDevLocal(v);
+                        }
+                      })
+                  }
+                  .width('100%')
+                  .padding({ left: 12, right: 10, top: 7, bottom: 7 })
+                  .backgroundColor('#141114')
+                  .border({ width: 0.5, color: '#1AFFFFFF' })
+                  .borderRadius(12)
+                  .alignItems(VerticalAlign.Center)
+                }
+              }
               .width('100%')
-              .margin({ top: 8 })
+              .padding(14)
+              .backgroundColor(Theme.CARD)
+              .borderRadius(18)
+              .border({ width: 0.75, color: Theme.STROKE })
 
+              // 外网与认证分组卡
+              Column({ space: 12 }) {
+                Text('外网与认证')
+                  .fontSize(13.5)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Theme.TEXT)
+                  .width('100%')
 
+                this.FormField('外网域名', this.draftWan, DEFAULT_WAN_AMANE, (v: string) => {
+                  this.draftWan = v;
+                })
+
+                Row({ space: 8 }) {
+                  VelvetChip({
+                    label: BuildConfig.CHANNEL === 'self' ? '跟随域名 8770' : '跟随域名',
+                    active: this.wanPreset === 'domain',
+                    padH: 12,
+                    padV: 6,
+                    fs: 11.5,
+                    onTap: () => {
+                      this.wanPreset = 'domain';
+                    }
+                  })
+                  if (BuildConfig.CHANNEL === 'self') {
+                    VelvetChip({
+                      active: this.wanPreset === 'dev',
+                      padH: 12,
+                      padV: 6,
+                      fs: 11.5,
+                      onTap: () => {
+                        this.wanPreset = 'dev';
+                      }
+                    })
+                  }
+                  VelvetChip({
+                    label: '自定义',
+                    active: this.wanPreset === 'custom',
+                    padH: 12,
+                    padV: 6,
+                    fs: 11.5,
+                    onTap: () => {
+                      this.wanPreset = 'custom';
+                    }
+                  })
+                }
+                .width('100%')
+
+                if (this.wanPreset === 'custom') {
+                  this.FormField('外网用户数据地址', this.draftWanUser,
+                    'https://域名:端口/前缀，留空同外网地址',
+                    (v: string) => {
+                      this.draftWanUser = v;
+                    })
+                }
+
+                Text(this.wanHint())
+                  .fontSize(10.5)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .width('100%')
+
+                SettingsRowDivider({ indent: 0 })
+
+                Column({ space: 6 }) {
+                  Text('API Token')
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_DIM)
+                    .width('100%')
+                  Row({ space: 8 }) {
+                    TextInput({ text: this.draftToken, placeholder: '输入服务端 Token' })
+                      .type(this.showToken ? InputType.Normal : InputType.Password)
+                      .showPasswordIcon(false)
+                      .height(40)
+                      .layoutWeight(1)
+                      .backgroundColor(Color.Transparent)
+                      .fontColor(Theme.TEXT)
+                      .fontSize(13)
+                      .placeholderColor(Theme.TEXT_FAINT)
+                      .caretColor(Theme.ACCENT_INK)
+                      .onChange((v: string) => {
+                        this.draftToken = v;
+                      })
+                    Stack() {
+                      SymbolGlyph(this.showToken ? $r('sys.symbol.eye_slash') : $r('sys.symbol.eye'))
+                        .fontSize(16)
+                        .fontColor([Theme.TEXT_DIM])
+                    }
+                    .width(34)
+                    .height(34)
+                    .onClick(() => {
+                      this.showToken = !this.showToken;
+                    })
+                  }
+                  .width('100%')
+                  .padding({ right: 6 })
+                  .backgroundColor('#141114')
+                  .border({ width: 0.75, color: '#1EFFFFFF' })
+                  .borderRadius(12)
+                }
+                .width('100%')
+              }
+              .width('100%')
+              .padding(14)
+              .backgroundColor(Theme.CARD)
+              .borderRadius(18)
+              .border({ width: 0.75, color: Theme.STROKE })
+
+              // 辅助折叠区：恢复默认 + 部署说明
+              Column() {
+                Row() {
+                  Text('部署说明（服务器侧）')
+                    .fontSize(13)
+                    .fontColor(Theme.TEXT_DIM)
+                    .layoutWeight(1)
+                  SymbolGlyph(this.deployOpen ? $r('sys.symbol.chevron_up') : $r('sys.symbol.chevron_down'))
+                    .fontSize(13)
+                    .fontColor([Theme.TEXT_FAINT])
+                }
+                .width('100%')
+                .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+                .onClick(() => {
+                  this.deployOpen = !this.deployOpen;
+                })
+
+                if (this.deployOpen) {
+                  Column({ space: 6 }) {
+                    SettingsRowDivider({ indent: 0 })
+                    Text('容器挂载大容量盘（预览/打分缓存）：')
+                      .fontSize(11)
+                      .fontColor(Theme.TEXT)
+                      .width('100%')
+                    Text('1. mkdir -p <宿主机目录>')
+                      .fontSize(10.5)
+                      .fontColor(Theme.TEXT_FAINT)
+                      .width('100%')
+                    Text('2. compose volumes 加入：- <宿主机目录>:/cache')
+                      .fontSize(10.5)
+                      .fontColor(Theme.TEXT_FAINT)
+                      .width('100%')
+                    Text('3. docker compose up -d --force-recreate')
+                      .fontSize(10.5)
+                      .fontColor(Theme.TEXT_FAINT)
+                      .width('100%')
+                    Text('4. 在「进度条预览」中将缓存路径填为 /cache 并保存。')
+                      .fontSize(10.5)
+                      .fontColor(Theme.GOLD)
+                      .width('100%')
+                  }
+                  .width('100%')
+                  .padding({ left: 14, right: 14, bottom: 14 })
+                  .alignItems(HorizontalAlign.Start)
+                }
+              }
+              .width('100%')
+              .backgroundColor(Theme.CARD)
+              .borderRadius(16)
+              .border({ width: 0.75, color: Theme.STROKE })
+
+              Text('恢复默认地址')
+                .fontSize(12)
+                .fontColor(Theme.TEXT_FAINT)
+                .padding({ top: 4, bottom: 4 })
+                .onClick(() => {
+                  this.draftAmane = DEFAULT_AMANE;
+                  this.draftUser = DEFAULT_USER;
+                  this.draftWan = DEFAULT_WAN_AMANE;
+                  this.draftWanUser = '';
+                  this.draftToken = DEFAULT_TOKEN;
+                })
+
+              Blank().height(110)
+            }
+            .width('100%')
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
           }
           .width('100%')
-          // 底部留够系统导航条的高度：最后那排「测试连接 / 保存并重连」原来贴着屏幕边缘，
-          // 一半压在导航条下面，点不动（真机/模拟器都点不到）。
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 96 })
+          .height('100%')
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring)
         }
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
+        .width('100%')
+        .height('100%')
+
+        // 底部悬浮动作栏（玻璃「测试连接」 + 宝石渐变「保存并重连」）
+        Row({ space: 10 }) {
+          Button(this.testing ? '测试中…' : '测试连接')
+            .layoutWeight(4)
+            .height(44)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor('#22FFFFFF')
+            .border({ width: 0.75, color: '#2EFFFFFF' })
+            .borderRadius(22)
+            .fontColor(Theme.TEXT)
+            .fontSize(13.5)
+            .fontWeight(FontWeight.Medium)
+            .enabled(!this.testing)
+            .onClick(() => {
+              this.test();
+            })
+          Button('保存并重连')
+            .layoutWeight(6)
+            .height(44)
+            .backgroundColor(Color.Transparent)
+            .linearGradient(Theme.ctaGradient())
+            .border({ width: 0.75, color: '#38FFFFFF' })
+            .borderRadius(22)
+            .shadow({ radius: 14, color: Theme.accentAlpha(0.32), offsetX: 0, offsetY: 4 })
+            .fontColor(Theme.ON_ACCENT)
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .onClick(() => {
+              this.save();
+            })
+        }
+        .width('100%')
+        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 14, bottom: Theme.pageBottomSafe() + 6 })
+        .linearGradient({
+          angle: 180,
+          colors: [['#000B0B0F', 0.0], ['#E60B0B0F', 0.35], ['#FF0B0B0F', 1.0]]
+        })
       }
       .width('100%')
       .height('100%')
       .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .mode(NavigationMode.Stack)
     .hideBackButton(true)
     .hideToolBar(true)
@@ -575,10 +624,11 @@ struct SettingsConnectionPage {
     .backgroundColor(Theme.BG)
   }
 
-  /** 按当前选的模式测：自动模式两边都探。 */
   private async test(): Promise<void> {
     this.testing = true;
-    this.testResult = '正在测试…';
+    this.testOk = true;
+    this.testResult = '正在探测连接…';
+    const t0: number = Date.now();
     const lan: string = normalizeBase(this.draftAmane, 'http');
     const lanUser: string = normalizeBase(this.draftUser, 'http');
 
@@ -588,34 +638,56 @@ struct SettingsConnectionPage {
       const user: string = picked.length > 0 ? picked : media;
       const okMedia: boolean = await probe(`${media}/api/health`, 8000);
       const ver: string = await this.pingVersion(user);
-      this.testResult = okMedia && ver.length > 0
-        ? `连接正常：媒体在线 · 用户数据 ${ver}（${user}）`
+      const dt: number = Date.now() - t0;
+      this.testOk = okMedia && ver.length > 0;
+      if (this.testOk) {
+        this.pingMs = dt;
+        this.serverVer = ver;
+      }
+      this.testResult = this.testOk
+        ? `连接正常（${dt} ms）· 用户服务 ${ver}`
         : (okMedia
-          ? `媒体在线，但用户数据连不上（${user}）—— 检查端口映射`
-            + (BuildConfig.CHANNEL === 'self' ? '或 /dev 前缀' : '或地址是否写全')
-          : `外网连不上（${media}）—— 检查域名或隧道`);
+          ? `媒体在线，但用户服务连不上（${user}）`
+          : `外网连不上（${media}）`);
     } else if (this.draftMode === MODE_LAN) {
       const okAmane: boolean = await probe(`${lan}/api/health`, 4000);
       const ver: string = await this.pingVersion(lanUser);
-      this.testResult = ver.length > 0 && okAmane
-        ? `连接正常：局域网两个服务都在线（用户数据 ${ver}）`
-        : (okAmane ? `amane 正常，用户服务连不上（${lanUser}）` : `局域网地址连不上（${lan}）`);
+      const dt: number = Date.now() - t0;
+      this.testOk = ver.length > 0 && okAmane;
+      if (this.testOk) {
+        this.pingMs = dt;
+        this.serverVer = ver;
+      }
+      this.testResult = this.testOk
+        ? `连接正常（${dt} ms）· 局域网双服务在线（${ver}）`
+        : (okAmane ? `媒体正常，用户服务连不上（${lanUser}）` : `局域网连不上（${lan}）`);
     } else {
       const okLan: boolean = await probe(`${lan}/api/health`, 1500);
       if (okLan) {
         const ver: string = await this.pingVersion(lanUser);
-        this.testResult = ver.length > 0
-          ? `在家：局域网两个服务都正常（用户数据 ${ver}）`
-          : `amane 正常，但用户服务（${lanUser}）连不上`;
+        const dt: number = Date.now() - t0;
+        this.testOk = ver.length > 0;
+        if (this.testOk) {
+          this.pingMs = dt;
+          this.serverVer = ver;
+        }
+        this.testResult = this.testOk
+          ? `局域网连接正常（${dt} ms · ${ver}）`
+          : `媒体正常，用户服务（${lanUser}）连不上`;
       } else {
-        // 不在家：按外网那套地址探，用户数据同样受上面「走哪儿」的选择影响
         const media: string = normalizeBase(this.draftWan, 'https');
         const picked: string = this.wanUserBase();
         const user: string = picked.length > 0 ? picked : media;
         const ver: string = await this.pingVersion(user);
-        this.testResult = ver.length > 0
-          ? `不在家：外网链路正常（用户数据 ${ver}）`
-          : '局域网和 外网都连不上';
+        const dt: number = Date.now() - t0;
+        this.testOk = ver.length > 0;
+        if (this.testOk) {
+          this.pingMs = dt;
+          this.serverVer = ver;
+        }
+        this.testResult = this.testOk
+          ? `外网链路正常（${dt} ms · ${ver}）`
+          : '局域网与外网均不可达';
       }
     }
     this.testing = false;
@@ -625,7 +697,6 @@ struct SettingsConnectionPage {
     Store.I.lanAmane = normalizeBase(this.draftAmane, 'http');
     Store.I.lanUser = normalizeBase(this.draftUser, 'http');
     Store.I.wanAmane = normalizeBase(this.draftWan, 'https');
-    // 三种走法在这里落成一个地址：空 = 跟随域名（隧道默认分流到 8770）
     Store.I.wanUser = this.wanUserBase();
     Store.I.token = this.draftToken.trim();
     Store.I.mode = this.draftMode;

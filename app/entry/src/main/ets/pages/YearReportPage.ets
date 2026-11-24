@@ -14,6 +14,7 @@ import { httpGet } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 
 interface AnnualBest {
   d: string;
@@ -170,11 +171,11 @@ struct YearReportPage {
   SectionHeadText(title: string, sub: string) {
     Column({ space: 4 }) {
       Text(title)
-        .fontSize(11)
-        .fontColor(Theme.TEXT_FAINT)
-        .letterSpacing(1)
+        .fontSize(12)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Theme.TEXT_DIM)
         .width('100%')
-      Text(sub)
+      Text(sub === '__peak_hour__' ? `最集中的时段：${this.peakHourText()}` : sub)
         .fontSize(10)
         .fontColor(Theme.TEXT_FAINT)
         .width('100%')
@@ -235,7 +236,9 @@ struct YearReportPage {
 
   build() {
     Navigation(this.navStack) {
-      Column() {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
+        Column() {
 
   // 六十改：让出浮层标题栏的高度
   Blank().height(this.barH())
@@ -257,7 +260,7 @@ struct YearReportPage {
               .fontColor(Theme.TEXT_DIM)
             Text('换一年试试')
               .fontSize(11)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
               .onClick(() => {
                 this.year = this.year - 1;
                 this.load();
@@ -272,9 +275,10 @@ struct YearReportPage {
               // ① 总量
               Column({ space: 8 }) {
                 Text(`${this.data.year}`)
-                  .fontSize(13)
-                  .fontColor(Theme.ACCENT)
-                  .letterSpacing(3)
+                  .fontSize(14)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Theme.ACCENT_INK)
+                  .fontFeature('"tnum" 1')
                 Text(`${this.data.hours} 小时`)
                   .fontSize(40)
                   .fontColor(Theme.TEXT)
@@ -305,7 +309,8 @@ struct YearReportPage {
                 .width('100%')
                 .padding(14)
                 .backgroundColor(Theme.CARD)
-                .borderRadius(14)
+                .borderRadius(18)
+                .border({ width: 0.75, color: Theme.STROKE })
               }
 
               // ③ 12 个月
@@ -345,12 +350,13 @@ struct YearReportPage {
               .width('100%')
               .padding(14)
               .backgroundColor(Theme.CARD)
-              .borderRadius(14)
+              .borderRadius(18)
+              .border({ width: 0.75, color: Theme.STROKE })
 
               // ④ 几点看
               if (this.peakHourText().length > 0) {
                 Column({ space: 8 }) {
-                  this.SectionHeadText('你多半在几点看', `最集中的时段：${this.peakHourText()}`)
+                  this.SectionHeadText('你多半在几点看', '__peak_hour__')
                   Row({ space: 2 }) {
                     ForEach(this.data.hour_secs, (v: number, i: number) => {
                       Column()
@@ -377,7 +383,8 @@ struct YearReportPage {
                 .width('100%')
                 .padding(14)
                 .backgroundColor(Theme.CARD)
-                .borderRadius(14)
+                .borderRadius(18)
+                .border({ width: 0.75, color: Theme.STROKE })
               }
 
               // ⑤ 看得最久的几部
@@ -393,7 +400,7 @@ struct YearReportPage {
                       Column({ space: 2 }) {
                         Text(f.number.length > 0 ? f.number : `#${f.id}`)
                           .fontSize(11)
-                          .fontColor(Theme.ACCENT)
+                          .fontColor(Theme.ACCENT_INK)
                         if (f.title.length > 0) {
                           Text(f.title)
                             .fontSize(10)
@@ -416,7 +423,8 @@ struct YearReportPage {
                 .width('100%')
                 .padding(14)
                 .backgroundColor(Theme.CARD)
-                .borderRadius(14)
+                .borderRadius(18)
+                .border({ width: 0.75, color: Theme.STROKE })
               }
 
               // ⑥ 偏好：演员 / 标签
@@ -456,7 +464,8 @@ struct YearReportPage {
                 .width('100%')
                 .padding(14)
                 .backgroundColor(Theme.CARD)
-                .borderRadius(14)
+                .borderRadius(18)
+                .border({ width: 0.75, color: Theme.STROKE })
               }
 
               // ⑦ 连续
@@ -471,7 +480,8 @@ struct YearReportPage {
                 .width('100%')
                 .padding(14)
                 .backgroundColor(Theme.CARD)
-                .borderRadius(14)
+                .borderRadius(18)
+                .border({ width: 0.75, color: Theme.STROKE })
               }
 
               Text(this.data.from !== null && this.data.to !== null
@@ -489,6 +499,9 @@ struct YearReportPage {
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
         }
+      }
+      .width('100%')
+      .height('100%')
       }
       .width('100%')
       .height('100%')

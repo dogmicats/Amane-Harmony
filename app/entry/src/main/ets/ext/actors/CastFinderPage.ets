@@ -9,9 +9,9 @@ import { scoreText } from '../../common/Util';
 import { rateLabel, rateColor } from '../ratings/RatingStars';
 import { DetailParams, LibraryInfo } from '../../common/Types';
 import { MarkBadges } from '../../view/MarkBadges';
-import { MyFilterBar } from '../../view/MyFilterBar';
+import { CollectionsBar } from '../collections/CollectionsBar';
 import { BottomSheet, SortSheet, ToolPill } from '../../view/ListSheets';
-import { SortOption, sortDefOf, ChipOption, VERSION_OPTIONS } from '../../common/BrowseOptions';
+import { SortOption, sortDefOf, ChipOption, VERSION_OPTIONS, MYRATING_OPTIONS } from '../../common/BrowseOptions';
 import { CTYPE_OPTIONS, SCORE_OPTIONS, YEAR_OPTIONS } from '../../view/BrowseGrid';
 import { BuildConfig } from '../../common/BuildConfig';
 import { GachaSwitch } from '../stills/GachaSwitch';
@@ -30,6 +30,45 @@ interface FacetLite {
   name: string;
   count: number;
 }
+
+/**
+ * 甄选条件的快照（2026-11-20 用户：「每次点进来都要重新选」）。
+ *
+ * 整页条件一次性序列化存进偏好：进来自动恢复上一次，最近几条还能在筛选抽屉里点回来。
+ * `savedAt` 只用于展示，不参与「是不是同一套条件」的比较（否则每次都被当成新的）。
+ */
+interface CastCond {
+  picked: CastMember[];
+  femaleN: number[];
+  female5: boolean;
+  maleN: number[];
+  male5: boolean;
+  castN: string;
+  dirs: DirectorHit[];
+  dirExclude: boolean;
+  sortBy: string;
+  order: string;
+  fCtype: string;
+  fMulti: string;
+  fScore: string;
+  fYear: string;
+  fSeries: string;
+  fStudio: string;
+  tagPicks: FacetLite[];
+  onlySub: boolean;
+  mosaic: string;
+  fMyRating: string;
+  fCollection: string;
+  fLib: string;
+  fLibs: number[];
+  fSearch: string;
+  savedAt: number;
+}
+
+/** 偏好键：最后一次条件 / 最近几条历史。 */
+const PREF_COND_LAST: string = 'castCondLast';
+const PREF_COND_HIST: string = 'castCondHist';
+const COND_HIST_MAX: number = 6;
 
 /** `/api/user/facets/{kind}` 的一条（只声明用得到的字段）。 */
 interface FacetRow {
@@ -135,7 +174,7 @@ struct SheetSection {
         if (this.actionLabel.length > 0) {
           Text(this.actionLabel)
             .fontSize(11)
-            .fontColor(this.actionLabel.startsWith('+') ? '#FFFFFF' : Theme.TEXT_DIM)
+            .fontColor(this.actionLabel.startsWith('+') ? Theme.ON_ACCENT : Theme.TEXT_DIM)
             .padding({ left: 10, right: 10, top: 4, bottom: 4 })
             .backgroundColor(this.actionLabel.startsWith('+') ? Theme.ACCENT : Theme.CARD_HI)
             .borderRadius(Theme.R_PILL)
@@ -208,7 +247,7 @@ struct PickChips {
         ForEach(this.options, (opt: ChipOption) => {
           Text(opt.label)
             .fontSize(12)
-            .fontColor(this.current === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
+            .fontColor(this.current === opt.key ? Theme.ON_ACCENT : Theme.TEXT_DIM)
             .padding({ left: 12, right: 12, top: 7, bottom: 7 })
             .backgroundColor(this.current === opt.key ? Theme.ACCENT : Theme.CARD_HI)
             .borderRadius(14)
@@ -216,7 +255,7 @@ struct PickChips {
             .onClick(() => {
               this.onPick(opt.key);
             })
-        }, (opt: ChipOption) => `pchip-${this.title}-${opt.key}`)
+        }, (opt: ChipOption) => `pchip-${this.title}-${opt.key}-${this.current === opt.key ? 1 : 0}`)
       }
       .width('100%')
     }
@@ -269,7 +308,7 @@ struct CountPicker {
 
       Text(`不限`)
         .fontSize(12)
-        .fontColor(this.multi.length === 0 && !this.radioOn ? '#FFFFFF' : Theme.TEXT_DIM)
+        .fontColor(this.multi.length === 0 && !this.radioOn ? Theme.ON_ACCENT : Theme.TEXT_DIM)
         .padding({ left: 11, right: 11, top: 6, bottom: 6 })
         .backgroundColor(this.multi.length === 0 && !this.radioOn ? Theme.ACCENT : Theme.CARD_HI)
         .borderRadius(14)
@@ -285,17 +324,17 @@ struct CountPicker {
             if (this.has(v)) {
               Text('✓')
                 .fontSize(7)
-                .fontColor('#FFFFFF')
+                .fontColor(Theme.ON_ACCENT)
             }
           }
           .width(10)
           .height(10)
           .borderRadius(2)
-          .border({ width: 1, color: this.has(v) ? '#FFFFFF' : Theme.TEXT_FAINT })
+          .border({ width: 1, color: this.has(v) ? Theme.ON_ACCENT : Theme.TEXT_FAINT })
 
           Text(`${v}`)
             .fontSize(12)
-            .fontColor(this.has(v) ? '#FFFFFF' : Theme.TEXT_DIM)
+            .fontColor(this.has(v) ? Theme.ON_ACCENT : Theme.TEXT_DIM)
         }
         .padding({ left: 8, right: 9, top: 6, bottom: 6 })
         .backgroundColor(this.has(v) ? Theme.ACCENT : Theme.CARD_HI)
@@ -304,7 +343,7 @@ struct CountPicker {
         .onClick(() => {
           this.onToggle(v);
         })
-      }, (v: number) => `cp-${this.unit}-${v}`)
+      }, (v: number) => `cp-${this.unit}-${v}-${this.has(v) ? 1 : 0}`)
 
       // 圆形单选：≥5
       Row({ space: 3 }) {
@@ -314,17 +353,17 @@ struct CountPicker {
               .width(4)
               .height(4)
               .borderRadius(2)
-              .backgroundColor('#FFFFFF')
+              .backgroundColor(Theme.ON_ACCENT)
           }
         }
         .width(10)
         .height(10)
         .borderRadius(5)
-        .border({ width: 1, color: this.radioOn ? '#FFFFFF' : Theme.TEXT_FAINT })
+        .border({ width: 1, color: this.radioOn ? Theme.ON_ACCENT : Theme.TEXT_FAINT })
 
         Text(`≥5`)
           .fontSize(12)
-          .fontColor(this.radioOn ? '#FFFFFF' : Theme.TEXT_DIM)
+          .fontColor(this.radioOn ? Theme.ON_ACCENT : Theme.TEXT_DIM)
       }
       .padding({ left: 8, right: 11, top: 6, bottom: 6 })
       .backgroundColor(this.radioOn ? Theme.ACCENT : Theme.CARD_HI)
@@ -404,6 +443,8 @@ struct CastFinderPage {
   /** 条件抽屉与排序抽屉（2.4.6.26 起与媒体库同一套形状）。 */
   @State showSort: boolean = false;
   @State showFilter: boolean = false;
+  /** 最近用过的条件（原始 JSON，最新的在前）；进页面自动恢复第一条。 */
+  @State condHist: string[] = [];
   // ── 高级筛选：把媒体库那些筛选项搬进来（2026-11-17）────────────────────
   // 用户要求：「做一个专门的高级筛选，把筛选功能归一 —— 直接在原有的共演筛选这页做增量」。
   // 所以这里加的是 browse 有、共演页还没有的那几项，参数名与 browse 完全一致，
@@ -495,6 +536,10 @@ struct CastFinderPage {
     // 抽卡模式默认关（设置页开了「默认开启」才进）：这页本来就靠条件筛，
     // 无条件时抽卡等于抽全库，不适合当默认视图。
     this.gachaOn = BuildConfig.ENABLE_GACHA && Store.I.gachaAuto;
+    // 上次的条件先恢复（2026-11-20）：用户报「每次点进来都要重新选」，
+    // 这里把整页条件找回来，有条件就直接出结果，抽屉也不用自己弹出来。
+    this.loadCondHist();
+    this.restoreLast();
     // 2026-11-17 用户：「点进甄选、里面没有筛选项时，应该默认就把抽屉拉开，
     // 不要每次还要手动点一次按钮」。这个页面正就是为了筛东西才进来的，
     // 空条件时结果必然是全库（没价值），先让用户看到筛选面板才是对的。
@@ -502,6 +547,198 @@ struct CastFinderPage {
     this.showFilter = this.filterCount() === 0;
     this.seedLibsFromStore();
     this.loadLibs();
+    // 恢复出来的条件直接查一次（否则界面停在「还没查」的空态）
+    if (this.filterCount() > 0) {
+      this.runQuery();
+    }
+  }
+
+  // ─────────────────────────────── 条件记忆（2026-11-20）
+  private condSnapshot(): CastCond {
+    return {
+      picked: this.picked,
+      femaleN: this.femaleN,
+      female5: this.female5,
+      maleN: this.maleN,
+      male5: this.male5,
+      castN: this.castN,
+      dirs: this.dirs,
+      dirExclude: this.dirExclude,
+      sortBy: this.sortBy,
+      order: this.order,
+      fCtype: this.fCtype,
+      fMulti: this.fMulti,
+      fScore: this.fScore,
+      fYear: this.fYear,
+      fSeries: this.fSeries,
+      fStudio: this.fStudio,
+      tagPicks: this.tagPicks,
+      onlySub: this.onlySub,
+      mosaic: this.mosaic,
+      fMyRating: this.fMyRating,
+      fCollection: this.fCollection,
+      fLib: this.fLib,
+      fLibs: this.fLibs,
+      fSearch: this.fSearch,
+      savedAt: Date.now()
+    };
+  }
+
+  /** 判断「是不是同一套条件」的指纹：savedAt 不参与，否则每次都算新的。 */
+  private condKey(c: CastCond): string {
+    const ids = (arr: CastMember[]): string => {
+      const out: string[] = [];
+      for (let i = 0; i < arr.length; i++) {
+        out.push(`${arr[i].id}`);
+      }
+      return out.join(',');
+    };
+    const tagIds = (arr: FacetLite[]): string => {
+      const out: string[] = [];
+      for (let i = 0; i < arr.length; i++) {
+        out.push(`${arr[i].id}`);
+      }
+      return out.join(',');
+    };
+    const dirIds = (arr: DirectorHit[]): string => {
+      const out: string[] = [];
+      for (let i = 0; i < arr.length; i++) {
+        out.push(`${arr[i].id}`);
+      }
+      return out.join(',');
+    };
+    return [
+      ids(c.picked), c.femaleN.join(','), `${c.female5}`,
+      c.maleN.join(','), `${c.male5}`, c.castN,
+      dirIds(c.dirs), `${c.dirExclude}`,
+      c.fCtype, c.fMulti, c.fScore, c.fYear, c.fSeries, c.fStudio,
+      tagIds(c.tagPicks), `${c.onlySub}`, c.mosaic,
+      c.fMyRating, c.fCollection, c.fLib, c.fLibs.join(','), c.fSearch
+    ].join('|');
+  }
+
+  /** 把当前条件记住（只在「有条件」时记，免得把上次那套好条件顶掉）。 */
+  private saveCond(): void {
+    if (this.filterCount() === 0 && this.fSearch.length === 0) {
+      return;
+    }
+    const c: CastCond = this.condSnapshot();
+    const key: string = this.condKey(c);
+    const items: string[] = [JSON.stringify(c)];
+    for (let i = 0; i < this.condHist.length && items.length < COND_HIST_MAX; i++) {
+      try {
+        const old: CastCond = JSON.parse(this.condHist[i]) as CastCond;
+        if (this.condKey(old) !== key) {
+          items.push(this.condHist[i]);
+        }
+      } catch (e) {
+        // 坏数据直接丢
+      }
+    }
+    Store.I.prefSetString(PREF_COND_LAST, JSON.stringify(c));
+    Store.I.prefSetString(PREF_COND_HIST, JSON.stringify(items));
+    this.condHist = items;
+  }
+
+  private applyCond(c: CastCond): void {
+    this.picked = c.picked === undefined || c.picked === null ? [] : c.picked;
+    this.femaleN = c.femaleN === undefined || c.femaleN === null ? [] : c.femaleN;
+    this.female5 = c.female5 === true;
+    this.maleN = c.maleN === undefined || c.maleN === null ? [] : c.maleN;
+    this.male5 = c.male5 === true;
+    this.castN = c.castN === undefined || c.castN === null ? '' : c.castN;
+    this.dirs = c.dirs === undefined || c.dirs === null ? [] : c.dirs;
+    this.dirExclude = c.dirExclude === true;
+    this.sortBy = c.sortBy === undefined || c.sortBy === null ? 'release' : c.sortBy;
+    this.order = c.order === undefined || c.order === null ? 'desc' : c.order;
+    this.fCtype = c.fCtype === undefined || c.fCtype === null ? '' : c.fCtype;
+    this.fMulti = c.fMulti === undefined || c.fMulti === null ? '' : c.fMulti;
+    this.fScore = c.fScore === undefined || c.fScore === null ? '' : c.fScore;
+    this.fYear = c.fYear === undefined || c.fYear === null ? '' : c.fYear;
+    this.fSeries = c.fSeries === undefined || c.fSeries === null ? '' : c.fSeries;
+    this.fStudio = c.fStudio === undefined || c.fStudio === null ? '' : c.fStudio;
+    this.tagPicks = c.tagPicks === undefined || c.tagPicks === null ? [] : c.tagPicks;
+    this.onlySub = c.onlySub === true;
+    this.mosaic = c.mosaic === undefined || c.mosaic === null ? '' : c.mosaic;
+    this.fMyRating = c.fMyRating === undefined || c.fMyRating === null ? '' : c.fMyRating;
+    this.fCollection = c.fCollection === undefined || c.fCollection === null ? '' : c.fCollection;
+    this.fLib = c.fLib === undefined || c.fLib === null ? '' : c.fLib;
+    this.fLibs = c.fLibs === undefined || c.fLibs === null ? [] : c.fLibs;
+    this.fSearch = c.fSearch === undefined || c.fSearch === null ? '' : c.fSearch;
+  }
+
+  private restoreLast(): void {
+    const raw: string = Store.I.prefString(PREF_COND_LAST, '');
+    if (raw.length === 0) {
+      return;
+    }
+    try {
+      this.applyCond(JSON.parse(raw) as CastCond);
+    } catch (e) {
+      // 格式变了就当没存过
+    }
+  }
+
+  private loadCondHist(): void {
+    const raw: string = Store.I.prefString(PREF_COND_HIST, '');
+    if (raw.length === 0) {
+      this.condHist = [];
+      return;
+    }
+    try {
+      const arr: CastCond[] = JSON.parse(raw) as CastCond[];
+      const out: string[] = [];
+      for (let i = 0; i < arr.length; i++) {
+        out.push(JSON.stringify(arr[i]));
+      }
+      this.condHist = out;
+    } catch (e) {
+      this.condHist = [];
+    }
+  }
+
+  /** 抽屉里那颗 chip 的文字：只挑最能说明问题的那几项。 */
+  private condLabel(c: CastCond): string {
+    const parts: string[] = [];
+    if (c.picked !== undefined && c.picked !== null && c.picked.length > 0) {
+      const extra: number = c.picked.length - 1;
+      parts.push(extra > 0 ? `${c.picked[0].name}+${extra}` : c.picked[0].name);
+    }
+    if (c.female5 === true) {
+      parts.push('女≥5');
+    } else if (c.femaleN !== undefined && c.femaleN !== null && c.femaleN.length > 0) {
+      parts.push(`女${c.femaleN.join('/')}`);
+    }
+    if (c.male5 === true) {
+      parts.push('男≥5');
+    } else if (c.maleN !== undefined && c.maleN !== null && c.maleN.length > 0) {
+      parts.push(`男${c.maleN.join('/')}`);
+    }
+    if (c.castN !== undefined && c.castN !== null && c.castN.length > 0) {
+      parts.push(`共演${c.castN}`);
+    }
+    if (c.onlySub === true) {
+      parts.push('有字幕');
+    }
+    if (c.mosaic !== undefined && c.mosaic !== null && c.mosaic.length > 0) {
+      parts.push(c.mosaic === 'uncensored' ? '无码' : (c.mosaic === 'cracked' ? '破解' : '流出'));
+    }
+    if (c.fSeries !== undefined && c.fSeries !== null && c.fSeries.length > 0) {
+      parts.push(c.fSeries);
+    }
+    if (c.fStudio !== undefined && c.fStudio !== null && c.fStudio.length > 0) {
+      parts.push(c.fStudio);
+    }
+    if (c.tagPicks !== undefined && c.tagPicks !== null && c.tagPicks.length > 0) {
+      parts.push(`标签${c.tagPicks.length}`);
+    }
+    if (c.dirs !== undefined && c.dirs !== null && c.dirs.length > 0) {
+      parts.push(`导${c.dirs.length}`);
+    }
+    if (c.fSearch !== undefined && c.fSearch !== null && c.fSearch.length > 0) {
+      parts.push(`“${c.fSearch}”`);
+    }
+    return parts.length === 0 ? '无条件' : parts.join(' · ');
   }
 
   /**
@@ -576,7 +813,7 @@ struct CastFinderPage {
             if (id > 0 && this.libOn(id)) {
               Text('✓')
                 .fontSize(9)
-                .fontColor('#FFFFFF')
+                .fontColor(Theme.ON_ACCENT)
                 .width(16)
                 .height(16)
                 .textAlign(TextAlign.Center)
@@ -608,7 +845,7 @@ struct CastFinderPage {
             if (id > 0 && this.libOn(id)) {
               Text('✓')
                 .fontSize(10)
-                .fontColor('#FFFFFF')
+                .fontColor(Theme.ON_ACCENT)
                 .backgroundColor(Theme.ACCENT)
                 .borderRadius(7)
                 .padding({ left: 4, right: 4 })
@@ -1024,6 +1261,8 @@ struct CastFinderPage {
 
   private runQuery(): void {
     this.seq++;
+    // 每次真正查询前记一套条件：下次进页面自动恢复，抽屉里也能点回最近几套
+    this.saveCond();
     this.results = [];
     this.total = 0;
     this.error = '';
@@ -1500,7 +1739,7 @@ struct CastFinderPage {
       })
 
       ToolPill({
-        label: this.filterCount() > 0 ? `⚙ 甄选 ${this.filterCount()}` : '⚙ 甄选',
+        label: this.filterCount() > 0 ? `甄选 ${this.filterCount()}` : '甄选',
         active: this.filterCount() > 0,
         onTap: () => {
           this.showFilter = true;
@@ -1527,6 +1766,8 @@ struct CastFinderPage {
     }) {
       // 三段归序（2026-11-17 一体化）：找谁 / 按什么条件 / 我的偏好。
       // 原来是 8 组无归类地平铺，用户说「无序拼贴、使用起来很不对劲」。
+      // 最近用过的条件放最上面（2026-11-20）：一进来就能点回上次那套，不用重选。
+      this.CondHist()
       SectionHead({ index: '01', label: '找谁 · 范围' })
       this.Picked()
       this.DirectorBar()
@@ -1551,6 +1792,45 @@ struct CastFinderPage {
    * 外壳统一交给 `SheetSection`（同一张卡片、同一个标题基线、同一个「+ 添加」胶囊），
    * 这里只画内容：已选头像 + 选人抽屉。
    */
+  /**
+   * 最近用过的条件（2026-11-20 用户：「每次点进来都要重新选」）。
+   *
+   * 放在筛选抽屉最上面：点一条就把整套条件装回来并立刻重查 —— 比重新一项项点快得多。
+   * 进页面时已经自动恢复最后一条，这里主要是给「想换个之前用过的组合」用。
+   */
+  @Builder
+  CondHist() {
+    if (this.condHist.length > 0) {
+      Column({ space: 6 }) {
+        Text('最近用过的条件')
+          .fontSize(11)
+          .fontColor(Theme.TEXT_FAINT)
+          .width('100%')
+        Flex({ wrap: FlexWrap.Wrap }) {
+          ForEach(this.condHist, (json: string) => {
+            Text(this.condLabel(JSON.parse(json) as CastCond))
+              .fontSize(11)
+              .fontColor(Theme.TEXT)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+              .margin({ right: 6, bottom: 6 })
+              .borderRadius(9)
+              .backgroundColor(Theme.CARD_HI)
+              .onClick(() => {
+                this.applyCond(JSON.parse(json) as CastCond);
+                this.runQuery();
+                this.showFilter = false;
+              })
+          }, (json: string) => json)
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .padding({ left: 4, right: 4, bottom: 6 })
+    }
+  }
+
   @Builder
   Picked() {
     SheetSection({
@@ -1668,7 +1948,7 @@ struct CastFinderPage {
                 }
                 Text(a.name)
                   .fontSize(12)
-                  .fontColor(this.isPicked(a.id) ? '#FFFFFF' : Theme.TEXT_DIM)
+                  .fontColor(this.isPicked(a.id) ? Theme.ON_ACCENT : Theme.TEXT_DIM)
                   .maxLines(1)
               }
               .padding({ left: 5, right: 10, top: 4, bottom: 4 })
@@ -1984,7 +2264,7 @@ struct CastFinderPage {
     }
   }
 
-  /** 我的评分 / 收藏夹。 */
+  /** 我的评分 / 收藏夹（已迁出废弃 MyFilterBar，改用本页 PickChips + CollectionsBar）。 */
   @Builder
   MineSection() {
     SheetSection({
@@ -1993,18 +2273,35 @@ struct CastFinderPage {
       active: this.fMyRating.length > 0 || this.fCollection.length > 0,
       divider: false
     }) {
-      MyFilterBar({
-        myRating: this.fMyRating,
-        collection: this.fCollection,
-        onMyRating: (k: string) => {
-          this.fMyRating = k;
-          this.runQuery();
-        },
-        onCollection: (k: string) => {
-          this.fCollection = k;
-          this.runQuery();
+      if (BuildConfig.ENABLE_RATINGS) {
+        PickChips({
+          title: '我的评分',
+          options: MYRATING_OPTIONS,
+          current: this.fMyRating,
+          onPick: (k: string) => {
+            this.fMyRating = k;
+            this.runQuery();
+          }
+        })
+      }
+      if (BuildConfig.ENABLE_COLLECTIONS) {
+        Row({ space: 7 }) {
+          Text('收藏夹')
+            .fontSize(11)
+            .fontColor(Theme.TEXT_FAINT)
+          CollectionsBar({
+            current: this.fCollection,
+            showManage: false,
+            onPick: (k: string) => {
+              this.fCollection = k;
+              this.runQuery();
+            }
+          })
+            .layoutWeight(1)
         }
-      })
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+      }
     }
   }
 
@@ -2081,7 +2378,7 @@ struct CastFinderPage {
 
         Text(this.dirExclude ? '✕ 排除这几位' : '✓ 只看这几位')
           .fontSize(11)
-          .fontColor('#FFFFFF')
+          .fontColor(this.dirExclude ? '#FFFFFF' : Theme.ON_ACCENT)
           .padding({ left: 10, right: 10, top: 5, bottom: 5 })
           .backgroundColor(this.dirExclude ? Theme.DANGER : Theme.ACCENT)
           .borderRadius(14)
@@ -2115,7 +2412,7 @@ struct CastFinderPage {
             ForEach(this.dirHits, (d: DirectorHit) => {
               Text(d.count > 0 ? `${d.name} · ${d.count}` : d.name)
                 .fontSize(12)
-                .fontColor(this.isDirPicked(d.id) ? '#FFFFFF' : Theme.TEXT_DIM)
+                .fontColor(this.isDirPicked(d.id) ? Theme.ON_ACCENT : Theme.TEXT_DIM)
                 .padding({ left: 10, right: 10, top: 5, bottom: 5 })
                 .backgroundColor(this.isDirPicked(d.id) ? Theme.ACCENT : Theme.CARD_HI)
                 .borderRadius(14)
@@ -2124,7 +2421,7 @@ struct CastFinderPage {
                 .onClick(() => {
                   this.toggleDir(d);
                 })
-            }, (d: DirectorHit) => `dhit-${d.id}`)
+            }, (d: DirectorHit) => `dhit-${d.id}-${this.isDirPicked(d.id) ? 1 : 0}`)
           }
           .width('100%')
         }
@@ -2344,7 +2641,7 @@ struct CastFinderPage {
         }
         Blank()
         GlassCapsule({
-          label: `⇅ ${this.sortLabel()}`,
+          label: `${this.sortLabel()}`,
           fs: 12,
           padH: 11,
           padV: 7,
@@ -2356,7 +2653,7 @@ struct CastFinderPage {
           }
         })
         GlassCapsule({
-          label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+          label: this.filterCount() > 0 ? `筛选 ${this.filterCount()}` : '筛选',
           active: this.filterCount() > 0,
           fs: 12,
           padH: 11,
@@ -2460,7 +2757,7 @@ struct CastFinderPage {
                   .fontSize(30)
                   .fontColor(Theme.TEXT_FAINT)
                 Text(this.filterCount() === 0
-                  ? '点右上角「⚙ 甄选」设定筛选条件'
+                  ? '点右上角「甄选」设定筛选条件'
                   : '没有符合条件的片子')
                   .fontSize(12)
                   .fontColor(Theme.TEXT_DIM)

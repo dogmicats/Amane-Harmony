@@ -4,9 +4,11 @@ import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
 import { Updater, ApplyResult, CheckResult, UpgradeStatus } from '../common/Updater';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BuildConfig } from '../common/BuildConfig';
 import { UpdateWatch } from '../common/UpdateWatch';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 
 /** 公开版的兜底步骤（`BuildConfig.CHANNEL === 'public'`）。不写端口、不写账号密码。 */
 const HOWTO_PUBLIC: string =
@@ -125,6 +127,10 @@ struct UpdatePage {
     this.draft = Store.I.prefString('update_manifest_url', '');
     this.runCheck();
     this.loadUpgrade();
+  }
+
+  aboutToDisappear(): void {
+    this.stopPolling();
   }
 
   /** 读一次服务端升级状态：不能就地升时退回手动步骤（并说明原因）。 */
@@ -486,9 +492,10 @@ struct UpdatePage {
       if (this.latestOf(which).length > 0) {
         Text(this.canUpOf(which) ? '可更新' : '最新')
           .fontSize(9)
-          .fontColor(this.canUpOf(which) ? '#FFFFFF' : Theme.TEXT_FAINT)
+          .fontColor(this.canUpOf(which) ? Theme.ACCENT_INK : Theme.TEXT_FAINT)
           .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-          .backgroundColor(this.canUpOf(which) ? Theme.ACCENT : Theme.CARD_HI)
+          .backgroundColor(this.canUpOf(which) ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+            .border({ width: this.canUpOf(which) ? 0.75 : 0.5, color: this.canUpOf(which) ? Theme.inkAlpha(0.50) : '#16FFFFFF' })
           .borderRadius(6)
       }
     }
@@ -545,7 +552,7 @@ struct UpdatePage {
         Row({ space: 8 }) {
           Text('恢复更新提醒')
             .fontSize(11)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .padding({ left: 12, right: 12, top: 6, bottom: 6 })
             .backgroundColor(Theme.CARD_HI)
             .borderRadius(9)
@@ -561,7 +568,8 @@ struct UpdatePage {
     .width('100%')
     .padding(12)
     .backgroundColor(Theme.CARD)
-    .borderRadius(12)
+    .borderRadius(16)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   /**
@@ -616,7 +624,8 @@ struct UpdatePage {
     .width('100%')
     .padding(12)
     .backgroundColor(Theme.CARD)
-    .borderRadius(12)
+    .borderRadius(16)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   /** 把步骤复制到剪贴板（用户粘到终端里照做）。 */
@@ -661,7 +670,7 @@ struct UpdatePage {
           .layoutWeight(1)
           Text(this.serverUpdatable ? `${this.upCurrent} → ${this.serverLatest}` : this.upCurrent)
             .fontSize(10)
-            .fontColor(this.serverUpdatable ? Theme.ACCENT : Theme.TEXT_FAINT)
+            .fontColor(this.serverUpdatable ? Theme.ACCENT_INK : Theme.TEXT_FAINT)
         }
         .width('100%')
 
@@ -681,7 +690,8 @@ struct UpdatePage {
             .fontColor(this.serverUpdatable ? '#0B0B14' : Theme.TEXT_DIM)
             .textAlign(TextAlign.Center)
             .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-            .backgroundColor(this.serverUpdatable ? Theme.ACCENT : Theme.CARD)
+            .backgroundColor(this.serverUpdatable ? Theme.accentAlpha(0.20) : Theme.CARD)
+            .border({ width: this.serverUpdatable ? 0.75 : 0.5, color: this.serverUpdatable ? Theme.inkAlpha(0.50) : '#16FFFFFF' })
             .borderRadius(9)
             .onClick(() => {
               if (this.serverUpdatable) {
@@ -690,7 +700,7 @@ struct UpdatePage {
             })
           Text('看手动步骤')
             .fontSize(10)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .padding({ left: 8, right: 8, top: 5, bottom: 5 })
             .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
             .backgroundColor('#1FFFFFFF')
@@ -741,14 +751,15 @@ struct UpdatePage {
             .fontColor(this.serverUpdatable ? '#0B0B14' : Theme.TEXT_DIM)
             .textAlign(TextAlign.Center)
             .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-            .backgroundColor(this.serverUpdatable ? Theme.ACCENT : Theme.CARD)
+            .backgroundColor(this.serverUpdatable ? Theme.accentAlpha(0.20) : Theme.CARD)
+            .border({ width: this.serverUpdatable ? 0.75 : 0.5, color: this.serverUpdatable ? Theme.inkAlpha(0.50) : '#16FFFFFF' })
             .borderRadius(9)
             .onClick(() => {
               this.upgradeNow();
             })
           Text('看手动步骤')
             .fontSize(10)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .padding({ left: 8, right: 8, top: 5, bottom: 5 })
             .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
             .backgroundColor('#1FFFFFFF')
@@ -779,7 +790,7 @@ struct UpdatePage {
             .layoutWeight(1)
           Text(this.howtoOpen ? '收起' : '展开')
             .fontSize(10)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .padding({ left: 8, right: 8, top: 5, bottom: 5 })
             .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
             .backgroundColor('#1FFFFFFF')
@@ -791,7 +802,7 @@ struct UpdatePage {
             })
           Text('复制步骤')
             .fontSize(10)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .padding({ left: 8, right: 8, top: 5, bottom: 5 })
             .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
             .backgroundColor('#1FFFFFFF')
@@ -855,7 +866,7 @@ struct UpdatePage {
         .alignItems(HorizontalAlign.Start)
         Text('重新检查')
           .fontSize(11)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
           .padding({ left: 10, right: 10, top: 5, bottom: 5 })
           .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
           .backgroundColor('#1FFFFFFF')
@@ -896,9 +907,15 @@ struct UpdatePage {
     };
   }
 
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
   build() {
     Navigation(this.navStack) {
-      Column() {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
+        Column() {
 
         Scroll() {
           Column({ space: 10 }) {
@@ -956,7 +973,7 @@ struct UpdatePage {
                 Row({ space: 8 }) {
                   Text(`下载新版本 ${this.clientLatest}`)
                     .fontSize(12)
-                    .fontColor(Theme.ACCENT)
+                    .fontColor(Theme.ACCENT_INK)
                     .padding({ left: 14, right: 14, top: 8, bottom: 8 })
                     .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
                     .backgroundColor(Theme.accentAlpha(0.30))
@@ -988,7 +1005,7 @@ struct UpdatePage {
                 Row({ space: 8 }) {
                   Text(this.savedUri.length > 0 ? '已存到手机' : '另存到手机')
                     .fontSize(12)
-                    .fontColor(this.savedUri.length > 0 ? Theme.GOLD : '#FFFFFF')
+                    .fontColor(this.savedUri.length > 0 ? Theme.GOLD : Theme.ON_ACCENT)
                     .padding({ left: 14, right: 14, top: 8, bottom: 8 })
                     .backgroundColor(this.savedUri.length > 0 ? Theme.CARD_HI : Theme.ACCENT)
                     .borderRadius(10)
@@ -1004,9 +1021,10 @@ struct UpdatePage {
               if (this.st === ST_FAILED) {
                 Text('重试')
                   .fontSize(12)
-                  .fontColor(Theme.ACCENT)
+                  .fontColor(Theme.ACCENT_INK)
                   .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-                  .backgroundColor(Theme.ACCENT_SOFT)
+                  .backgroundColor(Theme.accentAlpha(0.16))
+            .border({ width: 0.5, color: Theme.inkAlpha(0.38) })
                   .borderRadius(10)
                   .onClick(() => {
                     this.runCheck();
@@ -1016,7 +1034,8 @@ struct UpdatePage {
             .width('100%')
             .padding(12)
             .backgroundColor(Theme.CARD)
-            .borderRadius(12)
+            .borderRadius(16)
+            .border({ width: 0.75, color: Theme.STROKE })
 
             this.ServerCard()
 
@@ -1037,9 +1056,10 @@ struct UpdatePage {
                   })
                 Text('保存并检查')
                   .fontSize(10)
-                  .fontColor(Theme.ACCENT)
+                  .fontColor(Theme.ACCENT_INK)
                   .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-                  .backgroundColor(Theme.ACCENT_SOFT)
+                  .backgroundColor(Theme.accentAlpha(0.16))
+            .border({ width: 0.5, color: Theme.inkAlpha(0.38) })
                   .borderRadius(8)
                   .onClick(() => {
                     Store.I.prefSetString('update_manifest_url', this.draft.trim());
@@ -1047,7 +1067,7 @@ struct UpdatePage {
                   })
                 Text('恢复默认')
                   .fontSize(10)
-                  .fontColor(Theme.ACCENT)
+                  .fontColor(Theme.ACCENT_INK)
                   .padding({ left: 8, right: 8, top: 6, bottom: 6 })
                   .backgroundColor(Theme.CARD_HI)
                   .borderRadius(8)
@@ -1070,9 +1090,10 @@ struct UpdatePage {
                 Row({ space: 8 }) {
                   Text(this.demo ? '退回真实结果' : '验收自检（不用联网）')
                     .fontSize(10)
-                    .fontColor(Theme.ACCENT)
+                    .fontColor(Theme.ACCENT_INK)
                     .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-                    .backgroundColor(Theme.ACCENT_SOFT)
+                    .backgroundColor(Theme.accentAlpha(0.16))
+            .border({ width: 0.5, color: Theme.inkAlpha(0.38) })
                     .borderRadius(8)
                     .onClick(() => {
                       if (this.demo) {
@@ -1105,7 +1126,7 @@ struct UpdatePage {
                 .lineHeight(14)
             }
             .width('100%')
-            .padding({ top: 4, bottom: Theme.BOTTOM_SAFE })
+            .padding({ top: 4, bottom: Theme.pageBottomSafe() })
             } else {
               Column({ space: 4 }) {
                 Text('检查时按 GitHub Release → 仓库镜像 → CDN 镜像 → 自有服务端 依次找清单，连不上自动换下一个源。')
@@ -1121,7 +1142,7 @@ struct UpdatePage {
                   .lineHeight(14)
               }
               .width('100%')
-              .padding({ top: 4, bottom: Theme.BOTTOM_SAFE })
+              .padding({ top: 4, bottom: Theme.pageBottomSafe() })
             }
           }
           .width('100%')
@@ -1135,8 +1156,13 @@ struct UpdatePage {
       }
       .width('100%')
       .height('100%')
+
+      }
+      .width('100%')
+      .height('100%')
       .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .mode(NavigationMode.Stack)
     .hideBackButton(true)
     .hideToolBar(true)

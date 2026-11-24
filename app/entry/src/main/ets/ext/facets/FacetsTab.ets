@@ -58,8 +58,9 @@ export struct FacetsTab {
   /** 顶部状态栏高度（真全屏下顶栏要让出这么多，见 Index.readInsets）。 */
   @StorageProp('amaneTopInset') topInset: number = 30;
   @State items: FacetItem[] = [];
-  /** 标签网格的控制器：底栏自动收起要用绝对偏移判方向（见 common/NavBarWatch）。 */
+  /** 标签网格的控制器：底栏自动收起与回顶弹簧保护用。 */
   private sc: Scroller = new Scroller();
+  private atTop: boolean = true;
   /** 七十二改：上一次喂给底栏的偏移（只做节流；位移来自 `onScroll` 的参数，不读布局）。 */
   private lastNavOff: number = -1;
   /** 导航栈 / 材质档位（五十五改）：整页套 Navigation 只为拿到标题栏这个材质落点。 */
@@ -103,7 +104,7 @@ export struct FacetsTab {
   ];
   private favOptions: ChipOption[] = [
     { key: '', label: '不限' },
-    { key: '1', label: '♥ 只看收藏' }
+    { key: '1', label: '只看收藏' }
   ];
   /** 我的评分：没打分的排在最前，用户要「找出想打分但忘了打的」。 */
   private ratingOptions(): ChipOption[] {
@@ -818,7 +819,7 @@ export struct FacetsTab {
         .layoutWeight(1)
 
         GlassCapsule({
-          label: `⇅ ${this.sortLabel()}`,
+          label: `${this.sortLabel()}`,
           fs: 12,
           padH: 9,
           padV: 8,
@@ -833,7 +834,7 @@ export struct FacetsTab {
         // user_tag 既没有收藏位也没有隐藏位，抽屉会是空的 —— 干脆不给入口
         if (this.kind !== 'user_tag') {
           GlassCapsule({
-            label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+            label: this.filterCount() > 0 ? `筛选 ${this.filterCount()}` : '筛选',
             active: this.filterCount() > 0,
             fs: 12,
             padH: 9,
@@ -865,7 +866,7 @@ export struct FacetsTab {
                     this.pickKind(k.key);
                   }
                 })
-            }, (k: ChipOption) => `kind-${k.key}`)
+            }, (k: ChipOption) => `kind-${k.key}-${this.kind === k.key ? 1 : 0}`)
           }
           .padding({ left: 14, right: 22 })
           .height(42)
@@ -1099,33 +1100,36 @@ export struct FacetsTab {
           .layoutWeight(1)
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
-          // ★ 五十六改：治「拖动时上下边突然闪现 / 消失」★
-          //
-          //  1）网格没有 `cachedCount`，视口边缘那一排每帧都被创建/销毁 —— 图片解码跟不上，
-          //     就成了「一冒一冒」的闪。六十改：6 → 10（标签卡是 2~3 列大图，6 个余量不够）。
-          //  2）**不要在滚动回调里读 `currentOffset()`**（六十改）。那是每帧一次布局回读，
-          //     网格虚拟化会跟着重排。媒体库/收藏不闪，是因为它们（`view/BrowseGrid`）
-          //     用 `onScrollIndex` 只拿首行索引。这里对齐同一条路子。
-          .cachedCount(10)
+          // 2.8.3 真机修复：cachedCount(6, true) + ContentClipMode.SAFE_AREA 持续渲染 padding 与安全区内的行，
+          // 彻底消除底栏下方黑边与上下边闪现/闪没。
+          .cachedCount(6, true)
+          .clipContent(ContentClipMode.BOUNDARY)
           .onReachEnd(() => {
             this.loadMore();
           })
-          // 往下看收起底栏（2026-11-15），见 common/NavBarWatch
-          //
-          // ★ 七十二改：与演员页同因同治 —— `onScrollIndex` 是「按行跳」的位移，
-          // 一次跳一行（卡片大时 ≈ 100vp），底栏跟着一顿一顿翻，Tabs 的 barHeight
-          // 动画被反复触发，网格边缘那一排反复创建/销毁 = 「上下边突然闪现」。
-          // 改用 `onScroll` 的 `yOffset`（框架直接给，不是布局回读）+ 24vp 节流。
-          .onScroll((xOff: number, yOff: number) => {
-            if (this.lastNavOff < 0) {
-              this.lastNavOff = yOff;
+          .onScrollIndex((first: number) => {
+            this.atTop = first === 0;
+            if (first === 0) {
+              NavBarWatch.reset();
+            }
+          })
+          .onDidScroll((scrollOffset: number, scrollState: ScrollState) => {
+            if (scrollState === ScrollState.Idle) {
               return;
             }
-            if (Math.abs(yOff - this.lastNavOff) < 24) {
-              return;
+            if (this.atTop) {
+              const y: number = this.sc.currentOffset().yOffset;
+              if (y <= 28) {
+                NavBarWatch.reset();
+                return;
+              }
             }
-            this.lastNavOff = yOff;
-            NavBarWatch.onOffset(yOff);
+            NavBarWatch.onDelta(scrollOffset);
+          })
+          .onScrollStop(() => {
+            if (this.atTop && this.sc.currentOffset().yOffset <= 4) {
+              NavBarWatch.reset();
+            }
           })
         }
 

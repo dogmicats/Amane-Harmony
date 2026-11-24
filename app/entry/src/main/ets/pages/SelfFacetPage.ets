@@ -5,6 +5,7 @@ import { dropPageCache, httpGet, httpPost } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 
 /** 一个自建分类（覆盖层里有、库里没有的名字）。 */
 interface VirtualFacet {
@@ -380,7 +381,8 @@ struct SelfFacetPage {
     .width('100%')
     .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(14)
+    .borderRadius(16)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   /** 改名浮层：ArkUI 没有「带输入框的对话框」，自己盖一层（打开时重建，初值才生效）。 */
@@ -417,7 +419,7 @@ struct SelfFacetPage {
             })
           Text(this.busy ? '…' : '确定')
             .fontSize(12)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .padding({ left: 16, right: 16, top: 7, bottom: 7 })
             .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
             .backgroundColor(Theme.accentAlpha(0.30))
@@ -471,13 +473,14 @@ struct SelfFacetPage {
             Text(pair[1])
               .fontSize(12)
               .fontColor(this.ck === pair[0] ? Theme.BG : Theme.TEXT)
-              .backgroundColor(this.ck === pair[0] ? Theme.ACCENT : Theme.CARD_HI)
+              .backgroundColor(this.ck === pair[0] ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+            .border({ width: this.ck === pair[0] ? 0.75 : 0.5, color: this.ck === pair[0] ? Theme.inkAlpha(0.50) : '#16FFFFFF' })
               .borderRadius(14)
               .padding({ left: 16, right: 16, top: 7, bottom: 7 })
               .onClick(() => {
                 this.ck = pair[0];
               })
-          }, (pair: string[]) => `ck-${pair[0]}`)
+          }, (pair: string[]) => `ck-${pair[0]}-${this.ck === pair[0] ? 1 : 0}`)
           Blank()
         }
         .width('100%')
@@ -547,7 +550,7 @@ struct SelfFacetPage {
         Text('＋')
           .fontSize(24)
           .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
           .width(40)
           .height(34)
           .textAlign(TextAlign.Center)
@@ -593,6 +596,7 @@ struct SelfFacetPage {
   build() {
     Navigation(this.navStack) {
       Stack({ alignContent: Alignment.Center }) {
+        SettingsAmbientGlow()
         Column() {
 
         // 七十二改：让位落进滚动内容的 padding（随内容滚走），不再有死留白。
@@ -608,7 +612,7 @@ struct SelfFacetPage {
                 .fontColor(Theme.TEXT_FAINT)
                 .width('100%')
                 .lineHeight(15)
-                .padding({ bottom: Theme.BOTTOM_SAFE })
+                .padding({ bottom: Theme.pageBottomSafe() })
             }
             .width('100%')
             .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6 })
@@ -646,7 +650,7 @@ struct SelfFacetPage {
         }
         .width('100%')
         .height('100%')
-        .backgroundColor(Theme.BG)
+
 
         if (this.renameOpen) {
           this.RenameSheet()

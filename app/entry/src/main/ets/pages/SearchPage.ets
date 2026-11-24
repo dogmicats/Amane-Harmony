@@ -1000,10 +1000,14 @@ struct SearchPage {
           .fontSize(11)
           .fontWeight(this.scope.indexOf(opt.key) >= 0 ? FontWeight.Medium : FontWeight.Normal)
           .fontColor(this.offKind(opt.key) ? Theme.TEXT_FAINT
-            : (this.scope.indexOf(opt.key) >= 0 ? '#FFFFFF' : Theme.TEXT_DIM))
+            : (this.scope.indexOf(opt.key) >= 0 ? Theme.ACCENT_INK : Theme.TEXT_DIM))
           .padding({ left: 10, right: 10, top: 5, bottom: 5 })
           .backgroundColor(this.offKind(opt.key) ? Theme.BG_RAISED
-            : (this.scope.indexOf(opt.key) >= 0 ? Theme.ACCENT : Theme.CARD))
+            : (this.scope.indexOf(opt.key) >= 0 ? Theme.accentAlpha(0.20) : Theme.CARD))
+          .border({
+            width: this.scope.indexOf(opt.key) >= 0 && !this.offKind(opt.key) ? 0.75 : 0.5,
+            color: this.scope.indexOf(opt.key) >= 0 && !this.offKind(opt.key) ? Theme.inkAlpha(0.50) : '#14FFFFFF'
+          })
           .borderRadius(11)
           .opacity(this.offKind(opt.key) ? 0.55 : 1)
           .onClick(() => {
@@ -1171,7 +1175,7 @@ struct SearchPage {
             : (item.name.length > 0 ? item.name : '未命名'))
             .fontSize(item.type === 'film' ? 12 : 13)
             .fontWeight(FontWeight.Medium)
-            .fontColor(item.type === 'film' ? Theme.ACCENT : Theme.TEXT)
+            .fontColor(item.type === 'film' ? Theme.ACCENT_INK : Theme.TEXT)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .constraintSize({ maxWidth: 150 })
@@ -1223,7 +1227,7 @@ struct SearchPage {
       if (group.more) {
         Text('看全部 →')
           .fontSize(10)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
           .onClick(() => {
             this.commitSearch();
           })
@@ -1247,7 +1251,7 @@ struct SearchPage {
         Blank()
         Text(`搜索「${this.keyword.trim()}」→`)
           .fontSize(11)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
           .onClick(() => {
             this.commitSearch();
           })
@@ -1561,7 +1565,7 @@ struct SearchPage {
             .fontColor(Theme.TEXT_FAINT)
           Text('一起算')
             .fontSize(10)
-            .fontColor('#FFFFFF')
+            .fontColor(Theme.ON_ACCENT)
             .padding({ left: 8, right: 8, top: 3, bottom: 3 })
             .backgroundColor(Theme.ACCENT)
             .borderRadius(7)
@@ -1627,6 +1631,7 @@ struct SearchPage {
         .rowsGap(14)
         .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
         .layoutWeight(1)
+        .cachedCount(6)
         .scrollBar(BarState.Off)
       } else if (this.ents.length > 0) {
         // 没勾影片（或影片零命中）：实体命中就是主结果，竖排一行一条

@@ -81,6 +81,14 @@ export class NavBarWatch {
     NavBarWatch.feed(d);
   }
 
+  /** 直接喂有符号增量（`Grid.onDidScroll(scrollOffset, scrollState)` 的 `scrollOffset`）。 */
+  static onDelta(dy: number): void {
+    if (!Number.isFinite(dy) || Math.abs(dy) < 0.5) {
+      return;
+    }
+    NavBarWatch.feed(dy);
+  }
+
   /** 有符号位移：`dy > 0` = 往下看，`dy < 0` = 往回看。 */
   private static feed(dy: number): void {
     if (dy === 0) {

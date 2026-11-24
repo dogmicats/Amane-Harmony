@@ -14,24 +14,18 @@ import { BottomSheet, ChipGroup, ListToolbar, SortSheet } from '../view/ListShee
 import { collectionChipOptions } from '../ext/collections/CollectionTypes';
 import { BuildConfig } from '../common/BuildConfig';
 import { removeWatchLater } from '../ext/watchlater/WatchLaterApi';
-import { NavHeader } from '../view/GlassKit';
+import { GlassBack, PageTitle } from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 
-/**
- * 稍后再看（公开扩展 watch_later）。
- *
- * 列表走核心 browse 的 `watchlater=1`（扩展的 browse_where 钩子加过滤），于是
- * 标记（无码/破解/中流）、我的评分、播放进度这些都由核心照常补齐，这里只负责摆放。
- * 2.4.6.26 起搜索与筛选/排序收进「工具条 + 底部抽屉」，与媒体库一致。
- */
 @Entry
 @Component
 struct WatchLaterPage {
   @StorageProp('amaneCols') posterCols: number = 3;
+  @StorageProp('amaneTopInset') topInset: number = 30;
   @State items: MediaItem[] = [];
   @State total: number = 0;
   @State loading: boolean = true;
   @State note: string = '';
-  /** 和其他 browse 系列表页同一套口径：我的评分 / 收藏夹筛选。 */
   @State fMyRating: string = '';
   @State fCollection: string = '';
   @State collectionOptions: ChipOption[] = [];
@@ -40,6 +34,7 @@ struct WatchLaterPage {
   @State keyword: string = '';
   @State showSort: boolean = false;
   @State showFilter: boolean = false;
+  private navStack: NavPathStack = new NavPathStack();
   private sorts: SortOption[] = [
     { key: 'recent', label: '最近加入', def: 'desc' },
     { key: 'release', label: '发行日期', def: 'desc' },
@@ -47,9 +42,8 @@ struct WatchLaterPage {
     { key: 'number', label: '番号', def: 'asc' }
   ];
 
-  /** 用 onPageShow：从详情页移出再回来，列表要立刻反映。 */
   onPageShow(): void {
-    setPageFullScreen(getContext(this), false);
+    setPageFullScreen(getContext(this), true);
     this.load();
   }
 
@@ -86,7 +80,7 @@ struct WatchLaterPage {
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] watch later: ${e.code} ${e.message}`);
-      this.note = e.code === 404 ? '服务端还没有这个功能（需 1.3.38+）' : '读取失败，请检查连接';
+      this.note = e.code === 404 ? '服务端暂不支持稍后再看' : '读取失败，请检查连接';
     }
     this.loading = false;
   }
@@ -111,7 +105,6 @@ struct WatchLaterPage {
     return '最近加入';
   }
 
-  /** 移出队列：先本地移除（卡片立刻消失），失败再放回去。 */
   private async remove(id: number): Promise<void> {
     const before: MediaItem[] = this.items;
     const rest: MediaItem[] = [];
@@ -140,9 +133,39 @@ struct WatchLaterPage {
   }
 
   @Builder
-  Header() {
-    // 四十一改：二级页标准头
-    NavHeader({ title: '稍后再看', padTop: 6 })
+  TitleBar() {
+    Column() {
+      Row({ space: 10 }) {
+        GlassBack({
+          mat: true,
+          onTap: () => {
+            router.back();
+          }
+        })
+        PageTitle({ text: '稍后再看', fs: 18 })
+        Blank()
+      }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
+      .width('100%')
+      .padding({ left: 8, right: Theme.PAGE_PAD })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
+
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
   }
 
   @Builder
@@ -181,166 +204,186 @@ struct WatchLaterPage {
   }
 
   build() {
-    Stack({ alignContent: Alignment.Bottom }) {
-      Column() {
-        this.Header()
+    Navigation(this.navStack) {
+      Stack({ alignContent: Alignment.Bottom }) {
+        Stack({ alignContent: Alignment.Top }) {
+          SettingsAmbientGlow()
 
-        if (this.note.length > 0) {
-          Text(this.note)
-            .fontSize(11)
-            .fontColor(Theme.TEXT_DIM)
-            .width('100%')
-            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
+          Column() {
+            Blank().height(this.barH() + 4)
+
+            if (this.note.length > 0) {
+              Text(this.note)
+                .fontSize(11)
+                .fontColor(Theme.TEXT_DIM)
+                .width('100%')
+                .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
+            }
+
+            if (this.items.length > 0 || this.filterCount() > 0 || this.keyword.length > 0) {
+              Row() {
+                KeywordBox({
+                  placeholder: '搜索番号 / 标题 / 演员',
+                  onCommit: (kw: string) => {
+                    const next: string = kw.trim();
+                    if (next === this.keyword) {
+                      return;
+                    }
+                    this.keyword = next;
+                    this.load();
+                  }
+                })
+              }
+              .width('100%')
+              .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
+
+              ListToolbar({
+                label: this.keyword.length > 0
+                  ? `「${this.keyword}」${this.total} 部`
+                  : `${this.total} 部`,
+                sortLabel: `${this.sortLabel()}${this.order === 'asc' ? ' ↑' : ' ↓'}`,
+                filterCount: this.filterCount(),
+                showFilter: true,
+                onSort: () => {
+                  this.showSort = true;
+                },
+                onFilter: () => {
+                  this.showFilter = true;
+                }
+              })
+            }
+
+            if (this.loading) {
+              Column() {
+                LoadingProgress()
+                  .width(26)
+                  .height(26)
+                  .color(Theme.ACCENT_INK)
+              }
+              .width('100%')
+              .layoutWeight(1)
+              .justifyContent(FlexAlign.Center)
+            } else if (this.items.length === 0) {
+              Column({ space: 10 }) {
+                SymbolGlyph($r('sys.symbol.bookmark'))
+                  .fontSize(28)
+                  .fontColor([Theme.TEXT_FAINT])
+                Text(this.keyword.length > 0 ? `没有找到「${this.keyword}」` : '还没有稍后再看的片子')
+                  .fontSize(14)
+                  .fontColor(Theme.TEXT_DIM)
+                Text(this.keyword.length > 0
+                  ? '换个关键词，或清空搜索看全部'
+                  : '在影片详情页点「稍后再看」，想看的片会排在这里')
+                  .fontSize(11)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .textAlign(TextAlign.Center)
+                  .padding({ left: 32, right: 32 })
+              }
+              .width('100%')
+              .layoutWeight(1)
+              .justifyContent(FlexAlign.Center)
+            } else {
+              Grid() {
+                ForEach(this.items, (item: MediaItem) => {
+                  GridItem() {
+                    Stack({ alignContent: Alignment.TopStart }) {
+                      PosterCard({
+                        item: item,
+                        fluid: true,
+                        showDate: true,
+                        onTap: () => {
+                          this.open(item.id);
+                        }
+                      })
+                      Stack({ alignContent: Alignment.Center }) {
+                        SymbolGlyph($r('sys.symbol.xmark'))
+                          .fontSize(10)
+                          .fontColor(['#FFFFFF'])
+                      }
+                      .width(22)
+                      .height(22)
+                      .borderRadius(11)
+                      .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                      .backgroundColor('#99000000')
+                      .border({ width: 0.5, color: '#33FFFFFF' })
+                      .margin({ left: 5, top: 5 })
+                      .onClick(() => {
+                        this.remove(item.id);
+                      })
+                    }
+                    .width('100%')
+                  }
+                }, (item: MediaItem) => `wl-${item.id}`)
+              }
+              .columnsTemplate(Personalize.colsTemplate(this.posterCols))
+              .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
+                Personalize.zoom(event.scale);
+              }))
+              .columnsGap(10)
+              .rowsGap(14)
+              .width('100%')
+              .layoutWeight(1)
+              .cachedCount(6)
+              .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.pageBottomSafe() })
+              .scrollBar(BarState.Off)
+              .edgeEffect(EdgeEffect.Spring)
+            }
+          }
+          .width('100%')
+          .height('100%')
         }
+        .width('100%')
+        .height('100%')
 
-        if (this.items.length > 0 || this.filterCount() > 0 || this.keyword.length > 0) {
-          Row() {
-            KeywordBox({
-              placeholder: '搜索番号 / 标题 / 演员',
-              onCommit: (kw: string) => {
-                const next: string = kw.trim();
-                if (next === this.keyword) {
+        if (this.showSort || this.showFilter) {
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor('#99000000')
+            .onClick(() => {
+              this.showSort = false;
+              this.showFilter = false;
+            })
+
+          if (this.showSort) {
+            SortSheet({
+              options: this.sorts,
+              current: this.sortKey,
+              order: this.order,
+              tabInset: 0,
+              onPick: (key: string) => {
+                if (this.sortKey === key) {
+                  this.showSort = false;
                   return;
                 }
-                this.keyword = next;
+                this.sortKey = key;
+                this.order = sortDefOf(key);
                 this.load();
+                this.showSort = false;
+              },
+              onToggleOrder: () => {
+                this.order = this.order === 'asc' ? 'desc' : 'asc';
+                this.load();
+              },
+              onClose: () => {
+                this.showSort = false;
               }
             })
           }
-          .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 6 })
-
-          ListToolbar({
-            label: this.keyword.length > 0
-              ? `「${this.keyword}」${this.total} 部`
-              : `${this.total} 部`,
-            sortLabel: `${this.sortLabel()}${this.order === 'asc' ? ' ↑' : ' ↓'}`,
-            filterCount: this.filterCount(),
-            showFilter: true,
-            onSort: () => {
-              this.showSort = true;
-            },
-            onFilter: () => {
-              this.showFilter = true;
-            }
-          })
-        }
-
-        if (this.loading) {
-          Column() {
-            LoadingProgress()
-              .width(26)
-              .height(26)
-              .color(Theme.ACCENT)
+          if (this.showFilter) {
+            this.FilterSheet()
           }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else if (this.items.length === 0) {
-          Column({ space: 10 }) {
-            Text(this.keyword.length > 0 ? '◇' : '⏱')
-              .fontSize(30)
-              .fontColor(Theme.TEXT_FAINT)
-            Text(this.keyword.length > 0 ? `没有找到「${this.keyword}」` : '还没有稍后再看的片子')
-              .fontSize(14)
-              .fontColor(Theme.TEXT_DIM)
-            Text(this.keyword.length > 0
-              ? '换个关键词，或清空搜索看全部'
-              : '在影片详情页点「稍后再看」，回头想看的片会排在这里。')
-              .fontSize(11)
-              .fontColor(Theme.TEXT_FAINT)
-              .textAlign(TextAlign.Center)
-              .padding({ left: 32, right: 32 })
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else {
-          Grid() {
-            ForEach(this.items, (item: MediaItem) => {
-              GridItem() {
-                Stack({ alignContent: Alignment.TopStart }) {
-                  PosterCard({
-                    item: item,
-                    fluid: true,
-                    showDate: true,
-                    onTap: () => {
-                      this.open(item.id);
-                    }
-                  })
-                  // 移出队列：左上角一个半透明 ✕，不与海报右上角的评分标签打架
-                  Text('✕')
-                    .fontSize(10)
-                    .fontColor('#FFFFFF')
-                    .width(20)
-                    .height(20)
-                    .textAlign(TextAlign.Center)
-                    .borderRadius(10)
-                    .backgroundColor('#99000000')
-                    .margin({ left: 5, top: 5 })
-                    .onClick(() => {
-                      this.remove(item.id);
-                    })
-                }
-                .width('100%')
-              }
-            }, (item: MediaItem) => `wl-${item.id}`)
-          }
-          .columnsTemplate(Personalize.colsTemplate(this.posterCols))
-          .gesture(PinchGesture({ fingers: 2 }).onActionEnd((event: GestureEvent) => {
-            Personalize.zoom(event.scale);
-          }))
-          .columnsGap(10)
-          .rowsGap(14)
-          .width('100%')
-          .layoutWeight(1)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
-          .scrollBar(BarState.Off)
         }
       }
       .width('100%')
       .height('100%')
-
-      if (this.showSort || this.showFilter) {
-        Column()
-          .width('100%')
-          .height('100%')
-          .backgroundColor('#99000000')
-          .onClick(() => {
-            this.showSort = false;
-            this.showFilter = false;
-          })
-
-        if (this.showSort) {
-          SortSheet({
-            options: this.sorts,
-            current: this.sortKey,
-            order: this.order,
-            tabInset: 0,
-            onPick: (key: string) => {
-              if (this.sortKey === key) {
-                this.showSort = false;
-                return;
-              }
-              this.sortKey = key;
-              this.order = sortDefOf(key);
-              this.load();
-              this.showSort = false;
-            },
-            onToggleOrder: () => {
-              this.order = this.order === 'asc' ? 'desc' : 'asc';
-              this.load();
-            },
-            onClose: () => {
-              this.showSort = false;
-            }
-          })
-        }
-        if (this.showFilter) {
-          this.FilterSheet()
-        }
-      }
+      .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

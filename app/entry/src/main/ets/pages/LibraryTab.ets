@@ -108,6 +108,7 @@ export struct LibraryTab {
    *  - `sortText` / `sortCustom`：当前排序依据，改过才显示（默认排序仍写「排序」）。
    */
   @State filterOn: boolean = false;
+  @State filterCount: number = 0;
   @State sortText: string = '';
   @State sortCustom: boolean = false;
   /**
@@ -336,12 +337,12 @@ export struct LibraryTab {
   Chip(id: number, label: string) {
     Text(label)
       .fontSize(13)
-      .fontColor(this.isActive(id) ? '#FFFFFF' : Theme.TEXT_DIM)
+      .fontWeight(this.isActive(id) ? FontWeight.Medium : FontWeight.Regular)
+      .fontColor(this.isActive(id) ? Theme.ACCENT_INK : Theme.TEXT_DIM)
       .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-      .backgroundColor(this.isActive(id) ? Theme.ACCENT : Theme.CARD)
+      .backgroundColor(this.isActive(id) ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
       .borderRadius(Theme.R_PILL)
-      // 未选中加 1px 细边：深底上纯色块会和背景糊在一起（和首页卡片同一套判据）
-      .border({ width: 1, color: this.isActive(id) ? Theme.accentAlpha(0.55) : Theme.STROKE })
+      .border({ width: 1, color: this.isActive(id) ? Theme.inkAlpha(0.50) : Theme.STROKE })
       .onClick(() => {
         this.toggleLibrary(id);
       })
@@ -698,7 +699,7 @@ export struct LibraryTab {
       // 三十一改：**一律 Medium**。用户原话「这几个字纯白又细，亮背景容易看不清」——
       // 光靠加粗不够，配合下面的深色薄底 + 投影才稳。
       .fontWeight(FontWeight.Medium)
-      .fontColor(this.sortCustom ? Theme.ACCENT : '#FFFFFF')
+      .fontColor(this.sortCustom ? Theme.ACCENT_INK : '#FFFFFF')
       .maxLines(1)
       .textOverflow({ overflow: TextOverflow.Ellipsis })
       .constraintSize({ maxWidth: 74 })
@@ -709,7 +710,7 @@ export struct LibraryTab {
       // 选中态走材质的 `materialColor` —— 材质生效后 `backgroundColor` 会被系统复位成透明，
       // 拿背景色表达「开着」在这条路上是无效的。
       .systemMaterial(ImmersiveGlass.pressMaterial(this.glassLevel,
-        this.sortCustom ? Theme.accentAlpha(0.30) : undefined))
+        this.sortCustom ? Theme.accentAlpha(0.22) : undefined))
       .clip(true)
       .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
       .onClick(() => {
@@ -725,20 +726,35 @@ export struct LibraryTab {
    */
   @Builder
   FilterBtn() {
-    Text('筛选')
-      .fontSize(13)
-      .fontWeight(FontWeight.Medium)
-      .fontColor(this.filterOn ? Theme.ACCENT : '#FFFFFF')
-      .textAlign(TextAlign.Center)
-      .padding({ left: 9, right: 9, top: 7, bottom: 7 })
-      .borderRadius(16)
-      .systemMaterial(ImmersiveGlass.pressMaterial(this.glassLevel,
-        this.filterOn ? Theme.accentAlpha(0.30) : undefined))
-      .clip(true)
-      .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
-      .onClick(() => {
-        this.openSheet('filter');
-      })
+    Row({ space: 4 }) {
+      Text('筛选')
+        .fontSize(13)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.filterOn ? Theme.ACCENT_INK : '#FFFFFF')
+        .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
+      if (this.filterCount > 0) {
+        Text(`${this.filterCount}`)
+          .fontSize(10)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Theme.ON_ACCENT)
+          .textAlign(TextAlign.Center)
+          .constraintSize({ minWidth: 16 })
+          .height(16)
+          .padding({ left: 4, right: 4 })
+          .backgroundColor(Theme.ACCENT)
+          .borderRadius(8)
+      }
+    }
+    .justifyContent(FlexAlign.Center)
+    .alignItems(VerticalAlign.Center)
+    .padding({ left: 9, right: this.filterCount > 0 ? 7 : 9, top: 7, bottom: 7 })
+    .borderRadius(16)
+    .systemMaterial(ImmersiveGlass.pressMaterial(this.glassLevel,
+      this.filterOn ? Theme.accentAlpha(0.22) : undefined))
+    .clip(true)
+    .onClick(() => {
+      this.openSheet('filter');
+    })
   }
 
   /**
@@ -758,7 +774,7 @@ export struct LibraryTab {
     Text(this.gachaOn ? '抽卡中' : '抽卡')
       .fontSize(13)
       .fontWeight(FontWeight.Medium)
-      .fontColor(this.gachaOn ? Theme.ACCENT : '#FFFFFF')
+      .fontColor(this.gachaOn ? Theme.ACCENT_INK : '#FFFFFF')
       .textAlign(TextAlign.Center)
       // 三十四改：54 → 58，并且 `maxLines(1)`。
       // 「抽卡中」三个字 13fp Medium 实测约 39vp，54 减去左右各 8 的内边距只剩 38 ——
@@ -768,7 +784,7 @@ export struct LibraryTab {
       .padding({ left: 4, right: 4, top: 7, bottom: 7 })
       .borderRadius(16)
       .systemMaterial(ImmersiveGlass.pressMaterial(this.glassLevel,
-        this.gachaOn ? Theme.accentAlpha(0.30) : undefined))
+        this.gachaOn ? Theme.accentAlpha(0.22) : undefined))
       .clip(true)
       // 开着状态**不要**再叠 `.shadow`：材质自带边缘高光，再加投影会在按钮外面
       // 多出一圈漂着的圆弧（三十四改真机踩过）。
@@ -870,6 +886,7 @@ export struct LibraryTab {
           showSort: $showSort,
           showFilter: $showFilter,
           onFilterChange: (n: number) => {
+            this.filterCount = n;
             this.filterOn = n > 0;
           },
           onSortChange: (label: string, isDefault: boolean) => {

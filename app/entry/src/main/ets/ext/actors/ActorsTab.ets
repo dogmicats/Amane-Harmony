@@ -46,8 +46,9 @@ export struct ActorsTab {
   /** 材质档位（五十一改）：与媒体库/收藏同一来源。 */
   @StorageProp('amaneGlass') glassLevel: number = 2;
   @State items: ActorItem[] = [];
-  /** 演员网格的控制器：底栏自动收起要用绝对偏移判方向（见 common/NavBarWatch）。 */
+  /** 演员网格的控制器：底栏自动收起与回顶弹簧保护用。 */
   private sc: Scroller = new Scroller();
+  private atTop: boolean = true;
   /**
    * 七十二改：上一次喂给底栏的滚动偏移（**只用来节流，不读布局**）。
    *
@@ -520,7 +521,7 @@ export struct ActorsTab {
       .layoutWeight(1)
 
       GlassCapsule({
-        label: `⇅ ${this.sortLabel()}`,
+        label: `${this.sortLabel()}`,
         fs: 12,
         padH: 9,
         padV: 8,
@@ -532,7 +533,7 @@ export struct ActorsTab {
         }
       })
       GlassCapsule({
-        label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+        label: this.filterCount() > 0 ? `筛选 ${this.filterCount()}` : '筛选',
         active: this.filterCount() > 0,
         fs: 12,
         padH: 9,
@@ -785,9 +786,10 @@ export struct ActorsTab {
           .columnsGap(9)
           .rowsGap(12)
           // 首帧视口高度可能比实际短，Grid 虚拟化会把底部一条留着不画（滑一下才"闪现"）
-          // 六十改：6 → 10。演员是 2 列大图（头像 0.8 高宽比），6 个只够 3 行，
-          // 快速拖动时视口边缘那一排还是会被反复创建/销毁 → 改成 10 个（5 行）留足余量。
-          .cachedCount(10)
+          // 2.8.3 真机修复：cachedCount(6, true) + ContentClipMode.SAFE_AREA 让 padding 区域内的预加载行
+          // 持续渲染不裁切，彻底消除底栏下方黑边与行边界闪现/闪没。
+          .cachedCount(6, true)
+          .clipContent(ContentClipMode.BOUNDARY)
           // 五十一改：顶部让位放在网格自己的 padding（随滚动走），演员卡片才会滑到玻璃底下
           .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6, bottom: 84 })
           .layoutWeight(1)
@@ -796,26 +798,33 @@ export struct ActorsTab {
           .onReachEnd(() => {
             this.loadMore();
           })
-          // 往下看收起底栏（2026-11-15），见 common/NavBarWatch。
-          //
-          // ★ 七十二改：`onScrollIndex` → `onScroll`，用**连续偏移 + 24vp 节流** ★
-          //
-          // 六十改改成索引回调是为了避开 `currentOffset()` 的布局回读，但索引是
-          // 「按行跳」的：演员是 2 列大图，一次跳一行 ≈ 40vp，底栏跟着一顿一顿地翻，
-          // Tabs 的 `barHeight` 动画（58 ↔ 0）于是被反复触发 —— 内容区高度每帧变一点，
-          // 网格边缘那一排就被反复创建/销毁，就是用户看到的「上下边突然闪现/消失」。
-          // 这里换成 `onScroll` 的 `yOffset` 参数（框架直接给，不是回读），
-          // 再按 24vp 节流，位移连续、写入次数和收藏页一样。
-          .onScroll((xOff: number, yOff: number) => {
-            if (this.lastNavOff < 0) {
-              this.lastNavOff = yOff;
+          // 2.8.3 修复：
+          //  1) Grid 的 onDidScroll(scrollOffset增量, scrollState) 喂 NavBarWatch.onDelta，零布局回读；
+          //  2) 到顶时 EdgeEffect.Spring 过拉松手回弹（y: -80 → 0）会产生正向 scrollOffset，
+          //     在 atTop 且 yOffset ≤ 28 时直接屏蔽收起并保持显示，彻底杜绝回顶弹簧误收底栏。
+          .onScrollIndex((first: number) => {
+            this.atTop = first === 0;
+            if (first === 0) {
+              NavBarWatch.reset();
+            }
+          })
+          .onDidScroll((scrollOffset: number, scrollState: ScrollState) => {
+            if (scrollState === ScrollState.Idle) {
               return;
             }
-            if (Math.abs(yOff - this.lastNavOff) < 24) {
-              return;
+            if (this.atTop) {
+              const y: number = this.sc.currentOffset().yOffset;
+              if (y <= 28) {
+                NavBarWatch.reset();
+                return;
+              }
             }
-            this.lastNavOff = yOff;
-            NavBarWatch.onOffset(yOff);
+            NavBarWatch.onDelta(scrollOffset);
+          })
+          .onScrollStop(() => {
+            if (this.atTop && this.sc.currentOffset().yOffset <= 4) {
+              NavBarWatch.reset();
+            }
           })
         }
       }

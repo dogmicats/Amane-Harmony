@@ -822,7 +822,7 @@ export struct BrowseGrid {
               .fontColor(Theme.TEXT_DIM)
             Text('重试')
               .fontSize(13)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
               .onClick(() => {
                 this.reload();
               })
@@ -898,8 +898,11 @@ export struct BrowseGrid {
           }))
             .columnsGap(Theme.G_M)
             .rowsGap(Theme.G_L)
-          // 首帧视口高度可能比实际短，Grid 虚拟化会把底部一条留着不画（滑一下才"闪现"）
-          .cachedCount(6)
+          // 关键修复（2.8.3 真机定位）：Grid 默认 ContentClipMode.CONTENT_ONLY 会按 padding.top/bottom
+          // 裁切视口，且 cachedCount(n) 默认 show=false 不画 padding 内的预加载行，导致底栏下方
+          // 出现 84vp 大黑边、滚过边界瞬间闪现/闪没。配合 SAFE_AREA + show=true 后上下边界全程连续渲染。
+          .cachedCount(6, true)
+          .clipContent(ContentClipMode.BOUNDARY)
           .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.headerTopPad, bottom: TAB_SAFE })
           .width('100%')
           .height('100%')

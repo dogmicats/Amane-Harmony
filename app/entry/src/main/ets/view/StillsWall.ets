@@ -208,18 +208,22 @@ export struct StillsWall {
 
       if (this.showLike) {
         // 心形只在需要时叠上去：详情页 / 我的喜爱有，抽卡墙没有。
-        Text(i < this.liked.length && this.liked[i] ? '♥' : '♡')
-          .fontSize(15)
-          .fontColor(i < this.liked.length && this.liked[i] ? LIKE_ON : LIKE_OFF)
-          .width(26)
-          .height(26)
-          .textAlign(TextAlign.Center)
-          .borderRadius(13)
-          .backgroundColor('#59000000')
-          .margin({ top: 6, right: 6 })
-          .onClick(() => {
-            this.onLike(i);
-          })
+        Stack() {
+          SymbolGlyph(i < this.liked.length && this.liked[i]
+            ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
+            .fontSize(14)
+            .fontColor([i < this.liked.length && this.liked[i] ? LIKE_ON : LIKE_OFF])
+        }
+        .width(26)
+        .height(26)
+        .borderRadius(13)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .backgroundColor('#59000000')
+        .border({ width: 0.5, color: '#2EFFFFFF' })
+        .margin({ top: 6, right: 6 })
+        .onClick(() => {
+          this.onLike(i);
+        })
       }
     }
     .width('100%')

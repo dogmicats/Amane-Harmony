@@ -138,7 +138,7 @@ export struct HighlightStrip {
       if (item.picked === true) {
         Text('我选的')
           .fontSize(8)
-          .fontColor('#FFFFFF')
+          .fontColor(Theme.ON_ACCENT)
           .padding({ left: 4, right: 4, top: 1, bottom: 1 })
           .backgroundColor(Theme.ACCENT)
           .borderRadius(4)

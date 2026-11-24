@@ -3,29 +3,11 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { httpGet, httpPost } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
-import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
-
-/**
- * 高级设置 → 进度条预览。
- *
- * 服务端会「闲时慢跑」把库里没做过预览的片一部部生成（每部约 120KB），
- * 这样用户第一次拖进度条就有画面。这里把三件事交给用户：
- *  - 开不开这个后台任务；
- *  - 最多占多少空间（超了按最久没访问的删）；
- *  - 已经占了多少 / 一键清空。
- *
- * 存的是服务端 `DATA_DIR/preview-prefs.json`，改完立刻生效（warm 线程每轮重读）。
- */
-interface PreviewPrefs {
-  ok: boolean;
-  enabled: boolean;
-  warm: boolean;
-  shorts_warm?: boolean;
-  budget_mb: number;
-  interval: number;
-  used_mb: number;
-  count: number;
-}
+import { setPageFullScreen } from '../common/PageFullscreen';
+import { PageTitle, GlassBack } from '../view/GlassKit';
+import {
+  SettingsAmbientGlow, SettingsChevron, SettingsIconTile, SettingsRowDivider
+} from '../view/SettingsKit';
 
 @Entry
 @Component
@@ -39,20 +21,16 @@ struct PreviewSettingsPage {
   @State loading: boolean = true;
   @State note: string = '';
   @State busy: boolean = false;
-  /** 服务端实际生效的缓存根目录（容器内路径）。 */
   @State cacheDir: string = '';
   @State dirSet: boolean = false;
   @State dirOk: boolean = true;
   @State dirWritable: boolean = true;
   @State dirDraft: string = '';
-  @State showGuide: boolean = false;
-  /** 负一屏左侧光晕提示（本机偏好 minus_glow，默认开）。 */
-  @State glowHint: boolean = true;
+  @StorageProp('amaneTopInset') topInset: number = 30;
+  private navStack: NavPathStack = new NavPathStack();
 
   aboutToAppear(): void {
     this.load();
-    // 负一屏光晕开关是纯本机偏好（服务端没有这个概念）
-    this.glowHint = Store.I.prefString('minus_glow', '1') !== '0';
   }
 
   private async load(): Promise<void> {
@@ -72,12 +50,12 @@ struct PreviewSettingsPage {
       this.dirOk = o.cache_ok !== false;
       this.dirWritable = o.writable !== false;
       if (o.enabled === false) {
-        this.note = '服务端没装 ffmpeg，预览生成不可用';
+        this.note = '服务端未检测到 ffmpeg，预览生成不可用';
       }
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] preview prefs: ${e.code} ${e.message}`);
-      this.note = '读取失败，检查连接';
+      this.note = '读取失败，请检查连接';
     }
     this.loading = false;
   }
@@ -89,7 +67,7 @@ struct PreviewSettingsPage {
     this.busy = true;
     try {
       await httpPost(`${Store.I.user}/api/user/preview/settings`, Store.I.token, patch);
-      this.note = '已保存，后台任务下一轮生效';
+      this.note = '已保存，后台下一轮生效';
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] preview save: ${e.code} ${e.message}`);
@@ -110,7 +88,7 @@ struct PreviewSettingsPage {
       const n: number = Number(o.removed) || 0;
       this.usedMb = 0;
       this.count = 0;
-      this.note = n > 0 ? `已清空 ${n} 部` : '本来就是空的';
+      this.note = n > 0 ? `已清空 ${n} 部预览图` : '本来就是空的';
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] preview purge: ${e.code} ${e.message}`);
@@ -122,14 +100,13 @@ struct PreviewSettingsPage {
   private async saveDir(): Promise<void> {
     const d: string = this.dirDraft.trim();
     if (d.length > 0 && !d.startsWith('/')) {
-      this.note = '要写容器内的绝对路径，例如 /cache';
+      this.note = '需填写容器内绝对路径，例如 /cache';
       return;
     }
     await this.save(`{"cache_dir":"${d}"}`);
     await this.load();
   }
 
-  /** 上限摘要（只读）。编辑入口在「设置 → 刷一刷」，2026-11-15 收敛成一个地方。 */
   private budgetText(): string {
     if (this.budget <= 0) {
       return '不限制';
@@ -144,7 +121,7 @@ struct PreviewSettingsPage {
         GlassBack({
           mat: true,
           onTap: () => {
-          router.back();
+            router.back();
           }
         })
         PageTitle({ text: '进度条预览', fs: 18 })
@@ -160,17 +137,10 @@ struct PreviewSettingsPage {
     .padding({ top: this.topInset })
   }
 
-  @StorageProp('amaneTopInset') topInset: number = 30;
-
-  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
-  private navStack: NavPathStack = new NavPathStack();
-
-  /** 标题栏实际高度（内容要让开这么多）。 */
   private barH(): number {
     return this.topInset + 46;
   }
 
-  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
   private titleConfig(): NavigationCustomTitle {
     return {
       builder: () => {
@@ -180,76 +150,113 @@ struct PreviewSettingsPage {
     };
   }
 
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
   build() {
     Navigation(this.navStack) {
-      Column() {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
 
         Scroll() {
-          Column({ space: 12 }) {
+          Column({ space: 14 }) {
+            Blank().height(this.barH() + 6)
 
-          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
-          // 材质才有颜色可采样。
-          Blank().height(this.barH())
-            // 占用情况
-            Column({ space: 6 }) {
-              Row() {
-                Text('已生成')
-                  .fontSize(14)
-                  .fontColor(Theme.TEXT)
-                  .layoutWeight(1)
+            // 概览 + 开关合入一张卡
+            Column() {
+              Row({ space: 12 }) {
+                SettingsIconTile({ icon: $r('sys.symbol.film'), tileSize: 36, iconSize: 17 })
+                Column({ space: 2 }) {
+                  Text('已生成雪碧图')
+                    .fontSize(14.5)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(Theme.TEXT)
+                  Text('每部约 120 KB，拖动进度条即时预览')
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_FAINT)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
                 Text(this.loading ? '读取中…' : `${this.count} 部 · ${this.usedMb} MB`)
                   .fontSize(12)
-                  .fontColor(Theme.ACCENT)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Theme.ACCENT_INK)
+                  .fontFeature('"tnum" 1')
               }
               .width('100%')
-              Text(`每部约 120KB（8×8 格，每格 128×72）。拖动进度条时那块画面就是从这里来的。`)
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width('100%')
-                .lineHeight(15)
+              .padding({ left: 14, right: 14, top: 13, bottom: 13 })
+
+              SettingsRowDivider()
+
+              Row({ space: 12 }) {
+                SettingsIconTile({ icon: $r('sys.symbol.clock'), tileSize: 36, iconSize: 17 })
+                Column({ space: 2 }) {
+                  Text('闲时预生成')
+                    .fontSize(14.5)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(Theme.TEXT)
+                  Text(this.warm
+                    ? `后台约每 ${Math.max(1, Math.round(this.interval / 60))} 分钟生成一部，不抢带宽`
+                    : '仅打开播放时按需生成')
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_FAINT)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                Toggle({ type: ToggleType.Switch, isOn: this.warm })
+                  .selectedColor(Theme.ACCENT)
+                  .onChange((v: boolean) => {
+                    this.warm = v;
+                    this.save(`{"warm":${v ? 'true' : 'false'}}`);
+                  })
+              }
+              .width('100%')
+              .padding({ left: 14, right: 14, top: 13, bottom: 13 })
             }
             .width('100%')
-            .padding(14)
             .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
+            .borderRadius(18)
+            .border({ width: 0.75, color: Theme.STROKE })
+            .clip(true)
 
             // 存储位置
-            Column({ space: 8 }) {
+            Column({ space: 10 }) {
               Row() {
                 Text('存储位置')
-                  .fontSize(14)
+                  .fontSize(14.5)
+                  .fontWeight(FontWeight.Medium)
                   .fontColor(Theme.TEXT)
                   .layoutWeight(1)
-                Text(this.dirOk ? (this.dirWritable ? '可写' : '不可写')
-                  : '目录不存在')
+                Text(this.dirOk ? (this.dirWritable ? '可写' : '不可写') : '目录不存在')
                   .fontSize(11)
-                  .fontColor(this.dirOk && this.dirWritable ? Theme.ACCENT : Theme.DANGER)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(this.dirOk && this.dirWritable ? '#8EE6B4' : Theme.DANGER)
               }
               .width('100%')
-
-              Text('容器内路径（默认 /cache，部署时映射到宿主机的大容量盘）')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width('100%')
 
               Row({ space: 8 }) {
                 TextInput({ text: this.dirDraft, placeholder: '/cache' })
-                  .fontSize(12)
-                  .height(36)
+                  .fontSize(12.5)
+                  .fontColor(Theme.TEXT)
+                  .placeholderColor(Theme.TEXT_FAINT)
+                  .caretColor(Theme.ACCENT_INK)
+                  .height(38)
                   .layoutWeight(1)
-                  .backgroundColor(Theme.CARD_HI)
-                  .borderRadius(8)
+                  .backgroundColor('#141114')
+                  .border({ width: 0.75, color: '#1EFFFFFF' })
+                  .borderRadius(10)
                   .onChange((v: string) => {
                     this.dirDraft = v;
                   })
                 Text(this.busy ? '保存中…' : '保存')
                   .fontSize(12)
-                  .fontColor(Theme.ACCENT)
-                  .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-                  .backgroundColor(Theme.accentAlpha(0.30))
-                  .border({ width: 1, color: Theme.accentAlpha(0.55) })
-                  .borderRadius(8)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Theme.ACCENT_INK)
+                  .padding({ left: 14, right: 14, top: 9, bottom: 9 })
+                  .backgroundColor(Theme.accentAlpha(0.18))
+                  .border({ width: 0.75, color: Theme.inkAlpha(0.46) })
+                  .borderRadius(10)
                   .onClick(() => {
                     this.saveDir();
                   })
@@ -257,152 +264,109 @@ struct PreviewSettingsPage {
               .width('100%')
 
               if (!this.dirOk || !this.dirWritable) {
-                Text('这个目录在容器里不存在或写不进去：多半是 docker-compose 里没挂这个路径。')
-                  .fontSize(10)
+                Text('容器内该目录不存在或不可写，请检查 compose volumes 映射。')
+                  .fontSize(10.5)
                   .fontColor(Theme.DANGER)
                   .width('100%')
-                  .lineHeight(15)
               }
 
-              // 加挂载的具体命令 2026-11-15 起收进「设置 → 服务器连接 → 部署说明」：
-              // 这类东西属于部署细节，散在功能页里每次都要重讲一遍。
               Row({ space: 8 }) {
-                Text('怎么加映射 / 换盘')
-                  .fontSize(10)
+                Text('容器路径需映射至宿主机大容量盘')
+                  .fontSize(10.5)
                   .fontColor(Theme.TEXT_FAINT)
                   .layoutWeight(1)
-                Text('部署说明 ›')
-                  .fontSize(11)
-                  .fontColor(Theme.ACCENT)
-                  .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-                  .backgroundColor(Theme.accentAlpha(0.12))
-                  .borderRadius(8)
-                  .onClick(() => {
-                    router.pushUrl({ url: 'pages/SettingsConnectionPage' });
-                  })
-              }
-              .width('100%')
-            }
-            .width('100%')
-            .padding(14)
-            .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
-
-            // 后台预生成开关
-            Row({ space: 12 }) {
-              Column({ space: 3 }) {
-                Text('闲时预生成')
-                  .fontSize(14)
-                  .fontColor(Theme.TEXT)
-                Text(this.warm
-                  ? `后台一部部慢慢做（约每 ${Math.round(this.interval / 60)} 分钟一部），不和播放抢带宽`
-                  : '关：只有真正打开某部片时才现做，第一次拖进度条可能没图')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .lineHeight(15)
-              }
-              .alignItems(HorizontalAlign.Start)
-              .layoutWeight(1)
-              Toggle({ type: ToggleType.Switch, isOn: this.warm })
-                .selectedColor(Theme.ACCENT)
-                .onChange((v: boolean) => {
-                  this.warm = v;
-                  this.save(`{"warm":${v ? 'true' : 'false'}}`);
+                Row({ space: 3 }) {
+                  Text('部署说明')
+                    .fontSize(11)
+                    .fontColor(Theme.ACCENT_INK)
+                  SettingsChevron({ glyphSize: 11 })
+                }
+                .onClick(() => {
+                  router.pushUrl({ url: 'pages/SettingsConnectionPage' });
                 })
+              }
+              .width('100%')
             }
             .width('100%')
             .padding(14)
             .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
+            .borderRadius(18)
+            .border({ width: 0.75, color: Theme.STROKE })
 
-            // 刷一刷素材的开关已经搬到「设置 → 刷一刷」独立一页（2.6.1.64）：
-            // 用户 22:42 反馈「藏在进度条预览里，不深入找根本想不到」。
-            // 这里只留一句指路，不再重复放开关。
-            Text('刷一刷素材的开关、负一屏提示光晕、以及这条上限的编辑入口，都收在「设置 → 刷一刷」；'
-              + '这一页只显示当前值。')
-              .fontSize(10)
-              .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
-              .lineHeight(15)
-              .padding({ left: 4, right: 4 })
-
-            // 负一屏提示光晕（2.6.1.64）2026-11-15 已搬到「设置 → 刷一刷」：
-            // 它讲的是首页/负一屏的事，和进度条预览没有关系。
-
-            // 预算（两条预生成共用这一份上限：它们写的是同一个缓存目录）
-            // 2026-11-15：上限只在「设置 → 刷一刷」那一个地方改，这里只显示当前值 + 跳过去改。
-            Column({ space: 8 }) {
-              Row() {
-                Text('占用上限')
-                  .fontSize(14)
-                  .fontColor(Theme.TEXT)
-                  .layoutWeight(1)
+            // 占用上限与清理
+            Column() {
+              Row({ space: 10 }) {
+                Column({ space: 2 }) {
+                  Text('共用占用上限')
+                    .fontSize(14.5)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(Theme.TEXT)
+                  Text('与刷一刷素材共用，在刷一刷设置中修改')
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_FAINT)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
                 Text(this.budgetText())
                   .fontSize(12)
-                  .fontColor(Theme.ACCENT)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Theme.ACCENT_INK)
+                  .fontFeature('"tnum" 1')
+                SettingsChevron({ glyphSize: 13 })
               }
               .width('100%')
-              Text('预览图和刷一刷的封面帧是同一批文件，共用一份上限。为了不出现两个地方改同一个值的困惑，'
-                + '编辑入口收在「设置 → 刷一刷」里，这一页只显示当前值。')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width('100%')
-                .lineHeight(15)
-              Row({ space: 8 }) {
-                Text('去刷一刷里改')
-                  .fontSize(11)
-                  .fontColor(Theme.ACCENT)
-                  .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-                  .backgroundColor(Theme.accentAlpha(0.30))
-                  .border({ width: 1, color: Theme.accentAlpha(0.55) })
-                  .borderRadius(8)
-                  .onClick(() => {
-                    router.pushUrl({ url: 'pages/ShortsSettingsPage' });
-                  })
-                Text('清空预览图')
-                  .fontSize(11)
+              .padding({ left: 14, right: 14, top: 13, bottom: 13 })
+              .onClick(() => {
+                router.pushUrl({ url: 'pages/ShortsSettingsPage' });
+              })
+
+              SettingsRowDivider({ indent: 14 })
+
+              Row({ space: 10 }) {
+                SettingsIconTile({ icon: $r('sys.symbol.trash'), tileSize: 32, iconSize: 15, danger: true })
+                Text('清空所有预览图')
+                  .fontSize(13.5)
+                  .fontWeight(FontWeight.Medium)
                   .fontColor(Theme.DANGER)
-                  .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-                  .backgroundColor(Theme.CARD_HI)
-                  .borderRadius(8)
-                  .onClick(() => {
-                    this.purge();
-                  })
-                if (this.note.length > 0) {
-                  Text(this.note)
-                    .fontSize(10)
-                    .fontColor(Theme.ACCENT)
-                    .layoutWeight(1)
-                    .maxLines(2)
-                }
-                Blank()
+                  .layoutWeight(1)
+                SettingsChevron({ glyphSize: 13 })
               }
               .width('100%')
-              Text('超过上限时会按「最久没看过」的顺序自动删旧的。当前全库 5000 多部，全做约 600MB。')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width('100%')
-                .lineHeight(15)
+              .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+              .onClick(() => {
+                this.purge();
+              })
             }
             .width('100%')
-            .padding(14)
             .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
+            .borderRadius(18)
+            .border({ width: 0.75, color: Theme.STROKE })
+            .clip(true)
 
-            Blank().height(24)
+            if (this.note.length > 0) {
+              Text(this.note)
+                .fontSize(11)
+                .fontColor(Theme.ACCENT_INK)
+                .width('100%')
+                .padding({ left: 4 })
+            }
+
+            Blank().height(Theme.pageBottomSafe())
           }
           .width('100%')
           .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
         }
-        .layoutWeight(1)
+        .width('100%')
+        .height('100%')
         .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
         .align(Alignment.Top)
       }
       .width('100%')
       .height('100%')
       .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .mode(NavigationMode.Stack)
     .hideBackButton(true)
     .hideToolBar(true)

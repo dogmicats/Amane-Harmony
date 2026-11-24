@@ -7,6 +7,7 @@ import { Theme } from '../common/Theme';
 import { SectionHead } from '../view/SectionHead';
 import { CalDay, HeatCalendar } from '../view/HeatCalendar';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 
 /**
  * 观看统计（2.5.3 · 报表 v1）。
@@ -406,11 +407,11 @@ interface RepeatFilm {
 
 interface UpstreamCmp {
   count: number;
-  /** 我（5 星 ×2 = 10 分制）减上游分的均值。 */
+  /** 我（5 星）减上游大众分（同为 5 分制）的均值，正数=我给得更高。 */
   mean_diff: number;
   /** 比大众严的比例 0–1。 */
   harsh: number;
-  /** 差距 > 1.5 分的比例 0–1。 */
+  /** 5 分制下差距 > 1 分的比例 0–1。 */
   gap: number;
 }
 
@@ -1364,7 +1365,7 @@ struct StatsPage {
     return pct > 100 ? 100 : pct;
   }
 
-  /** 「我 vs 大众」那句：差异是 10 分制（我的 5 星 ×2）。 */
+  /** 「我 vs 大众」那句：差异是 5 分制（我的 5 星直接减上游 5 分制评分）。 */
   private upstreamText(): string {
     if (this.cfCount <= 0) {
       return '';
@@ -1376,7 +1377,7 @@ struct StatsPage {
       text += `；${Math.round(this.cfHarsh * 100)}% 的片子你给得更低`;
     }
     if (this.cfGap > 0) {
-      text += `；${Math.round(this.cfGap * 100)}% 的片子差了 1.5 分以上`;
+      text += `；${Math.round(this.cfGap * 100)}% 的片子差了 1 分以上`;
     }
     return text;
   }
@@ -1454,7 +1455,7 @@ struct StatsPage {
       },
       secondaryButton: {
         value: '清除',
-        fontColor: Theme.ACCENT,
+        fontColor: Theme.ACCENT_INK,
         action: () => {
           this.purgeRange();
         }
@@ -1960,10 +1961,10 @@ struct StatsPage {
       Row({ space: 6 }) {
         Text('看这一年的年报')
           .fontSize(10)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
         Text('›')
           .fontSize(11)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
         Blank()
       }
       .width('100%')
@@ -1976,7 +1977,8 @@ struct StatsPage {
     .width('100%')
     .padding(12)
     .backgroundColor(Theme.CARD)
-    .borderRadius(14)
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   @Builder
@@ -1996,9 +1998,10 @@ struct StatsPage {
           ForEach(this.rangeChips(), (c: PickChip) => {
             Text(c.label)
               .fontSize(10)
-              .fontColor(c.picked ? Theme.ON_ACCENT : Theme.TEXT_DIM)
+              .fontColor(c.picked ? Theme.ACCENT_INK : Theme.TEXT_DIM)
               .padding({ left: 9, right: 9, top: 4, bottom: 4 })
-              .backgroundColor(c.picked ? Theme.ACCENT : Theme.CARD_HI)
+              .backgroundColor(c.picked ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+            .border({ width: c.picked ? 0.75 : 0.5, color: c.picked ? Theme.inkAlpha(0.50) : '#16FFFFFF' })
               .borderRadius(11)
               .maxLines(1)
               .onClick(() => {
@@ -2012,9 +2015,10 @@ struct StatsPage {
           ForEach(this.scopeChips(), (c: PickChip) => {
             Text(c.label)
               .fontSize(10)
-              .fontColor(c.picked ? Theme.ON_ACCENT : Theme.TEXT_DIM)
+              .fontColor(c.picked ? Theme.ACCENT_INK : Theme.TEXT_DIM)
               .padding({ left: 9, right: 9, top: 4, bottom: 4 })
-              .backgroundColor(c.picked ? Theme.ACCENT : Theme.CARD_HI)
+              .backgroundColor(c.picked ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+            .border({ width: c.picked ? 0.75 : 0.5, color: c.picked ? Theme.inkAlpha(0.50) : '#16FFFFFF' })
               .borderRadius(11)
               .maxLines(1)
               .onClick(() => {
@@ -2034,7 +2038,7 @@ struct StatsPage {
           if (this.rangeFrom.length > 0) {
             Text('清除这段')
               .fontSize(9)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
               .padding({ left: 8, right: 8, top: 3, bottom: 3 })
               .borderRadius(9)
               .backgroundColor(Theme.alphaOf(Theme.ACCENT, 0.14))
@@ -2053,13 +2057,13 @@ struct StatsPage {
               .layoutWeight(1)
             Text(this.busy ? '…' : '重新生成')
               .fontSize(9)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
               .onClick(() => {
                 this.genTestData();
               })
             Text('清空')
               .fontSize(9)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
               .onClick(() => {
                 this.purgeTestData();
               })
@@ -2073,7 +2077,7 @@ struct StatsPage {
               .layoutWeight(1)
             Text('生成测试数据')
               .fontSize(9)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
               .onClick(() => {
                 this.genTestData();
               })
@@ -2084,7 +2088,8 @@ struct StatsPage {
       .width('100%')
       .padding(10)
       .backgroundColor(Theme.CARD)
-      .borderRadius(12)
+      .borderRadius(18)
+      .border({ width: 0.75, color: Theme.STROKE })
     }
   }
 
@@ -2139,8 +2144,10 @@ struct StatsPage {
                   .fontSize(10)
                   .fontColor(Theme.ON_ACCENT)
                   .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-                  .backgroundColor(Theme.ACCENT)
-                  .borderRadius(11)
+                  .backgroundColor(Color.Transparent)
+                  .linearGradient(Theme.ctaGradient())
+                  .border({ width: 0.75, color: '#38FFFFFF' })
+                  .borderRadius(Theme.R_PILL)
                   .onClick(() => {
                     this.hideTag(it);
                   })
@@ -2168,7 +2175,7 @@ struct StatsPage {
   @Builder
   SectionHead(title: string, kind: string) {
     Row({ space: 8 }) {
-      Text(title)
+      Text(kind === 'heat' && this.heatTitle.length > 0 ? `${title} · ${this.heatTitle}` : title)
         .fontSize(13)
         .fontWeight(FontWeight.Medium)
         .fontColor(Theme.TEXT)
@@ -2302,7 +2309,8 @@ struct StatsPage {
     .width('100%')
     .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(14)
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   private footNote(): string {
@@ -2396,7 +2404,7 @@ struct StatsPage {
         Row({ space: 6 }) {
           Text('▮')
             .fontSize(9)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
           Text('每周部数')
             .fontSize(9)
             .fontColor(Theme.TEXT_FAINT)
@@ -2437,7 +2445,8 @@ struct StatsPage {
     .width('100%')
     .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(14)
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   private weekDetail(w: TrendWeek): string {
@@ -2523,7 +2532,7 @@ struct StatsPage {
         if (this.whenVerdict().length > 0) {
           Text(this.whenVerdict())
             .fontSize(11)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .width('100%')
         }
       } else if (this.whenSt === ST_LOADING) {
@@ -2541,13 +2550,14 @@ struct StatsPage {
     .width('100%')
     .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(14)
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   @Builder
   HeatBlock() {
     Column({ space: 10 }) {
-      this.SectionHead(this.heatTitle.length > 0 ? `最热片段 · ${this.heatTitle}` : '最热片段', 'heat')
+      this.SectionHead('最热片段', 'heat')
 
       // 挑一部：全库平均之外还能看单片，数据来自现成的观看记录接口
       if (this.heatChips().length > 1) {
@@ -2555,9 +2565,10 @@ struct StatsPage {
           ForEach(this.heatChips(), (c: PickChip) => {
             Text(c.label)
               .fontSize(10)
-              .fontColor(c.picked ? Theme.ON_ACCENT : Theme.TEXT_DIM)
+              .fontColor(c.picked ? Theme.ACCENT_INK : Theme.TEXT_DIM)
               .padding({ left: 9, right: 9, top: 4, bottom: 4 })
-              .backgroundColor(c.picked ? Theme.ACCENT : Theme.CARD_HI)
+              .backgroundColor(c.picked ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+            .border({ width: c.picked ? 0.75 : 0.5, color: c.picked ? Theme.inkAlpha(0.50) : '#16FFFFFF' })
               .borderRadius(11)
               .maxLines(1)
               .onClick(() => {
@@ -2596,7 +2607,7 @@ struct StatsPage {
         if (this.heatPeakText().length > 0) {
           Text(this.heatPeakText())
             .fontSize(11)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .width('100%')
         }
       } else if (this.heatSt === ST_LOADING) {
@@ -2614,7 +2625,8 @@ struct StatsPage {
     .width('100%')
     .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(14)
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   @Builder
@@ -2626,9 +2638,10 @@ struct StatsPage {
         ForEach(this.kindChips(), (c: PickChip) => {
           Text(c.label)
             .fontSize(11)
-            .fontColor(c.picked ? Theme.ON_ACCENT : Theme.TEXT_DIM)
+            .fontColor(c.picked ? Theme.ACCENT_INK : Theme.TEXT_DIM)
             .padding({ left: 11, right: 11, top: 4, bottom: 4 })
-            .backgroundColor(c.picked ? Theme.ACCENT : Theme.CARD_HI)
+            .backgroundColor(c.picked ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+            .border({ width: c.picked ? 0.75 : 0.5, color: c.picked ? Theme.inkAlpha(0.50) : '#16FFFFFF' })
             .borderRadius(11)
             .onClick(() => {
               if (this.topKind !== this.kindOf(c.id)) {
@@ -2647,7 +2660,7 @@ struct StatsPage {
               Text(`${i + 1}`)
                 .fontSize(11)
                 .fontWeight(i < 3 ? FontWeight.Bold : FontWeight.Normal)
-                .fontColor(i < 3 ? Theme.ACCENT : Theme.TEXT_FAINT)
+                .fontColor(i < 3 ? Theme.ACCENT_INK : Theme.TEXT_FAINT)
                 .width(18)
                 .textAlign(TextAlign.Center)
               Text(it.name)
@@ -2706,8 +2719,10 @@ struct StatsPage {
             .fontSize(9)
             .fontColor(Theme.ON_ACCENT)
             .padding({ left: 9, right: 9, top: 4, bottom: 4 })
-            .backgroundColor(Theme.ACCENT)
-            .borderRadius(10)
+            .backgroundColor(Color.Transparent)
+            .linearGradient(Theme.ctaGradient())
+            .border({ width: 0.75, color: '#38FFFFFF' })
+            .borderRadius(Theme.R_PILL)
             .onClick(() => {
               this.hygieneSheet = true;
             })
@@ -2721,7 +2736,8 @@ struct StatsPage {
     .width('100%')
     .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(14)
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   private ratePct(r: number): number {
@@ -2742,9 +2758,10 @@ struct StatsPage {
         ForEach(this.dropKindChips(), (c: PickChip) => {
           Text(c.label)
             .fontSize(11)
-            .fontColor(c.picked ? Theme.ON_ACCENT : Theme.TEXT_DIM)
+            .fontColor(c.picked ? Theme.ACCENT_INK : Theme.TEXT_DIM)
             .padding({ left: 11, right: 11, top: 4, bottom: 4 })
-            .backgroundColor(c.picked ? Theme.ACCENT : Theme.CARD_HI)
+            .backgroundColor(c.picked ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+            .border({ width: c.picked ? 0.75 : 0.5, color: c.picked ? Theme.inkAlpha(0.50) : '#16FFFFFF' })
             .borderRadius(11)
             .onClick(() => {
               const k: string = this.dropKindOf(c.id);
@@ -2882,7 +2899,8 @@ struct StatsPage {
     .width('100%')
     .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(14)
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   /** 吃灰清单：收藏了却一次没打开；顺带「冷落演员 / 冷落厂牌」。 */
@@ -3004,7 +3022,8 @@ struct StatsPage {
     .width('100%')
     .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(14)
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   /** 收藏转化漏斗：收藏 → 打开 → 看完，三段都以收藏为 100%。 */
@@ -3055,7 +3074,7 @@ struct StatsPage {
         Row({ space: 12 }) {
           Text(`收藏 → 打开 ${Math.round(num(this.funOpenRate) * 100)}%`)
             .fontSize(10)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
           Text(`收藏 → 看完 ${Math.round(num(this.funOverall) * 100)}%`)
             .fontSize(10)
             .fontColor(Theme.GOLD)
@@ -3076,7 +3095,8 @@ struct StatsPage {
     .width('100%')
     .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(14)
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   private funnelLabel(kind: string): string {
@@ -3148,7 +3168,7 @@ struct StatsPage {
                   .layoutWeight(1)
                 Text(`重看 ${num(it.replays)} 次`)
                   .fontSize(9)
-                  .fontColor(Theme.ACCENT)
+                  .fontColor(Theme.ACCENT_INK)
                 Text('›')
                   .fontSize(14)
                   .fontColor(Theme.TEXT_FAINT)
@@ -3187,7 +3207,8 @@ struct StatsPage {
     .width('100%')
     .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(14)
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   /** 2.5.4：「从夯到拉」入口卡 —— 缩略图带 + 五档人数，点进去做新图。 */
@@ -3203,8 +3224,10 @@ struct StatsPage {
           .fontSize(9)
           .fontColor(Theme.ON_ACCENT)
           .padding({ left: 6, right: 6, top: 1, bottom: 1 })
-          .backgroundColor(Theme.ACCENT)
-          .borderRadius(5)
+          .backgroundColor(Color.Transparent)
+          .linearGradient(Theme.ctaGradient())
+          .border({ width: 0.75, color: '#38FFFFFF' })
+          .borderRadius(Theme.R_PILL)
         Blank()
         Text('›')
           .fontSize(14)
@@ -3266,7 +3289,8 @@ struct StatsPage {
     .width('100%')
     .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(14)
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
     .onClick(() => {
       router.pushUrl({ url: 'pages/TierPage' });
     })
@@ -3337,7 +3361,9 @@ struct StatsPage {
 
   build() {
     Navigation(this.navStack) {
-      Column() {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
+        Column() {
 
         Scroll() {
           Column({ space: 12 }) {
@@ -3355,8 +3381,10 @@ struct StatsPage {
                   .width(16)
                   .height(16)
                   .textAlign(TextAlign.Center)
-                  .backgroundColor(Theme.ACCENT)
-                  .borderRadius(8)
+                  .backgroundColor(Color.Transparent)
+                  .linearGradient(Theme.ctaGradient())
+                  .border({ width: 0.75, color: '#38FFFFFF' })
+                  .borderRadius(Theme.R_PILL)
                 Text('这台服务端还没有统计接口（需要 1.4.0 以上），升级后回来就有数了。')
                   .fontSize(10)
                   .fontColor(Theme.TEXT_DIM)
@@ -3400,13 +3428,16 @@ struct StatsPage {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(Theme.BG)
       .bindSheet($$this.hygieneSheet, this.HygieneSheet(), {
         height: SheetSize.FIT_CONTENT,
         dragBar: true,
         showClose: false,
         backgroundColor: Theme.BG_RAISED
       })
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .mode(NavigationMode.Stack)

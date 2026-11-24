@@ -2,8 +2,10 @@ import { router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
 import { Theme } from '../common/Theme';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BuildConfig } from '../common/BuildConfig';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 
 /**
  * 更新日志。数据源是 resources/rawfile/changelog.md —— 由 tools/version.py sync
@@ -289,10 +291,12 @@ struct ChangelogPage {
             if (item.version === this.current) {
               Text('当前')
                 .fontSize(9)
-                .fontColor('#FFFFFF')
+                .fontColor(Theme.ON_ACCENT)
                 .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                .backgroundColor(Theme.ACCENT)
-                .borderRadius(6)
+                .backgroundColor(Color.Transparent)
+                .linearGradient(Theme.ctaGradient())
+                .border({ width: 0.75, color: '#38FFFFFF' })
+                .borderRadius(Theme.R_PILL)
             }
             if (item.date.length > 0) {
               Text(item.date)
@@ -334,7 +338,8 @@ struct ChangelogPage {
     }
     .width('100%')
     .backgroundColor(Theme.CARD)
-    .borderRadius(Theme.RADIUS)
+    .borderRadius(16)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   @Builder
@@ -385,9 +390,15 @@ struct ChangelogPage {
     };
   }
 
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
   build() {
     Navigation(this.navStack) {
-      Column({ space: 14 }) {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
+        Column({ space: 14 }) {
 
         Scroll() {
           Column({ space: 10 }) {
@@ -420,8 +431,13 @@ struct ChangelogPage {
       }
       .width('100%')
       .height('100%')
+
+      }
+      .width('100%')
+      .height('100%')
       .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .mode(NavigationMode.Stack)
     .hideBackButton(true)
     .hideToolBar(true)

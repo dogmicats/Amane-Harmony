@@ -838,7 +838,10 @@ class StatsMixin(object):
                 repeats.append({"id": mid, "replays": n, "secs": round(opened[mid]["secs"])})
         repeats.sort(key=lambda v: (-v["replays"], -v["secs"]))
 
-        # 与上游评分的差异：上游是 10 分制，我的 5 星 ×2 再比
+        # 与上游评分的差异：两边同为 5 分制，直接相减。
+        # 上游 vote 来自 titles_of() → metadata.scores（如 {"giga": 3.0, "javdb": 4.2}），
+        # 本就是 5 分制；我打的 1..5 星也是 5 分制。旧版误把我的星 ×2 当 10 分制去减，
+        # 差值虚高一倍（例：我 5 星、上游 4.2 → 旧算出 +5.8，实际应 +0.8）。
         head = [mid for mid in mine if mid in films][:200]
         metas = titles_of(head)
         diffs = []
@@ -846,12 +849,13 @@ class StatsMixin(object):
             up = metas.get(mid, {}).get("vote", 0.0)
             if up <= 0:
                 continue
-            diffs.append(mine[mid] * 2.0 - up)
+            diffs.append(mine[mid] - up)
         vs = {"count": len(diffs), "mean_diff": 0.0, "harsh": 0.0, "gap": 0.0}
         if diffs:
             vs["mean_diff"] = round(sum(diffs) / len(diffs), 2)
             vs["harsh"] = round(sum(1 for d in diffs if d < 0) / len(diffs), 3)
-            vs["gap"] = round(sum(1 for d in diffs if abs(d) > 1.5) / len(diffs), 3)
+            # 5 分制下「差一颗星以上」算明显分歧（旧版 10 分制用的是 1.5 分）
+            vs["gap"] = round(sum(1 for d in diffs if abs(d) > 1.0) / len(diffs), 3)
 
         # 补标题：`metas` 之前只为「打过分的片」取过，冲突榜里没打分的那些会拿到空标题
         wanted = [it["id"] for it in high_low[:8]] + [it["id"] for it in repeats[:8]]

@@ -18,13 +18,21 @@ import { ActorsTab } from '../ext/actors/ActorsTab';
 import { FacetsTab } from '../ext/facets/FacetsTab';
 import { ShortsView, prefetchShorts } from '../view/ShortsView';
 import { GlowOrb, ParticleField, setFxLow } from '../view/Fx';
+import { Motion, HOME_BOOT_CACHE_KEY } from '../common/Motion';
+import { cacheReadStale } from '../common/PageCache';
 
 @Entry
 @Component
 struct Index {
-  @State booting: boolean = true;
+  @State booting: boolean = false;
+  @State connecting: boolean = false;
   @State bootText: string = '正在连接服务器…';
   @State failMsg: string = '';
+  /** 有本地首屏缓存但后台建连失败时的轻量提示（不挡住已展示的缓存首页）。 */
+  @State failBanner: string = '';
+  /** 冷启动一镜到底接力层：首帧同步承接系统 startWindowIcon，随即物理弹簧扩散融入首页并卸载。 */
+  @State launchVeil: boolean = true;
+  @State launchOut: boolean = false;
   @State currentTab: number = 0;
   /** 底栏玻璃不透明度（0–1）：外观页的滑杆写这个键，这里重建材质。 */
   @StorageProp('amaneTabBarAlpha') tabBarAlpha: number = 0;
@@ -35,8 +43,6 @@ struct Index {
    * 用户在外观设置里换一档，两条栏一起变，不会出现「顶上薄、底下厚」。
    */
   @StorageProp('amaneGlass') glassLevel: number = 2;
-  /** 全屏落地后只强制重排一次（见 `readInsets`）。 */
-  private layoutRefreshed: boolean = false;
   // ── 底栏「按压光斑」（2026-11-16 用户点名要 hosplayer 那种）────────────────
   /** 正在被按住的那个 tab（-1 = 没有）；只有它内部会画出光斑。 */
   @State pressTab: number = -1;
@@ -78,6 +84,8 @@ struct Index {
   // 键必须是**字面量**：@StorageProp 的参数在编译期求值，写成 `NavBarWatch.KEY`
   // 不会建立订阅（真机上表现为「状态变了但界面不动」）。
   @StorageProp('nav_bar_hidden') navHidden: boolean = false;
+  /** 底部手势条避让高度（vp）：响应 readInsets() 异步写入，首帧与切页底栏高度完全一致。 */
+  @StorageProp('amaneNavInset') navInset: number = 0;
   /** 正在播「收回」补间：这段时间里叠层要保持挂载，否则动画没地方跑。 */
   @State minusClosing: boolean = false;
   /** 最近一次「吸附打开」的时间：跟着那一下 Up 别把它判成收合（见 trackMinus ②）。 */
@@ -224,14 +232,22 @@ struct Index {
     // 直接送他去「服务器连接」子页（2026-11-16 用户要求）。
     if (!Store.I.configured()) {
       this.booting = false;
+      this.connecting = false;
+      this.launchVeil = false;
       this.needSetup = true;
       this.failMsg = '';
+      this.failBanner = '';
       router.pushUrl({ url: 'pages/SettingsConnectionPage' });
       return;
     }
     this.needSetup = false;
-    this.booting = true;
+    // 2.8.2 P1 零割裂冷启：已配地址时不再停留在孤立转圈页，
+    // 首帧直接进 TabsRoot（首页同步读本地首屏缓存，无缓存时出玻璃骨架 + 真实顶/底栏），
+    // 探测与建连在后台静默完成，连上即无缝刷新。
+    this.booting = false;
+    this.connecting = true;
     this.failMsg = '';
+    this.failBanner = '';
     this.bootText = Store.I.mode === 'auto' ? '正在探测局域网…' : '正在连接…';
     try {
       await Store.I.resolve();
@@ -249,7 +265,8 @@ struct Index {
           throw error as Error;
         }
       }
-      this.booting = false;
+      this.connecting = false;
+      this.failBanner = '';
       this.refreshTabs();
       // 刷一刷预取（2.6.2.15）：负一屏是「跟手叠层」，拖动时才挂载 ShortsView，
       // 不预取的话首次进来要等一次冷查询（5.7s）→ 固定闪「正在取片段」。
@@ -262,8 +279,13 @@ struct Index {
     } catch (error) {
       const err = error as BusinessError;
       console.error(`[amane] boot failed: ${err.code} ${err.message}`);
-      this.booting = false;
-      this.failMsg = `已尝试 ${Store.I.onWan ? '外网' : '局域网'} 地址：${Store.I.user}`;
+      this.connecting = false;
+      const msg: string = `已尝试 ${Store.I.onWan ? '外网' : '局域网'} 地址：${Store.I.user}`;
+      if (cacheReadStale(HOME_BOOT_CACHE_KEY) !== undefined) {
+        this.failBanner = msg;
+      } else {
+        this.failMsg = msg;
+      }
     }
   }
 
@@ -294,7 +316,7 @@ struct Index {
     // 回到前台：按当前电量重新决定要不要给粒子降档（省电模式下可能已经掉到 20% 以下）
     this.applyPowerBudget();
     // 从播放页 / 详情页返回：首页的「继续观看」和收藏状态可能变了
-    if (!this.booting && this.failMsg.length === 0) {
+    if (!this.booting && !this.connecting && this.failMsg.length === 0) {
       this.homeRefresh++;
       // 从详情页 / 播放页回来：推荐也换一批（只在首页时才做，免得在别的 tab 空跑）
       if (this.currentTab === 0) {
@@ -322,9 +344,14 @@ struct Index {
 
   /** App 不可见（锁屏 / 切到别的应用）：粒子立即停，不做后台重绘。 */
   onPageHide(): void {
+    this.stopPressGlowTimer();
     setFxLow(true);
     // 进二级页面：关掉真全屏（那些页面的标题栏没有让位状态栏的逻辑）
     this.applyFullScreen(false);
+  }
+
+  aboutToDisappear(): void {
+    this.stopPressGlowTimer();
   }
 
   @Builder
@@ -347,8 +374,8 @@ struct Index {
               radius: '50%',
               colors: [
                 [Theme.accentAlpha(0.0), 0],
-                [Theme.accentAlpha(0.10), 0.55],
-                [Theme.accentAlpha(0.18), 0.82],
+                [Theme.accentAlpha(0.08), 0.55],
+                [Theme.accentAlpha(0.14), 0.82],
                 [Theme.accentAlpha(0.0), 1]
               ]
             })
@@ -403,9 +430,9 @@ struct Index {
             // backgroundColor 复位成透明 —— 靠底色表达选中在这条路上一律无效。
             if (this.barSpotMaterial() !== undefined) {
               Column()
-                .width(56)
+                .width(this.spotW())
                 .height(44)
-                .borderRadius(16)
+                .borderRadius(18)
                 .systemMaterial(this.barSpotMaterial())
                 // 材质是方的矩形，圆角要靠 clip 裁出来
                 .clip(true)
@@ -413,24 +440,24 @@ struct Index {
               // 兜底（档位=无 / 设备不支持材质）：退回「淡主题色底 + 自绘边缘光」，
               // 否则这一档下底栏会变成「选中项什么都没有」。
               Column()
-                .width(56)
+                .width(this.spotW())
                 .height(44)
-                .borderRadius(16)
-                .backgroundColor(Theme.accentAlpha(0.10))
+                .borderRadius(18)
+                .backgroundColor(Theme.accentAlpha(0.14))
               // ★ 边缘光（三十四改）★ 和顶栏那几块玻璃用的是**同一个组件**：
               //   外圈一道头发丝亮边 → 紧贴一道暗线 → 4vp 内衬微光 → 中心零。
               EdgeLight({
-                radius: 16,
+                radius: 18,
                 tint: Theme.ACCENT,
                 level: 1,
-                ring: 0.52,
-                bloom: 0.12,
+                ring: 0.55,
+                bloom: 0.14,
                 bloomW: 3,
-                sheen: 0.22
+                sheen: 0.26
               })
             }
           }
-          .width(56)
+          .width(this.spotW())
           .height(44)
           .translate({ x: this.travel })
           .hitTestBehavior(HitTestMode.None)
@@ -441,23 +468,24 @@ struct Index {
           })
         }
 
-        Column({ space: 3 }) {
+        Column({ space: 2 }) {
           Image(icon)
-            .width(22)
-            .height(22)
+            .width(20)
+            .height(20)
             .objectFit(ImageFit.Contain)
-            // 未选中也要看得清：原来用 TEXT_FAINT(#6C6C78) 在深底上几乎糊成一团，
-            // 提到接近白的灰（选中才用紫色）
-            .fillColor(this.currentTab === index ? Theme.ACCENT : Theme.TAB_IDLE)
+            // 暗底玻璃用高明度 ACCENT_INK，避免高饱和荧光图标刺眼发毛
+            .fillColor(this.currentTab === index ? Theme.ACCENT_INK : Theme.TAB_IDLE)
           Text(label)
             .fontSize(10)
+            .fontWeight(this.currentTab === index ? FontWeight.Medium : FontWeight.Regular)
             .fontColor(this.currentTab === index ? Theme.TEXT : Theme.TAB_IDLE)
+            .maxLines(1)
         }
-        .width(56)
+        .width(this.spotW())
         .height(44)
         .justifyContent(FlexAlign.Center)
       }
-      .width(56)
+      .width(this.spotW())
       .height(44)
     }
     .width('100%')
@@ -494,28 +522,28 @@ struct Index {
     // 色块可以弹（重心在整块面积上，弹一下像果冻）；一圈光弹就不对了 —— 光没有质量，
     // 它应该**滑过去然后停住**。所以主线把阻尼提到接近临界（30，约为 0.93 阻尼比），
     // 刚度 260（周期 ≈ 390ms）：几乎没有回弹，落地就静。
-    ui.animateTo({ curve: curves.interpolatingSpring(0, 1, 260, 30) }, () => {
+    ui.animateTo({ curve: Motion.springFlow() }, () => {
       this.travel = 0;
     });
     // 光尾质量给到 1.8、刚度 190：周期 ≈ 610ms，比主线慢一截，落后约 150ms 才跟上。
     // 它本来就比主光更宽更淡，慢这一点刚好读成「一道余光甩在身后」，而不是第二个高光。
-    ui.animateTo({ curve: curves.interpolatingSpring(0, 1.8, 190, 34) }, () => {
+    ui.animateTo({ curve: Motion.springTail() }, () => {
       this.travelTail = 0;
     });
   }
 
-  /** 按住底栏某一项：光斑从 40vp 长到 150vp，按下时间越长越大（hosplayer 那种）。 */
+  /** 按住底栏某一项：光斑从 34vp 长到 88vp，克制留在当前格内不串格。 */
   private startPressGlow(index: number): void {
     this.stopPressGlowTimer();
     this.pressTab = index;
-    this.pressR = 40;
-    this.pressA = 0.38;
+    this.pressR = 34;
+    this.pressA = 0.34;
     animateTo({ duration: 140, curve: Curve.EaseOut }, () => {
-      this.pressA = 0.62;
+      this.pressA = 0.54;
     });
     this.pressTimer = setInterval(() => {
-      if (this.pressR < 150) {
-        this.pressR = Math.min(150, this.pressR + 4.5);
+      if (this.pressR < 88) {
+        this.pressR = Math.min(88, this.pressR + 3.6);
       }
     }, 50);
   }
@@ -557,7 +585,12 @@ struct Index {
       w = 390;
     }
     const visible: number = BuildConfig.ENABLE_ACTORS && BuildConfig.ENABLE_FACETS ? 6 : 5;
-    return (w - 32) / visible;
+    return (w - 24) / visible;
+  }
+
+  /** 单个 Tab 选中玻璃胶囊的自适应宽度：6 Tab 下既舒展又不互相碰边。 */
+  private spotW(): number {
+    return Math.min(54, Math.max(46, Math.floor(this.tabCenterStep() - 6)));
   }
 
   /**
@@ -631,9 +664,9 @@ struct Index {
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .barBackgroundColor(Color.Transparent)
     .barFloatingStyle({
-      // 收起（agent3）与真全屏让位（agent2）同时成立：收起时整条横向收紧吸进屏底，
-      // 展开时按手势条实际高度上抬（读不到高度就退回 12）。
-      barSideMargin: this.navHidden ? 215 : 16,
+      // 收起时横向收窄吸进屏底（140 保证 2*margin < 屏宽，避免负宽度硬跳），
+      // 展开时紧贴手势条上方，不再双倍叠加留白导致底栏漂太高。
+      barSideMargin: this.navHidden ? 140 : 12,
       barBottomMargin: this.navHidden ? 0 : this.barBottomGap(),
       systemMaterial: this.tabBarMaterial()
     })
@@ -752,7 +785,7 @@ struct Index {
             .height(40)
             .padding({ left: 24, right: 24 })
             .backgroundColor(Theme.ACCENT)
-            .fontColor('#FFFFFF')
+            .fontColor(Theme.ON_ACCENT)
             .fontSize(14)
             .margin({ top: 8 })
             .onClick(() => {
@@ -778,7 +811,7 @@ struct Index {
               .height(40)
               .padding({ left: 24, right: 24 })
               .backgroundColor(Theme.ACCENT)
-              .fontColor('#FFFFFF')
+              .fontColor(Theme.ON_ACCENT)
               .fontSize(14)
               .onClick(() => {
                 this.boot();
@@ -802,9 +835,132 @@ struct Index {
         .justifyContent(FlexAlign.Center)
       } else if (this.themeEpoch % 2 === 0) {
         // 换主题后走到 else 分支：子树整体重建，颜色才会全部换成新的
-        this.TabsRoot()
+        Column() {
+          this.TabsRoot()
+        }
+        .width('100%')
+        .height('100%')
+        .scale({
+          x: this.launchVeil && !this.launchOut ? 0.96 : 1,
+          y: this.launchVeil && !this.launchOut ? 0.96 : 1
+        })
+        .opacity(this.launchVeil && !this.launchOut ? 0.01 : 1)
       } else {
-        this.TabsRoot()
+        Column() {
+          this.TabsRoot()
+        }
+        .width('100%')
+        .height('100%')
+        .scale({
+          x: this.launchVeil && !this.launchOut ? 0.96 : 1,
+          y: this.launchVeil && !this.launchOut ? 0.96 : 1
+        })
+        .opacity(this.launchVeil && !this.launchOut ? 0.01 : 1)
+      }
+
+      // 冷启动真·一镜到底接力层（2.8.2）：syncLoad(true) 零空帧承接系统 startWindowIcon，
+      // 首帧即触发物理弹簧轻展淡出，让首页从背后自然浮现，彻底消除系统图标「一闪而过」的硬切。
+      if (this.launchVeil) {
+        Stack({ alignContent: Alignment.Center }) {
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor('#0B0B0F')
+            .opacity(this.launchOut ? 0 : 1)
+
+          // 跟随当前主题色的极柔环境光，让冷启一镜到底与用户自选配色自然呼应
+          Column()
+            .width(260)
+            .height(260)
+            .borderRadius(130)
+            .radialGradient({
+              center: ['50%', '50%'],
+              radius: '50%',
+              colors: [
+                [Theme.accentAlpha(0.18), 0],
+                [Theme.accentAlpha(0.06), 0.52],
+                [Theme.accentAlpha(0.0), 1]
+              ]
+            })
+            .scale({ x: this.launchOut ? 1.45 : 0.92, y: this.launchOut ? 1.45 : 0.92 })
+            .opacity(this.launchOut ? 0 : 1)
+
+          Image($r('app.media.startIcon'))
+            .width(192)
+            .height(192)
+            .objectFit(ImageFit.Contain)
+            .syncLoad(true)
+            .scale({ x: this.launchOut ? 1.32 : 1, y: this.launchOut ? 1.32 : 1 })
+            .opacity(this.launchOut ? 0 : 1)
+        }
+        .width('100%')
+        .height('100%')
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+        .hitTestBehavior(HitTestMode.None)
+        .zIndex(20)
+        .onAppear(() => {
+          setTimeout(() => {
+            try {
+              this.getUIContext().animateTo({ curve: Motion.springHero() }, () => {
+                this.launchOut = true;
+              });
+            } catch (e) {
+              this.launchOut = true;
+            }
+          }, 16);
+          setTimeout(() => {
+            this.launchVeil = false;
+          }, 420);
+        })
+      }
+
+      // 有缓存首屏但后台建连失败时的轻量浮条：不遮挡已展示的缓存内容，一键重试或改地址
+      if (this.failBanner.length > 0 && !this.minusOpen) {
+        Row({ space: 10 }) {
+          Column({ space: 2 }) {
+            Text('暂未连上服务器')
+              .fontSize(12)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Theme.TEXT)
+            Text(this.failBanner)
+              .fontSize(10)
+              .fontColor(Theme.TEXT_FAINT)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+
+          Text('重试')
+            .fontSize(11)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Theme.ON_ACCENT)
+            .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+            .backgroundColor(Theme.ACCENT)
+            .borderRadius(12)
+            .onClick(() => {
+              this.boot();
+            })
+
+          Text('设置')
+            .fontSize(11)
+            .fontColor(Theme.TEXT_DIM)
+            .padding({ left: 8, right: 8, top: 5, bottom: 5 })
+            .backgroundColor('#26FFFFFF')
+            .borderRadius(12)
+            .onClick(() => {
+              router.pushUrl({ url: 'pages/SettingsConnectionPage' });
+            })
+        }
+        .width('92%')
+        .padding({ left: 14, right: 12, top: 10, bottom: 10 })
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .backgroundColor('#B314141C')
+        .borderRadius(16)
+        .border({ width: 0.75, color: '#2EFFFFFF' })
+        .shadow({ radius: 18, color: '#80000000', offsetY: 6 })
+        .position({ x: '4%', y: Theme.topInset() + 62 })
+        .zIndex(8)
       }
 
       // 负一屏叠层（跟手）：只有「拖动中」「已打开」或「正在收回」才挂载，
@@ -899,7 +1055,7 @@ struct Index {
    * 对象按 `档位|颜色` 缓存在 `pressMaterial` 里，这里每帧调也不会 new。
    */
   private barSpotMaterial(): uiMaterial.ImmersiveMaterial | undefined {
-    return ImmersiveGlass.pressMaterial(this.glassLevel, Theme.accentAlpha(0.30));
+    return ImmersiveGlass.pressMaterial(this.glassLevel, Theme.accentAlpha(0.20));
   }
 
   /**
@@ -947,24 +1103,19 @@ struct Index {
       const e = err as BusinessError;
       console.info(`[amane] insets: ${e.code} ${e.message}`);
     }
-    // ★ 真全屏是**异步生效**的（`setWindowLayoutFullScreen` 返回 Promise）★
-    // 首帧往往已经按「非全屏」的高度排过一次，于是 Grid 的视口短了一截：
-    // 底部那一条不渲染，手指轻轻一滑才重排、内容"闪现"到底（2026-11-16 用户在演员/媒体库/标签页报的）。
-    // 这里等它落地后**强制重建一次 Tab 树**（`themeEpoch` 奇偶切换），把高度一次性刷新到位。
-    // —— 实际根因不是时序：旋转屏幕（=强制重排）后黑边仍在，说明页面区高度真的短了，
-    //    由各页根容器的 `expandSafeArea` 撑开（见 ActorsTab / FacetsTab / LibraryTab / FavoritesTab / HomeTab）。
-    // 这次重建保留着无害（一次性），只是不再是主要修复手段。
-    if (!this.layoutRefreshed) {
-      this.layoutRefreshed = true;
-      setTimeout(() => {
-        AppStorage.setOrCreate<number>('amaneThemeEpoch', this.themeEpoch + 2);
-      }, 120);
-    }
   }
 
-  /** 底栏离底距离：原来的 12 再让开手势条，免得压在上面。 */
+  /**
+   * 底栏离底距离：系统手势条避让区（~28vp）本身已含大片上方留白，指示条仅在最底 ~10vp，
+   * 之前再加 12vp 会把底栏顶高到 40vp（134px）。减掉多余留白后落到 ~18vp（61px），
+   * 恰好紧贴手势条上方、视觉重心稳妥。
+   */
   private barBottomGap(): number {
-    return 12 + Theme.navInset();
+    const inset: number = this.navInset > 0 ? this.navInset : Theme.navInset();
+    if (inset > 12) {
+      return Math.max(14, Math.round(inset - 10));
+    }
+    return 14;
   }
 
   /**

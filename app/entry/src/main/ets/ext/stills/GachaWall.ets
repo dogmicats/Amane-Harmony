@@ -1,6 +1,5 @@
 import { Theme } from '../../common/Theme';
 import { Store } from '../../common/Store';
-import { uiMaterial } from '@kit.ArkUI';
 import { StillFeed, openStill } from './GachaFeed';
 import { GachaStill } from './GachaTypes';
 import { GachaSwitch } from './GachaSwitch';
@@ -414,9 +413,9 @@ export struct GachaWall {
           .fontSize(11)
           .fontColor(Theme.TEXT_FAINT)
       } else {
-        Text('✦')
+        SymbolGlyph($r('sys.symbol.wand_and_stars'))
           .fontSize(26)
-          .fontColor(Theme.TEXT_FAINT)
+          .fontColor([Theme.TEXT_FAINT])
         Text(this.note.length > 0 ? this.note : '这里还没有剧照')
           .fontSize(12)
           .fontColor(Theme.TEXT_DIM)
@@ -474,6 +473,8 @@ export struct GachaWall {
       .columnsTemplate(this.colsTemplate())
       .columnsGap(8)
       .rowsGap(8)
+      .cachedCount(6, true)
+      .clipContent(ContentClipMode.BOUNDARY)
       .width('100%')
       .height('100%')
       // 首屏让位（七/八改）：用 `padNow` 而不是 `topPad` —— 滚动时它会被收成 0（见 onScroll）
@@ -584,18 +585,10 @@ export struct GachaWall {
         }
         .padding({ left: 14, right: 14, top: 7, bottom: 7 })
         .borderRadius(16)
-        // 2026-11-16 第五次调（回应用户两点）：
-        // 1) 图片还没加载出来时背后是深色占位，底色若偏黑就会"透成一块黑" → 底色降到 30%，
-        //    并保留系统背景模糊，让没图的地方也呈中灰玻璃而不是死黑；
-        // 2) 边缘光晕：重新挂回系统 `systemMaterial`（上一轮我是直接删掉、没让你看过它 THICK 的样子）。
-        //    ArkUI 的说法是这个材质会接管 backgroundColor/blur/border，所以它生效时会盖住下面两行；
-        //    若设备不支持，这两行就是兜底，不会变成透明。
+        // 内容区不挂 systemMaterial（系统材质仅在 Navigation 标题栏与底部 TabBar 生效，
+        // 见下方「↑」按钮说明），统一走背景模糊 + 30% 暗底 + 发丝亮边配方。
         .backgroundColor('#4D000000')
         .backgroundBlurStyle(BlurStyle.BACKGROUND_ULTRA_THICK)
-        .systemMaterial(new uiMaterial.ImmersiveMaterial({
-          style: uiMaterial.ImmersiveStyle.REGULAR,
-          materialColor: '#33000000'
-        }))
         .border({ width: 0.5, color: '#40FFFFFF' })
       }
       .width('100%')

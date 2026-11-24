@@ -1,46 +1,33 @@
 /**
- * 「候选范围」编辑卡（2026-11-15 抽出）。
- *
- * 为什么要抽：顶部大图（`hero_pool_spec`）和刷一刷（`shorts_pool_spec`）要用**同一套**
- * 筛选实现（媒体库多选 / 观看状态 / 年份 / 标签 / 演员 → 条件串），但**用法不复用**
- * —— 两处各自存自己的条件，改一处不影响另一处。
- *
- * 所以这里只负责「编辑 + 落偏好」，用哪套偏好由 `specKey` / `presetKey` 决定；
- * 落盘后调 `onChanged()` 让调用方决定怎么让生效的缓存失效（首页是 pool 缓存、
- * 刷一刷是片段预取缓存）。
+ * 「候选范围」编辑卡（2.8.2 视觉统一版）：
+ *  - 顶部大图（hero_pool_spec）与刷一刷（shorts_pool_spec）共用同一筛选实现；
+ *  - 统一升级为黑曜石大圆角卡 + 丝绒半透选态胶囊 + 暗色凹陷输入框 + 宝石渐变主按钮。
  */
 import { promptAction } from '@kit.ArkUI';
 import { httpGet } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 
-/** 一个可选项（状态 / 年份）。 */
 interface PoolOpt {
   key: string;
   label: string;
 }
 
-/** 媒体库 chip。 */
 interface LibChip {
   id: number;
   name: string;
 }
 
-/** `/api/user/libraries` 的响应。 */
 interface LibsResp {
   items: LibChip[];
 }
 
 @Component
 export struct PoolFilterCard {
-  /** 条件 JSON 存哪个偏好键（`hero_pool_spec` / `shorts_pool_spec`）。 */
   specKey: string = 'hero_pool_spec';
-  /** 预设池存哪个偏好键（`hero_pool` / `shorts_pool`）。 */
   presetKey: string = 'hero_pool';
-  title: string = '从哪儿挑';
-  hint: string = '按下面的条件组合出候选范围；都不选 = 全库。';
-
-  /** 条件应用/清空后通知调用方（作废它自己的缓存）。 */
+  title: string = '挑片范围';
+  hint: string = '不选条件则从全库随机挑片';
   onChanged: () => void = () => {};
 
   @State libs: LibChip[] = [];
@@ -55,7 +42,6 @@ export struct PoolFilterCard {
     this.loadLibs();
   }
 
-  /** 读回已保存的条件。 */
   private loadSpec(): void {
     const raw: string = Store.I.prefString(this.specKey, '');
     if (raw.length === 0) {
@@ -98,20 +84,39 @@ export struct PoolFilterCard {
       { key: 'unwatched', label: '未观看' },
       { key: 'watched', label: '看过' },
       { key: 'fav', label: '已收藏' },
-      { key: 'rated', label: '我打 4 分以上' }
+      { key: 'rated', label: '4 分以上' }
     ];
   }
 
   private yearOptions(): PoolOpt[] {
     return [
       { key: '', label: '不限' },
-      { key: '2015', label: '2015 以后' },
-      { key: '2020', label: '2020 以后' },
-      { key: '2023', label: '2023 以后' }
+      { key: '2015', label: '2015+' },
+      { key: '2020', label: '2020+' },
+      { key: '2023', label: '2023+' }
     ];
   }
 
-  /** 存条件；自己这套偏好写自己的键，和另一处互不影响。 */
+  private activeSummary(): string {
+    let n: number = 0;
+    if (this.selLibs.length > 0) {
+      n++;
+    }
+    if (this.poolState !== 'any') {
+      n++;
+    }
+    if (this.poolYear.length > 0) {
+      n++;
+    }
+    if (this.poolTags.trim().length > 0) {
+      n++;
+    }
+    if (this.poolActor.trim().length > 0) {
+      n++;
+    }
+    return n === 0 ? '全库' : `${n} 项条件`;
+  }
+
   private apply(): void {
     const spec: Record<string, Object> = {};
     if (this.selLibs.length > 0) {
@@ -132,7 +137,6 @@ export struct PoolFilterCard {
       spec['actor'] = this.poolActor.trim();
     }
     Store.I.prefSetString(this.specKey, JSON.stringify(spec));
-    // 空条件落回 `all`，不落 `custom`：`custom` 只是客户端标记，服务端预设表里没有它
     Store.I.prefSetString(this.presetKey, Object.keys(spec).length === 0 ? 'all' : 'custom');
     this.onChanged();
     promptAction.showToast({
@@ -156,13 +160,14 @@ export struct PoolFilterCard {
   @Builder
   OptionChip(label: string, on: boolean, onTap: () => void) {
     Text(label)
-      .fontSize(12)
-      .fontColor(on ? '#FFFFFF' : Theme.TEXT_DIM)
-      .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-      .backgroundColor(on ? Theme.ACCENT : Theme.CARD_HI)
+      .fontSize(11.5)
+      .fontWeight(on ? FontWeight.Medium : FontWeight.Normal)
+      .fontColor(on ? Theme.ACCENT_INK : Theme.TEXT_DIM)
+      .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+      .backgroundColor(on ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
       .borderRadius(Theme.R_PILL)
-      .border({ width: 1, color: on ? Theme.accentAlpha(0.55) : Theme.STROKE })
-      .margin({ right: 8, bottom: 8 })
+      .border({ width: on ? 0.75 : 0.5, color: on ? Theme.inkAlpha(0.50) : '#16FFFFFF' })
+      .margin({ right: 7, bottom: 7 })
       .onClick(() => {
         onTap();
       })
@@ -170,23 +175,32 @@ export struct PoolFilterCard {
 
   build() {
     Column({ space: 12 }) {
-      Column({ space: 3 }) {
+      Row() {
         Text(this.title)
-          .fontSize(15)
+          .fontSize(14.5)
+          .fontWeight(FontWeight.Medium)
           .fontColor(Theme.TEXT)
-        Text(this.hint)
-          .fontSize(10)
-          .fontColor(Theme.TEXT_FAINT)
-          .lineHeight(15)
+        Blank()
+        Text(this.activeSummary())
+          .fontSize(10.5)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.activeSummary() === '全库' ? Theme.TEXT_DIM : Theme.ACCENT_INK)
+          .padding({ left: 9, right: 9, top: 3, bottom: 3 })
+          .backgroundColor(this.activeSummary() === '全库' ? Theme.CARD_HI : Theme.accentAlpha(0.18))
+          .border({
+            width: 0.5,
+            color: this.activeSummary() === '全库' ? '#1AFFFFFF' : Theme.inkAlpha(0.42)
+          })
+          .borderRadius(Theme.R_PILL)
       }
-      .alignItems(HorizontalAlign.Start)
       .width('100%')
+      .alignItems(VerticalAlign.Center)
 
       if (this.libs.length > 0) {
         Column({ space: 6 }) {
-          Text('媒体库（可多选）')
+          Text('媒体库')
             .fontSize(11)
-            .fontColor(Theme.TEXT_DIM)
+            .fontColor(Theme.TEXT_FAINT)
           Flex({ wrap: FlexWrap.Wrap }) {
             ForEach(this.libs, (lib: LibChip) => {
               this.OptionChip(lib.name, this.selLibs.indexOf(lib.id) >= 0, () => {
@@ -207,9 +221,9 @@ export struct PoolFilterCard {
       }
 
       Column({ space: 6 }) {
-        Text('观看状态')
+        Text('状态')
           .fontSize(11)
-          .fontColor(Theme.TEXT_DIM)
+          .fontColor(Theme.TEXT_FAINT)
         Flex({ wrap: FlexWrap.Wrap }) {
           ForEach(this.stateOptions(), (opt: PoolOpt) => {
             this.OptionChip(opt.label, this.poolState === opt.key, () => {
@@ -224,7 +238,7 @@ export struct PoolFilterCard {
       Column({ space: 6 }) {
         Text('发行年份')
           .fontSize(11)
-          .fontColor(Theme.TEXT_DIM)
+          .fontColor(Theme.TEXT_FAINT)
         Flex({ wrap: FlexWrap.Wrap }) {
           ForEach(this.yearOptions(), (opt: PoolOpt) => {
             this.OptionChip(opt.label, this.poolYear === opt.key, () => {
@@ -236,57 +250,78 @@ export struct PoolFilterCard {
       .alignItems(HorizontalAlign.Start)
       .width('100%')
 
-      Column({ space: 6 }) {
-        Text('标签（逗号分隔，命中任一）')
-          .fontSize(11)
-          .fontColor(Theme.TEXT_DIM)
-        TextInput({ text: this.poolTags, placeholder: '例如：中字,单体' })
-          .height(38)
-          .fontSize(13)
-          .backgroundColor(Theme.CARD_HI)
-          .borderRadius(Theme.R_IMG)
-          .onChange((v: string) => {
-            this.poolTags = v;
-          })
+      Row({ space: 8 }) {
+        Column({ space: 5 }) {
+          Text('标签')
+            .fontSize(11)
+            .fontColor(Theme.TEXT_FAINT)
+          TextInput({ text: this.poolTags, placeholder: '逗号分隔' })
+            .height(38)
+            .fontSize(12.5)
+            .fontColor(Theme.TEXT)
+            .placeholderColor(Theme.TEXT_FAINT)
+            .caretColor(Theme.ACCENT_INK)
+            .backgroundColor('#141114')
+            .border({ width: 0.75, color: '#1EFFFFFF' })
+            .borderRadius(10)
+            .onChange((v: string) => {
+              this.poolTags = v;
+            })
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+
+        Column({ space: 5 }) {
+          Text('演员')
+            .fontSize(11)
+            .fontColor(Theme.TEXT_FAINT)
+          TextInput({ text: this.poolActor, placeholder: '名字片段' })
+            .height(38)
+            .fontSize(12.5)
+            .fontColor(Theme.TEXT)
+            .placeholderColor(Theme.TEXT_FAINT)
+            .caretColor(Theme.ACCENT_INK)
+            .backgroundColor('#141114')
+            .border({ width: 0.75, color: '#1EFFFFFF' })
+            .borderRadius(10)
+            .onChange((v: string) => {
+              this.poolActor = v;
+            })
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
       }
-      .alignItems(HorizontalAlign.Start)
       .width('100%')
 
-      Column({ space: 6 }) {
-        Text('演员（名字片段即可）')
-          .fontSize(11)
-          .fontColor(Theme.TEXT_DIM)
-        TextInput({ text: this.poolActor, placeholder: '例如：三上' })
-          .height(38)
-          .fontSize(13)
-          .backgroundColor(Theme.CARD_HI)
-          .borderRadius(Theme.R_IMG)
-          .onChange((v: string) => {
-            this.poolActor = v;
-          })
-      }
-      .alignItems(HorizontalAlign.Start)
-      .width('100%')
+      Text(this.hint)
+        .fontSize(10.5)
+        .fontColor(Theme.TEXT_FAINT)
+        .width('100%')
 
       Row({ space: 10 }) {
+        Button('清空')
+          .height(38)
+          .padding({ left: 18, right: 18 })
+          .fontSize(13)
+          .fontColor(Theme.TEXT_DIM)
+          .backgroundColor('#18FFFFFF')
+          .border({ width: 0.75, color: '#24FFFFFF' })
+          .borderRadius(Theme.R_PILL)
+          .onClick(() => {
+            this.clear();
+          })
         Button('应用条件')
           .height(38)
-          .fontSize(14)
-          .fontColor('#FFFFFF')
-          .backgroundColor(Theme.ACCENT)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.ON_ACCENT)
+          .backgroundColor(Color.Transparent)
+          .linearGradient(Theme.ctaGradient())
+          .border({ width: 0.75, color: '#38FFFFFF' })
           .borderRadius(Theme.R_PILL)
           .layoutWeight(1)
           .onClick(() => {
             this.apply();
-          })
-        Button('清空')
-          .height(38)
-          .fontSize(14)
-          .fontColor(Theme.TEXT_DIM)
-          .backgroundColor(Theme.CARD_HI)
-          .borderRadius(Theme.R_PILL)
-          .onClick(() => {
-            this.clear();
           })
       }
       .width('100%')
@@ -294,7 +329,7 @@ export struct PoolFilterCard {
     .width('100%')
     .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(Theme.R_CARD)
-    .border({ width: 1, color: Theme.STROKE })
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 }

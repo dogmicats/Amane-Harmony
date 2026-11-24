@@ -478,7 +478,7 @@ struct ActorDetailPage {
             .fontColor(Theme.TEXT)
           Text(this.series.length.toString())
             .fontSize(9)
-            .fontColor('#FFFFFF')
+            .fontColor(Theme.ON_ACCENT)
             .padding({ left: 5, right: 5, top: 1, bottom: 1 })
             .backgroundColor(Theme.ACCENT)
             .borderRadius(6)
@@ -807,10 +807,10 @@ struct ActorDetailPage {
       Row({ space: 6 }) {
         Text('＋')
           .fontSize(15)
-          .fontColor('#FFFFFF')
+          .fontColor(Theme.ON_ACCENT)
         Text('加写真')
           .fontSize(13)
-          .fontColor('#FFFFFF')
+          .fontColor(Theme.ON_ACCENT)
       }
       .layoutWeight(1)
       .height(40)
@@ -1110,10 +1110,10 @@ struct ActorDetailPage {
             Row({ space: 8 }) {
               Text('＋')
                 .fontSize(15)
-                .fontColor('#FFFFFF')
+                .fontColor(Theme.ON_ACCENT)
               Text(this.addingPhoto ? '上传中…' : '从相册上传')
                 .fontSize(13)
-                .fontColor('#FFFFFF')
+                .fontColor(Theme.ON_ACCENT)
             }
             .width('100%')
             .height(42)

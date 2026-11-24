@@ -250,6 +250,7 @@ export struct FavoriteEntityView {
       }))
       .columnsGap(10)
       .rowsGap(14)
+      .cachedCount(6)
       .width('100%')
     } else {
       Column({ space: 10 }) {

@@ -3,20 +3,14 @@ import { PoolFilterCard } from '../view/PoolFilterCard';
 import { resetShortsCache } from '../view/ShortsView';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { router } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { PageTitle, GlassBack } from '../view/GlassKit';
+import {
+  SettingsAmbientGlow, SettingsChevron, SettingsIconTile, SettingsRowDivider, VelvetChip
+} from '../view/SettingsKit';
 
-/**
- * 刷一刷（短视频流）的设置（2.6.1.64）。
- *
- * 为什么单独一页：这条开关原来塞在「设置 → 进度条预览」里 —— 用户 22:42 的原话是
- * 「用户如果不是深入去找，很难想到刷一刷素材的开关会藏在进度条预览里」。
- * 刷一刷是个独立功能，开关就该在设置里有一行自己的名字。
- *
- * 和「进度条预览」的关系：两者写的是**同一个缓存目录**（同一批帧文件），
- * 所以「占用上限」是共用的那一份，不是各算各的 —— 各算各的会重复扣同一份空间。
- */
 interface ShortsPrefs {
   shorts_warm?: boolean;
   budget_mb?: number;
@@ -40,14 +34,10 @@ struct ShortsSettingsPage {
   @State framesScored: number = 0;
   @State spriteMb: number = 0;
   @State totalMb: number = 0;
-  /** 视频上下留白：铺模糊海报（开）还是纯黑边（关）。本机偏好 `shorts_poster_bg`。 */
   @State posterBg: boolean = true;
-  /**
-   * 负一屏提示光晕（2026-11-15 从「进度条预览」搬来）。
-   * 它讲的是「首页最左边还有一屏」，属于刷一刷/负一屏这条线，和进度条预览无关。
-   * 偏好键仍是 `minus_glow` / `minus_glow_keep`，行为一字未改。
-   */
   @State glowHint: boolean = true;
+  @StorageProp('amaneTopInset') topInset: number = 30;
+  private navStack: NavPathStack = new NavPathStack();
 
   aboutToAppear(): void {
     this.posterBg = Store.I.prefString('shorts_poster_bg', '1') !== '0';
@@ -84,7 +74,7 @@ struct ShortsSettingsPage {
         `${Store.I.user}/api/user/preview/purge?what=frames`, Store.I.token, '{}');
       const o = JSON.parse(text) as Record<string, Object>;
       const n: number = Number(o.removed) || 0;
-      this.note = n > 0 ? `已清掉 ${n} 部的素材帧` : '本来就是空的';
+      this.note = n > 0 ? `已清掉 ${n} 部素材帧` : '本来就是空的';
       await this.load();
     } catch (err) {
       const e = err as BusinessError;
@@ -101,7 +91,7 @@ struct ShortsSettingsPage {
     this.busy = true;
     try {
       await httpPost(`${Store.I.user}/api/user/preview/settings`, Store.I.token, patch);
-      this.note = '已保存，后台任务下一轮生效';
+      this.note = '已保存，后台下一轮生效';
     } catch (err) {
       const e = err as BusinessError;
       console.error(`[amane] shorts save: ${e.code} ${e.message}`);
@@ -110,19 +100,19 @@ struct ShortsSettingsPage {
     this.busy = false;
   }
 
-  @Builder
-  BudgetChip(v: number) {
-    Text(v === 0 ? '不限制' : (v >= 1024 ? `${v / 1024} GB` : `${v} MB`))
-      .fontSize(12)
-      .fontColor(this.budget === v ? '#FFFFFF' : Theme.TEXT_DIM)
-      .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-      .backgroundColor(this.budget === v ? Theme.ACCENT : Theme.CARD_HI)
-      .borderRadius(13)
-      .margin({ right: 8, bottom: 6 })
-      .onClick(() => {
-        this.budget = v;
-        this.save(`{"budget_mb":${v}}`);
-      })
+  private budgetLabel(v: number): string {
+    if (v === 0) {
+      return '不限制';
+    }
+    return v >= 1024 ? `${v / 1024} GB` : `${v} MB`;
+  }
+
+  private usageRatioPct(): string {
+    if (this.budget <= 0) {
+      return this.totalMb > 0 ? '25%' : '0%';
+    }
+    const pct: number = Math.min(100, Math.max(4, Math.round((this.totalMb / this.budget) * 100)));
+    return `${pct}%`;
   }
 
   @Builder
@@ -132,7 +122,7 @@ struct ShortsSettingsPage {
         GlassBack({
           mat: true,
           onTap: () => {
-          router.back();
+            router.back();
           }
         })
         PageTitle({ text: '刷一刷', fs: 18 })
@@ -141,24 +131,17 @@ struct ShortsSettingsPage {
       .height(46)
       .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 6, right: Theme.PAGE_PAD })
+      .padding({ left: 8, right: Theme.PAGE_PAD })
     }
     .width('100%')
     .height('100%')
     .padding({ top: this.topInset })
   }
 
-  @StorageProp('amaneTopInset') topInset: number = 30;
-
-  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
-  private navStack: NavPathStack = new NavPathStack();
-
-  /** 标题栏实际高度（内容要让开这么多）。 */
   private barH(): number {
     return this.topInset + 46;
   }
 
-  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
   private titleConfig(): NavigationCustomTitle {
     return {
       builder: () => {
@@ -168,248 +151,233 @@ struct ShortsSettingsPage {
     };
   }
 
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
   build() {
     Navigation(this.navStack) {
-      Column() {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
 
         Scroll() {
-          Column({ space: 10 }) {
+          Column({ space: 14 }) {
+            Blank().height(this.barH() + 6)
 
-          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
-          // 材质才有颜色可采样。
-          Blank().height(this.barH())
-            // 选片范围（2026-11-15 用户要求拆出来）：和顶部大图**共用同一套筛选实现**
-            // （PoolFilterCard），但存的是自己的一套偏好（shorts_pool_spec / shorts_pool）,
-            // 改这里不再影响顶部大图。
+            // 挑片范围卡
             PoolFilterCard({
               specKey: 'shorts_pool_spec',
               presetKey: 'shorts_pool',
-              title: '刷一刷从哪儿挑',
-              hint: '只在符合这些条件的片里截片段；都不选 = 全库。和顶部大图各算各的。',
+              title: '挑片范围',
+              hint: '不选条件则从全库随机挑片',
               onChanged: () => {
-                // 范围变了：预取缓存必须作废，否则还拿着旧范围的片段在刷
                 resetShortsCache();
               }
             })
 
-            // 开关
-            Row({ space: 12 }) {
-              Column({ space: 3 }) {
-                Text('后台准备素材')
-                  .fontSize(14)
-                  .fontColor(Theme.TEXT)
-                Text(this.on
-                  ? '关着屏幕也在慢慢准备：一次一部、每 1.5 分钟一部、只扫本地盘的片子'
-                  : '关：只有打开刷一刷时才现扫。前面几次能刷的比较少，而且要等')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .lineHeight(15)
-              }
-              .alignItems(HorizontalAlign.Start)
-              .layoutWeight(1)
-              Toggle({ type: ToggleType.Switch, isOn: this.on })
-                .selectedColor(Theme.ACCENT)
-                .onChange((v: boolean) => {
-                  this.on = v;
-                  this.save(`{"shorts_warm":${v ? 'true' : 'false'}}`);
-                })
-            }
-            .width('100%')
-            .padding(14)
-            .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
-
-            // 留白铺什么（2.6.2.19）：模糊海报底 / 纯黑边。
-            // 纯本机偏好 —— 服务端没有这个概念，改完回刷一刷立即生效。
-            Row({ space: 12 }) {
-              Column({ space: 3 }) {
-                Text('海报背景')
-                  .fontSize(14)
-                  .fontColor(Theme.TEXT)
-                Text(this.posterBg
-                  ? '横板视频上下留白处铺一张模糊的封面，跟着画面一起刷走'
-                  : '关：留白处只留纯黑边（最省电，滑起来也更稳）')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .lineHeight(15)
-              }
-              .alignItems(HorizontalAlign.Start)
-              .layoutWeight(1)
-              Toggle({ type: ToggleType.Switch, isOn: this.posterBg })
-                .selectedColor(Theme.ACCENT)
-                .onChange((v: boolean) => {
-                  this.posterBg = v;
-                  Store.I.prefSetString('shorts_poster_bg', v ? '1' : '0');
-                  // 刷一刷是按 AppStorage 铺的：这里同步过去，返回就生效，不用重启
-                  AppStorage.setOrCreate<number>('shortsPosterBg', v ? 1 : 0);
-                })
-            }
-            .width('100%')
-            .padding(14)
-            .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
-
-            // 负一屏提示光晕（2026-11-15 从「进度条预览」搬来）：学过一次就该停，给个开关关掉
-            Row({ space: 12 }) {
-              Column({ space: 3 }) {
-                Text('负一屏提示光晕')
-                  .fontSize(14)
-                  .fontColor(Theme.TEXT)
-                Text(this.glowHint
-                  ? '首页最左边那道细光带，每次打开 App 亮三下，提示「往左还有一屏」；进过一次负一屏会自动关掉'
-                  : '关：首页不再闪那条光带（负一屏仍可从最左边点/左滑进入）')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .lineHeight(15)
-              }
-              .alignItems(HorizontalAlign.Start)
-              .layoutWeight(1)
-              Toggle({ type: ToggleType.Switch, isOn: this.glowHint })
-                .selectedColor(Theme.ACCENT)
-                .onChange((v: boolean) => {
-                  this.glowHint = v;
-                  Store.I.prefSetString('minus_glow', v ? '1' : '0');
-                  // 用户手动打开过就记下来：之后进负一屏不再自动关掉（尊重手动设置）
-                  Store.I.prefSetString('minus_glow_keep', v ? '1' : '0');
-                })
-            }
-            .width('100%')
-            .padding(14)
-            .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
-
-            // 占用上限（和进度条预览共用）
-            Column({ space: 8 }) {
-              Text('占用上限')
-                .fontSize(14)
-                .fontColor(Theme.TEXT)
-                .width('100%')
-              Flex({ wrap: FlexWrap.Wrap }) {
-                this.BudgetChip(0)
-                this.BudgetChip(512)
-                this.BudgetChip(1024)
-                this.BudgetChip(2048)
-                this.BudgetChip(4096)
-              }
-              .width('100%')
-              Text('刷一刷的封面帧和「进度条预览」的缩略图是同一批文件，所以这里是共用的一份上限，'
-                + '只在这一页改（空间管理、进度条预览页只显示摘要）。超了按「最久没看过」先删。')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width('100%')
-                .lineHeight(15)
-            }
-            .width('100%')
-            .padding(14)
-            .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
-
-            // 占用明细（用户 23:02：不许出现「占十几 G 还清不掉」的东西）
-            Column({ space: 8 }) {
-              Text('现在占了多少')
-                .fontSize(14)
-                .fontColor(Theme.TEXT)
-                .width('100%')
-              Row() {
-                Text('刷一刷素材')
-                  .fontSize(12)
-                  .fontColor(Theme.TEXT_DIM)
-                Blank()
-                Text(`${this.framesMb} MB · ${this.framesCount} 部（已打分 ${this.framesScored}）`)
-                  .fontSize(12)
-                  .fontColor(Theme.TEXT)
-              }
-              .width('100%')
-              Row() {
-                Text('进度条预览')
-                  .fontSize(12)
-                  .fontColor(Theme.TEXT_DIM)
-                Blank()
-                Text(`${this.spriteMb} MB`)
-                  .fontSize(12)
-                  .fontColor(Theme.TEXT)
-              }
-              .width('100%')
-              Row() {
-                Text('合计')
-                  .fontSize(12)
-                  .fontColor(Theme.TEXT_DIM)
-                Blank()
-                Text(`${this.totalMb} MB`)
-                  .fontSize(12)
-                  .fontColor(Theme.GOLD)
-                  .fontWeight(FontWeight.Medium)
-              }
-              .width('100%')
-              Text('到上限会自动停，不会一直涨。')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width('100%')
-                .lineHeight(15)
-              Row({ space: 8 }) {
-                Text('清空刷一刷素材')
-                  .fontSize(11)
-                  .fontColor(Theme.DANGER)
-                  .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-                  .backgroundColor(Theme.CARD_HI)
-                  .borderRadius(13)
-                  .onClick(() => {
-                    this.purgeFrames();
+            // 3 个核心开关合并为一张分组黑曜石卡
+            Column() {
+              Row({ space: 12 }) {
+                SettingsIconTile({ icon: $r('sys.symbol.download'), tileSize: 36, iconSize: 17 })
+                Column({ space: 2 }) {
+                  Text('后台准备素材')
+                    .fontSize(14.5)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(Theme.TEXT)
+                  Text('闲时缓存本地片段，开屏即播')
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_FAINT)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                Toggle({ type: ToggleType.Switch, isOn: this.on })
+                  .selectedColor(Theme.ACCENT)
+                  .onChange((v: boolean) => {
+                    this.on = v;
+                    this.save(`{"shorts_warm":${v ? 'true' : 'false'}}`);
                   })
-                Blank()
               }
               .width('100%')
-            }
-            .width('100%')
-            .padding(14)
-            .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
+              .padding({ left: 14, right: 14, top: 12, bottom: 12 })
 
-            // 说明
-            Column({ space: 6 }) {
-              Text('它是怎么挑片段的')
-                .fontSize(13)
-                .fontColor(Theme.TEXT)
-                .width('100%')
-              Text('① 你自己发过弹幕的那一秒优先（那是你最直接的心头好）；'
-                + '② 没有弹幕的，用画面打分挑（清晰度 / 主体占比 / 亮度 / 画面复杂度）；'
-                + '③ 这两样都还没有的，先随机取一段顶上，保证你不会刷到空。')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width('100%')
-                .lineHeight(16)
-              Text('网盘的片子暂时不参与 —— 拖到 10 秒处要等它几十秒，刷不动。')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width('100%')
-                .lineHeight(16)
+              SettingsRowDivider()
+
+              Row({ space: 12 }) {
+                SettingsIconTile({ icon: $r('sys.symbol.picture'), tileSize: 36, iconSize: 17 })
+                Column({ space: 2 }) {
+                  Text('模糊海报背景')
+                    .fontSize(14.5)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(Theme.TEXT)
+                  Text('横屏视频上下留白铺模糊封面')
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_FAINT)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                Toggle({ type: ToggleType.Switch, isOn: this.posterBg })
+                  .selectedColor(Theme.ACCENT)
+                  .onChange((v: boolean) => {
+                    this.posterBg = v;
+                    Store.I.prefSetString('shorts_poster_bg', v ? '1' : '0');
+                    AppStorage.setOrCreate<number>('shortsPosterBg', v ? 1 : 0);
+                  })
+              }
+              .width('100%')
+              .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+
+              SettingsRowDivider()
+
+              Row({ space: 12 }) {
+                SettingsIconTile({ icon: $r('sys.symbol.wand_and_stars'), tileSize: 36, iconSize: 17 })
+                Column({ space: 2 }) {
+                  Text('负一屏边缘光晕')
+                    .fontSize(14.5)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(Theme.TEXT)
+                  Text('首页左侧显示呼吸光晕提示')
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_FAINT)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                Toggle({ type: ToggleType.Switch, isOn: this.glowHint })
+                  .selectedColor(Theme.ACCENT)
+                  .onChange((v: boolean) => {
+                    this.glowHint = v;
+                    Store.I.prefSetString('minus_glow', v ? '1' : '0');
+                    Store.I.prefSetString('minus_glow_keep', v ? '1' : '0');
+                  })
+              }
+              .width('100%')
+              .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+            }
+            .width('100%')
+            .backgroundColor(Theme.CARD)
+            .borderRadius(18)
+            .border({ width: 0.75, color: Theme.STROKE })
+            .clip(true)
+
+            // 素材占用 + 上限 + 清空
+            Column({ space: 12 }) {
+              Row() {
+                Text('素材占用')
+                  .fontSize(14.5)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Theme.TEXT)
+                Blank()
+                Text(`${this.totalMb} MB / ${this.budgetLabel(this.budget)}`)
+                  .fontSize(12)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Theme.ACCENT_INK)
+                  .fontFeature('"tnum" 1')
+              }
+              .width('100%')
+
+              // 玫瑰渐变占用进度条
+              Stack({ alignContent: Alignment.Start }) {
+                Column()
+                  .width('100%')
+                  .height(7)
+                  .borderRadius(3.5)
+                  .backgroundColor('#1AFFFFFF')
+                if (this.totalMb > 0) {
+                  Column()
+                    .width(this.usageRatioPct())
+                    .height(7)
+                    .borderRadius(3.5)
+                    .linearGradient(Theme.ctaGradient())
+                }
+              }
+              .width('100%')
+              .height(7)
+
+              Row() {
+                Text(`刷一刷 ${this.framesMb} MB（${this.framesCount} 部 · 已打分 ${this.framesScored}）`)
+                  .fontSize(10.5)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .fontFeature('"tnum" 1')
+                Blank()
+                Text(`预览 ${this.spriteMb} MB`)
+                  .fontSize(10.5)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .fontFeature('"tnum" 1')
+              }
+              .width('100%')
+
+              Flex({ wrap: FlexWrap.Wrap }) {
+                ForEach([512, 1024, 2048, 4096, 0], (v: number) => {
+                  Column() {
+                    VelvetChip({
+                      label: this.budgetLabel(v),
+                      active: this.budget === v,
+                      padH: 12,
+                      padV: 6,
+                      fs: 11.5,
+                      onTap: () => {
+                        this.budget = v;
+                        this.save(`{"budget_mb":${v}}`);
+                      }
+                    })
+                  }
+                  .margin({ right: 7, bottom: 7 })
+                }, (v: number) => `bg-${v}-${this.budget === v ? 1 : 0}`)
+              }
+              .width('100%')
+
+              SettingsRowDivider({ indent: 0 })
+
+              Row({ space: 10 }) {
+                SettingsIconTile({ icon: $r('sys.symbol.trash'), tileSize: 32, iconSize: 15, danger: true })
+                Text(this.busy ? '清理中…' : '清空已缓存片段')
+                  .fontSize(13.5)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Theme.DANGER)
+                  .layoutWeight(1)
+                SettingsChevron({ glyphSize: 13 })
+              }
+              .width('100%')
+              .padding({ top: 2, bottom: 2 })
+              .onClick(() => {
+                this.purgeFrames();
+              })
             }
             .width('100%')
             .padding(14)
             .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
+            .borderRadius(18)
+            .border({ width: 0.75, color: Theme.STROKE })
 
             if (this.note.length > 0) {
               Text(this.note)
                 .fontSize(11)
-                .fontColor(Theme.TEXT_FAINT)
+                .fontColor(Theme.ACCENT_INK)
                 .width('100%')
-                .padding({ top: 4 })
+                .padding({ left: 4 })
             }
+
+            Text('优先取弹幕时刻与高分构图，与进度条预览共用上限（暂不含网盘片）。')
+              .fontSize(10.5)
+              .fontColor(Theme.TEXT_FAINT)
+              .width('100%')
+              .lineHeight(16)
+              .padding({ left: 4, right: 4 })
+
+            Blank().height(Theme.pageBottomSafe())
           }
           .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 24 })
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
         }
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
         .width('100%')
+        .height('100%')
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
       }
       .width('100%')
       .height('100%')
-      .padding({ top: 36 })
       .backgroundColor(Theme.BG)
-      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .mode(NavigationMode.Stack)
     .hideBackButton(true)
     .hideToolBar(true)

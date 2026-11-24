@@ -349,7 +349,7 @@ struct AliasPage {
       if (this.note.length > 0) {
         Text(this.note)
           .fontSize(10)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
           .maxLines(2)
           .width('46%')
           .textAlign(TextAlign.End)
@@ -419,7 +419,7 @@ struct AliasPage {
       Row({ space: 10 }) {
         Text(this.pickFor === miss.q ? '收起' : '自己找')
           .fontSize(11)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
           .onClick(() => {
             if (this.pickFor === miss.q) {
               this.pickFor = '';
@@ -463,7 +463,7 @@ struct AliasPage {
               })
             Text(this.pickLoading ? '…' : '搜')
               .fontSize(11)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
               .padding({ left: 12, right: 12, top: 7, bottom: 7 })
               .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
               .backgroundColor(Theme.accentAlpha(0.30))
@@ -499,7 +499,7 @@ struct AliasPage {
                 .layoutWeight(1)
               Text('用这个')
                 .fontSize(10)
-                .fontColor(Theme.ACCENT)
+                .fontColor(Theme.ACCENT_INK)
             }
             .width('100%')
             .padding({ top: 6, bottom: 6 })
@@ -517,14 +517,15 @@ struct AliasPage {
     .width('100%')
     .padding(12)
     .backgroundColor(Theme.CARD)
-    .borderRadius(Theme.RADIUS)
+    .borderRadius(16)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   @Builder
   KindChip(key: string, label: string) {
     Text(label)
       .fontSize(12)
-      .fontColor(this.manualKind === key ? '#FFFFFF' : Theme.TEXT_DIM)
+      .fontColor(this.manualKind === key ? Theme.ACCENT_INK : Theme.TEXT_DIM)
       .padding({ left: 12, right: 12, top: 6, bottom: 6 })
       .backgroundColor(this.manualKind === key ? Theme.ACCENT : Theme.BG_RAISED)
       .borderRadius(Theme.R_PILL)
@@ -558,7 +559,7 @@ struct AliasPage {
         Text('＋')
           .fontSize(12)
           .fontColor(this.addFor === `${row.alias}|${row.kind}|${row.target}`
-            ? Theme.ACCENT : Theme.TEXT_FAINT)
+            ? Theme.ACCENT_INK : Theme.TEXT_FAINT)
           .padding({ left: 6, right: 6, top: 2, bottom: 2 })
           .onClick(() => {
             this.openAdd(row);
@@ -613,7 +614,8 @@ struct AliasPage {
     .width('100%')
     .padding({ left: 12, right: 12, top: 10, bottom: 10 })
     .backgroundColor(Theme.CARD)
-    .borderRadius(10)
+    .borderRadius(16)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   /** 七十二改：这页没有状态栏让位逻辑，**显式退回非全屏窗口** —— 
@@ -644,7 +646,8 @@ struct AliasPage {
           .width('100%')
           .padding(12)
           .backgroundColor(Theme.CARD)
-          .borderRadius(Theme.RADIUS)
+          .borderRadius(16)
+          .border({ width: 0.75, color: Theme.STROKE })
 
           // 待处理：这张清单才是重点 —— 别名靠人工维护，得先让人知道该维护什么
           Row({ space: 6 }) {
@@ -741,7 +744,7 @@ struct AliasPage {
                     this.manualKind = p.kind;
                     this.manualRows = [];
                   })
-                }, (p: PickRow) => `mp-${p.kind}-${p.name}`)
+                }, (p: PickRow) => `mp-${p.kind}-${p.name}-${this.manualTarget === p.name ? 1 : 0}`)
               }
               .width('100%')
             } else if (this.manualTarget.trim().length > 0) {
@@ -758,8 +761,10 @@ struct AliasPage {
               Button('加进别名')
                 .height(34)
                 .fontSize(12)
-                .fontColor('#FFFFFF')
-                .backgroundColor(Theme.ACCENT)
+                .fontColor(Theme.ON_ACCENT)
+                .backgroundColor(Color.Transparent)
+                .linearGradient(Theme.ctaGradient())
+                .border({ width: 0.75, color: '#38FFFFFF' })
                 .borderRadius(Theme.R_PILL)
                 .onClick(() => {
                   this.addManual();
@@ -770,7 +775,8 @@ struct AliasPage {
           .width('100%')
           .padding(12)
           .backgroundColor(Theme.CARD)
-          .borderRadius(Theme.RADIUS)
+          .borderRadius(16)
+          .border({ width: 0.75, color: Theme.STROKE })
 
           // 已有别名
           Row({ space: 6 }) {
@@ -799,11 +805,11 @@ struct AliasPage {
               ? '收起出厂别名'
               : `出厂别名 ${this.builtinCount} 条 · 一直生效，只是不在这儿列`)
               .fontSize(11)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
             Blank()
             Text(this.showBuiltin ? '⌃' : '›')
               .fontSize(13)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
           }
           .width('100%')
           .padding({ left: 2, top: 10, bottom: 4 })
@@ -839,7 +845,7 @@ struct AliasPage {
           }
         }
         .width('100%')
-        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+        .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.pageBottomSafe() })
       }
       .layoutWeight(1)
       .scrollBar(BarState.Off)

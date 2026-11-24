@@ -4,8 +4,10 @@ import { deviceInfo, pasteboard, BusinessError } from '@kit.BasicServicesKit';
 import { httpGet, probe } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BuildConfig } from '../common/BuildConfig';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 
 /** 关于页：版本 / 运行环境 / 当前连的服务端 / 链接与致谢。 */
 
@@ -185,9 +187,10 @@ struct AboutPage {
         .layoutWeight(1)
         Text('打开')
           .fontSize(11)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
           .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-          .backgroundColor(Theme.ACCENT_SOFT)
+          .backgroundColor(Theme.accentAlpha(0.16))
+            .border({ width: 0.5, color: Theme.inkAlpha(0.38) })
           .borderRadius(8)
       }
       .width('100%')
@@ -244,9 +247,15 @@ struct AboutPage {
     };
   }
 
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
   build() {
     Navigation(this.navStack) {
-      Column({ space: 14 }) {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
+        Column({ space: 14 }) {
 
         Scroll() {
           Column({ space: 12 }) {
@@ -271,10 +280,12 @@ struct AboutPage {
               Row({ space: 6 }) {
                 Text(`v${this.appVersion}`)
                   .fontSize(10)
-                  .fontColor('#FFFFFF')
+                  .fontColor(Theme.ON_ACCENT)
                   .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-                  .backgroundColor(Theme.ACCENT)
-                  .borderRadius(8)
+                  .backgroundColor(Color.Transparent)
+                  .linearGradient(Theme.ctaGradient())
+                  .border({ width: 0.75, color: '#38FFFFFF' })
+                  .borderRadius(Theme.R_PILL)
                 Text(BuildConfig.CHANNEL === 'self' ? '自用版' : '公开版')
                   .fontSize(10)
                   .fontColor(Theme.TEXT_DIM)
@@ -303,7 +314,8 @@ struct AboutPage {
             .width('100%')
             .padding({ left: 14, right: 14 })
             .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
+            .borderRadius(16)
+            .border({ width: 0.75, color: Theme.STROKE })
 
             // 服务端
             this.Section('服务端')
@@ -316,7 +328,8 @@ struct AboutPage {
             .width('100%')
             .padding({ left: 14, right: 14 })
             .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
+            .borderRadius(16)
+            .border({ width: 0.75, color: Theme.STROKE })
             .onClick(() => {
               router.pushUrl({ url: 'pages/SettingsPage' });
             })
@@ -348,7 +361,8 @@ struct AboutPage {
             .width('100%')
             .padding({ left: 14, right: 14 })
             .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
+            .borderRadius(16)
+            .border({ width: 0.75, color: Theme.STROKE })
 
             // 致谢
             this.Section('开源与致谢')
@@ -367,7 +381,8 @@ struct AboutPage {
             .width('100%')
             .padding(14)
             .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
+            .borderRadius(16)
+            .border({ width: 0.75, color: Theme.STROKE })
 
             Button('复制版本信息')
               .width('100%')
@@ -395,8 +410,13 @@ struct AboutPage {
       }
       .width('100%')
       .height('100%')
+
+      }
+      .width('100%')
+      .height('100%')
       .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .mode(NavigationMode.Stack)
     .hideBackButton(true)
     .hideToolBar(true)

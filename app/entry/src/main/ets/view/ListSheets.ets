@@ -80,15 +80,20 @@ export struct ChipGroup {
         ForEach(this.options, (opt: ChipOption) => {
           Text(opt.label)
             .fontSize(12)
-            .fontColor(this.current === opt.key ? '#FFFFFF' : Theme.TEXT_DIM)
+            .fontWeight(this.current === opt.key ? FontWeight.Medium : FontWeight.Regular)
+            .fontColor(this.current === opt.key ? Theme.ACCENT_INK : Theme.TEXT_DIM)
             .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-            .backgroundColor(this.current === opt.key ? Theme.ACCENT : Theme.CARD)
+            .backgroundColor(this.current === opt.key ? Theme.accentAlpha(0.20) : Theme.CARD)
+            .border({
+              width: this.current === opt.key ? 1 : 0.5,
+              color: this.current === opt.key ? Theme.inkAlpha(0.52) : Theme.STROKE
+            })
             .borderRadius(14)
             .margin({ right: 8, bottom: 8 })
             .onClick(() => {
               this.onPick(opt.key);
             })
-        }, (opt: ChipOption) => `${this.title}-${opt.key}`)
+        }, (opt: ChipOption) => `${this.title}-${opt.key}-${this.current === opt.key ? 1 : 0}`)
       }
       .width('100%')
     }
@@ -139,7 +144,7 @@ export struct ListToolbar {
       this.extra()
 
       ToolPill({
-        label: `⇅ ${this.sortLabel}`,
+        label: this.sortLabel,
         onTap: () => {
           this.onSort();
         }
@@ -147,7 +152,7 @@ export struct ListToolbar {
 
       if (this.showFilter) {
         ToolPill({
-          label: this.filterCount > 0 ? `⚙ 筛选 ${this.filterCount}` : '⚙ 筛选',
+          label: this.filterCount > 0 ? `筛选 ${this.filterCount}` : '筛选',
           active: this.filterCount > 0,
           onTap: () => {
             this.onFilter();
@@ -248,9 +253,13 @@ export struct BottomSheet {
         Button(this.confirmLabel)
           .width('100%')
           .height(42)
-          .backgroundColor(Theme.ACCENT)
-          .fontColor('#FFFFFF')
+          .backgroundColor(Color.Transparent)
+          .linearGradient(Theme.ctaGradient())
+          .border({ width: 0.75, color: '#38FFFFFF' })
+          .borderRadius(21)
+          .fontColor(Theme.ON_ACCENT)
           .fontSize(14)
+          .fontWeight(FontWeight.Medium)
           .onClick(() => {
             this.onConfirm();
           })
@@ -310,7 +319,8 @@ export struct SortSheet {
         Row() {
           Text(opt.label)
             .fontSize(14)
-            .fontColor(this.current === opt.key ? Theme.ACCENT : Theme.TEXT)
+            .fontColor(this.current === opt.key ? Theme.ACCENT_INK : Theme.TEXT)
+            .fontWeight(this.current === opt.key ? FontWeight.Medium : FontWeight.Normal)
             .layoutWeight(1)
           if (this.current === opt.key && opt.key !== this.noOrderKey) {
             Text(this.order === 'asc' ? '↑ 正序' : '↓ 倒序')
@@ -330,7 +340,7 @@ export struct SortSheet {
         .onClick(() => {
           this.onPick(opt.key);
         })
-      }, (opt: SortOption) => `sort-${opt.key}`)
+      }, (opt: SortOption) => `sort-${opt.key}-${this.current === opt.key ? this.order : ''}`)
 
       Blank().height(20)
     }

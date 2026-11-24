@@ -1,27 +1,21 @@
 import { router } from '@kit.ArkUI';
 import { Theme } from '../common/Theme';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { BuildConfig } from '../common/BuildConfig';
-import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
-
-/**
- * 「关于」聚合页（2.6.1.7）。
- *
- * 原来「关于 Amane / 检查更新 / 更新日志」三行压在「我的 → 设置 → 关于」的最末一组，
- * 想看一眼版本得先想「设置里有没有」，用户找不到。现在「我的」页直接给一行「关于」，
- * 进来就是这三项；设置页那一组已移除，避免同一个东西两处入口。
- */
+import { PageTitle, GlassBack } from '../view/GlassKit';
+import { SettingsAmbientGlow, SettingsChevron, SettingsIconTile, SettingsRowDivider } from '../view/SettingsKit';
 
 interface AboutRow {
-  glyph: string;
+  icon: Resource;
   title: string;
   desc: string;
   url: string;
 }
 
 const ROWS: AboutRow[] = [
-  { glyph: 'ⓘ', title: '关于 Amane', desc: '版本、运行环境、许可与项目信息', url: 'pages/AboutPage' },
-  { glyph: '↑', title: '检查更新', desc: '看客户端与服务端有没有新版，下载新包并校验', url: 'pages/UpdatePage' },
-  { glyph: '≡', title: '更新日志', desc: '每个版本改了什么', url: 'pages/ChangelogPage' }
+  { icon: $r('sys.symbol.info_circle'), title: '关于 Amane', desc: '版本、运行环境与项目信息', url: 'pages/AboutPage' },
+  { icon: $r('sys.symbol.arrow_clockwise'), title: '检查更新', desc: '检测客户端与服务端新版本', url: 'pages/UpdatePage' },
+  { icon: $r('sys.symbol.doc_text'), title: '更新日志', desc: '各版本更新记录', url: 'pages/ChangelogPage' }
 ];
 
 @Entry
@@ -30,32 +24,22 @@ struct AboutHubPage {
   @Builder
   EntryRow(r: AboutRow) {
     Row({ space: 12 }) {
-      Text(r.glyph)
-        .fontSize(16)
-        .fontColor(Theme.ACCENT)
-        .width(34)
-        .height(34)
-        .textAlign(TextAlign.Center)
-        .backgroundColor(Theme.ACCENT_SOFT)
-        .borderRadius(17)
+      SettingsIconTile({ icon: r.icon, tileSize: 36, iconSize: 17 })
       Column({ space: 2 }) {
         Text(r.title)
-          .fontSize(14)
+          .fontSize(14.5)
+          .fontWeight(FontWeight.Medium)
           .fontColor(Theme.TEXT)
         Text(r.desc)
-          .fontSize(10)
+          .fontSize(11)
           .fontColor(Theme.TEXT_FAINT)
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
-      Text('›')
-        .fontSize(16)
-        .fontColor(Theme.TEXT_FAINT)
+      SettingsChevron({ glyphSize: 13 })
     }
     .width('100%')
     .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-    .backgroundColor(Theme.CARD)
-    .borderRadius(Theme.RADIUS)
     .onClick(() => {
       router.pushUrl({ url: r.url });
     })
@@ -68,7 +52,7 @@ struct AboutHubPage {
         GlassBack({
           mat: true,
           onTap: () => {
-          router.back();
+            router.back();
           }
         })
         PageTitle({ text: '关于', fs: 18 })
@@ -84,16 +68,12 @@ struct AboutHubPage {
   }
 
   @StorageProp('amaneTopInset') topInset: number = 30;
-
-  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
   private navStack: NavPathStack = new NavPathStack();
 
-  /** 标题栏实际高度（内容要让开这么多）。 */
   private barH(): number {
     return this.topInset + 46;
   }
 
-  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
   private titleConfig(): NavigationCustomTitle {
     return {
       builder: () => {
@@ -103,55 +83,81 @@ struct AboutHubPage {
     };
   }
 
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
   build() {
     Navigation(this.navStack) {
-      Column({ space: 14 }) {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
 
         Scroll() {
-          Column({ space: 12 }) {
+          Column({ space: 16 }) {
+            Blank().height(this.barH() + 8)
 
-          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
-          // 材质才有颜色可采样。
-          Blank().height(this.barH())
-            // 标识：图标 + 名字 + 版本，一眼确认装的是哪一版（与「关于应用」页同一套口径）
-            Column({ space: 6 }) {
+            Column({ space: 8 }) {
               Image($r('app.media.startIcon'))
-                .width(56)
-                .height(56)
-                .borderRadius(14)
+                .width(64)
+                .height(64)
+                .borderRadius(18)
                 .objectFit(ImageFit.Contain)
+                .backgroundColor(Theme.accentAlpha(0.10))
+                .border({ width: 0.75, color: Theme.inkAlpha(0.32) })
               Text('Amane')
-                .fontSize(18)
+                .fontSize(20)
                 .fontWeight(FontWeight.Bold)
                 .fontColor(Theme.TEXT)
               Text(`v${BuildConfig.APP_VERSION} · ${BuildConfig.CHANNEL === 'self' ? '自用版' : '公开版'}`)
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
+                .fontSize(11)
+                .fontColor(Theme.ACCENT_INK)
+                .fontFeature('"tnum" 1')
+                .padding({ left: 10, right: 10, top: 3, bottom: 3 })
+                .backgroundColor(Theme.accentAlpha(0.16))
+                .border({ width: 0.5, color: Theme.inkAlpha(0.38) })
+                .borderRadius(Theme.R_PILL)
             }
             .width('100%')
-            .padding({ top: 6, bottom: 6 })
+            .padding({ top: 8, bottom: 8 })
 
-            ForEach(ROWS, (r: AboutRow) => {
-              this.EntryRow(r)
-            }, (r: AboutRow) => r.url)
+            Column() {
+              ForEach(ROWS, (r: AboutRow, idx: number) => {
+                Column() {
+                  if (idx > 0) {
+                    SettingsRowDivider()
+                  }
+                  this.EntryRow(r)
+                }
+                .width('100%')
+              }, (r: AboutRow) => r.url)
+            }
+            .width('100%')
+            .backgroundColor(Theme.CARD)
+            .borderRadius(18)
+            .border({ width: 0.75, color: Theme.STROKE })
+            .clip(true)
 
-            Text('这个应用只做「自己服务器上已有媒体的浏览与播放」，不含任何内容源，也不提供下载。')
-              .fontSize(10)
+            Text('仅用于浏览与播放自有服务器上的媒体内容。')
+              .fontSize(10.5)
               .fontColor(Theme.TEXT_FAINT)
               .width('100%')
-              .padding({ top: 6, bottom: 10 })
+              .textAlign(TextAlign.Center)
+              .padding({ top: 4, bottom: 10 })
           }
           .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.pageBottomSafe() })
         }
-        .layoutWeight(1)
+        .width('100%')
+        .height('100%')
         .align(Alignment.Top)
         .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
       }
       .width('100%')
       .height('100%')
       .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .mode(NavigationMode.Stack)
     .hideBackButton(true)
     .hideToolBar(true)

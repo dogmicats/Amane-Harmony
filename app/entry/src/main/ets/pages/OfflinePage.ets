@@ -4,29 +4,22 @@ import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { Downloader, OfflineTask } from '../common/Downloader';
 import { Theme } from '../common/Theme';
-import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { GlassBack, GlassBox, PageTitle } from '../view/GlassKit';
+import {
+  SettingsAmbientGlow, SettingsBarSectionTitle, SettingsRowDivider, VelvetChip
+} from '../view/SettingsKit';
 
 const ST_LOADING: string = 'loading';
 const ST_OK: string = 'ok';
 
-/** 空间上限的可选项（GB；0 = 不限）。 */
 const LIMITS: number[] = [4, 8, 16, 0];
 
-/**
- * 离线缓存（2.5.6 起，2.5.7 补设置与清理）。
- *
- * 「下到手机里、断网也能看」的入口。下载交给系统下载代理（断点续传、后台），
- * 这里管四件事：看进度、排队/暂停/继续、删掉腾空间、定只走 WiFi 与总上限。
- *
- * 下完之后这部片在详情页会直接播本地文件，不再走网络（见 `Store.playSource`）。
- */
 @Entry
 @Component
 struct OfflinePage {
   @State st: string = ST_LOADING;
   @State tasks: OfflineTask[] = [];
   @State totalBytes: number = 0;
-  /** 占用百分比：必须存成状态，直接在 build 里调 Downloader.usageRatio() 不会随上限变化重算。 */
   @State usagePct: number = 0;
   @State busy: boolean = false;
   @State wifiOnly: boolean = true;
@@ -35,9 +28,10 @@ struct OfflinePage {
   @State onWifi: boolean = true;
   @State runN: number = 0;
   @State waitN: number = 0;
-  /** 盘上有、列表里没有的残留文件（删除没删干净留下的）。0 = 没有。 */
   @State orphanBytes: number = 0;
   @State orphanFiles: number = 0;
+  @StorageProp('amaneTopInset') topInset: number = 30;
+  private navStack: NavPathStack = new NavPathStack();
   private stopWatch: () => void = () => {};
 
   aboutToAppear(): void {
@@ -53,7 +47,6 @@ struct OfflinePage {
     Downloader.reconcile();
     this.refresh();
     this.probeNet();
-    // 清完队列会接着跑：进来先推一次
     Downloader.pump();
     this.stopWatch = Downloader.watch(() => {
       this.refresh();
@@ -80,33 +73,25 @@ struct OfflinePage {
     this.orphanFiles = o[1];
   }
 
-  /**
-   * 清理「盘上有、列表里没有」的文件。
-   *
-   * 为什么会有：老版本的删除只认任务里记的 path，而下过一半/下完但 App 被杀的任务 path 是空的，
-   * 于是记录删了、文件留着。用户 2026-11-15 实测：下载管理显示 0 份，空间管理里离线影片仍占 13.08 GB。
-   */
   private confirmOrphans(): void {
     AlertDialog.show({
-      title: '清理这些残留文件？',
-      message: `盘上有 ${this.orphanFiles} 个文件（${this.mb(this.orphanBytes)}）不在下载列表里，` +
-        '是以前删除没删干净留下的。清掉只动这些，正在列表里的离线影片不受影响。',
+      title: '清理残留文件？',
+      message: `盘上有 ${this.orphanFiles} 个文件（${this.mb(this.orphanBytes)}）不在列表中，清理不影响现有离线影片。`,
       primaryButton: {
         value: '清理',
         fontColor: Theme.DANGER,
         action: () => {
           const freed: number = Downloader.clearOrphans();
           promptAction.showToast({
-            message: freed > 0 ? `已释放 ${this.mb(freed)}` : '没找到可清理的文件',
+            message: freed > 0 ? `已释放 ${this.mb(freed)}` : '没有可清理的文件',
             duration: 1800
           });
           this.refresh();
         }
       },
       secondaryButton: {
-        value: '算了',
-        action: () => {
-        }
+        value: '取消',
+        action: () => {}
       }
     });
   }
@@ -118,10 +103,10 @@ struct OfflinePage {
 
   private mb(bytes: number): string {
     if (bytes <= 0) {
-      return '—';
+      return '0 MB';
     }
     if (bytes >= 1073741824) {
-      return `${(bytes / 1073741824).toFixed(1)} GB`;
+      return `${(bytes / 1073741824).toFixed(2)} GB`;
     }
     if (bytes >= 1048576) {
       return `${(bytes / 1048576).toFixed(bytes >= 10485760 ? 0 : 1)} MB`;
@@ -133,7 +118,6 @@ struct OfflinePage {
     return this.maxGb <= 0 ? '不限' : `${this.maxGb} GB`;
   }
 
-  /** 进度百分比（0–100）；总大小未知时给 -1，界面显示「已下 xx」。 */
   private pct(t: OfflineTask): number {
     if (t.status === 'done') {
       return 100;
@@ -147,19 +131,19 @@ struct OfflinePage {
 
   private statusText(t: OfflineTask): string {
     if (t.status === 'done') {
-      const when: string = t.lastOpen > 0 ? ' · 看过' : '';
-      return `${this.mb(t.total)}${when}`;
+      const when: string = t.lastOpen > 0 ? ' · 已看' : '';
+      return `已缓存 · ${this.mb(t.total)}${when}`;
     }
     if (t.status === 'run') {
       const p = this.pct(t);
-      return p >= 0 ? `${p}%` : `已下 ${this.mb(t.done)}`;
+      return p >= 0 ? `下载中 · ${p}%` : `已下 ${this.mb(t.done)}`;
     }
     if (t.status === 'waiting') {
       if (this.wifiOnly && !this.onWifi) {
-        return '等 WiFi';
+        return '等待 WiFi';
       }
       const pos: number = Downloader.waitingPos(t.mid, t.key);
-      return pos > 0 ? `等待中 · 第 ${pos} 位` : '等待中';
+      return pos > 0 ? `排队中 · 第 ${pos} 位` : '排队中';
     }
     if (t.status === 'fail') {
       return '下载失败，可重试';
@@ -187,15 +171,14 @@ struct OfflinePage {
 
   private confirmRemove(t: OfflineTask): void {
     AlertDialog.show({
-      title: '删掉这份缓存？',
-      message: '手机会腾出空间；想再看需要重新下载。影片本身不受影响。',
+      title: '删除这份缓存？',
+      message: '手机将释放对应空间，影片本身不受影响。',
       primaryButton: {
         value: '取消',
-        action: () => {
-        }
+        action: () => {}
       },
       secondaryButton: {
-        value: '删掉',
+        value: '删除',
         fontColor: Theme.DANGER,
         action: () => {
           Downloader.remove(t.mid, t.key);
@@ -208,11 +191,10 @@ struct OfflinePage {
   private confirmClear(): void {
     AlertDialog.show({
       title: '清空所有离线缓存？',
-      message: `会删掉 ${this.tasks.length} 份缓存，腾出约 ${this.mb(this.totalBytes)}。`,
+      message: `将删除 ${this.tasks.length} 份缓存，释放约 ${this.mb(this.totalBytes)}。`,
       primaryButton: {
         value: '取消',
-        action: () => {
-        }
+        action: () => {}
       },
       secondaryButton: {
         value: '清空',
@@ -225,11 +207,10 @@ struct OfflinePage {
     });
   }
 
-  /** 「按最久没看清理」：先算要删几部、腾多少，问过再删。 */
   private confirmPurge(): void {
     const plan: OfflineTask[] = Downloader.purgePlan();
     if (plan.length === 0) {
-      promptAction.showToast({ message: '没有可以清理的缓存', duration: 1600 });
+      promptAction.showToast({ message: '没有可清理的缓存', duration: 1600 });
       return;
     }
     let freed: number = 0;
@@ -237,16 +218,14 @@ struct OfflinePage {
       freed += plan[i].total;
     }
     AlertDialog.show({
-      title: '按最久没看清理？',
-      message: `会删掉 ${plan.length} 部最久没看的缓存，腾出约 ${this.mb(freed)}。` +
-        '清理到上限的 80% 就停，不会一次清空。',
+      title: '按最久未看清理？',
+      message: `将删除 ${plan.length} 部最久未看的缓存，释放约 ${this.mb(freed)}。`,
       primaryButton: {
         value: '取消',
-        action: () => {
-        }
+        action: () => {}
       },
       secondaryButton: {
-        value: `删 ${plan.length} 部`,
+        value: `清理 ${plan.length} 部`,
         fontColor: Theme.DANGER,
         action: () => {
           const n: number = Downloader.purgeOldest();
@@ -257,63 +236,58 @@ struct OfflinePage {
     });
   }
 
-
-  /** 占用条 + 上限进度（到 90% 变金色，满了变红）。 */
+  /** 合并的配额 + 规则黑曜石卡。 */
   @Builder
-  UsageBar() {
-    Column({ space: 6 }) {
-      Row({ space: 6 }) {
-        Text(`已用 ${this.mb(this.totalBytes)}`)
-          .fontSize(11)
-          .fontColor(Theme.TEXT_DIM)
-        if (this.maxGb > 0) {
-          Text(`/ ${this.capText()}`)
-            .fontSize(11)
-            .fontColor(Theme.TEXT_FAINT)
+  QuotaRulesCard() {
+    Column({ space: 12 }) {
+      Column({ space: 8 }) {
+        Row() {
+          Text('离线空间占用')
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Theme.TEXT)
           Blank()
-          Text(`${this.usagePct}%`)
-            .fontSize(11)
-            .fontColor(this.warn ? Theme.DANGER : Theme.TEXT_FAINT)
-        } else {
-          Blank()
-          Text('不限上限')
-            .fontSize(10)
-            .fontColor(Theme.TEXT_FAINT)
+          Text(`${this.mb(this.totalBytes)} / ${this.capText()}`)
+            .fontSize(12.5)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.warn ? Theme.DANGER : Theme.ACCENT_INK)
+            .fontFeature('"tnum" 1')
         }
+        .width('100%')
+
+        Stack({ alignContent: Alignment.Start }) {
+          Column()
+            .width('100%')
+            .height(7)
+            .borderRadius(3.5)
+            .backgroundColor('#1AFFFFFF')
+          if (this.maxGb > 0 && this.usagePct > 0) {
+            Column()
+              .width(`${Math.min(100, Math.max(4, this.usagePct))}%`)
+              .height(7)
+              .borderRadius(3.5)
+              .linearGradient(this.warn
+                ? { angle: 90, colors: [[Theme.DANGER, 0.0], ['#FF9A9A', 1.0]] }
+                : Theme.ctaGradient())
+          }
+        }
+        .width('100%')
+        .height(7)
       }
       .width('100%')
 
-      if (this.maxGb > 0) {
-        Progress({
-          value: this.usagePct,
-          total: 100,
-          type: ProgressType.Linear
-        })
-          .width('100%')
-          .height(4)
-          .color(this.warn ? Theme.DANGER : Theme.ACCENT)
-          .backgroundColor(Theme.CARD_HI)
-      }
-    }
-    .width('100%')
-    .padding(12)
-    .backgroundColor(Theme.CARD)
-    .borderRadius(12)
-  }
+      SettingsRowDivider({ indent: 0 })
 
-  /** 两个开关：只走 WiFi、上限（4/8/16/不限）。 */
-  @Builder
-  SettingsCard() {
-    Column({ space: 10 }) {
-      Row({ space: 8 }) {
+      Row({ space: 10 }) {
         Column({ space: 2 }) {
-          Text('只在 WiFi 下下载')
-            .fontSize(12)
+          Text('仅 WiFi 下下载')
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
             .fontColor(Theme.TEXT)
           Text(this.wifiOnly
-            ? (this.onWifi ? '当前在 WiFi，正常下载' : '当前是移动网络，排队等 WiFi')
-            : '已关闭：移动网络下也会下载')
-            .fontSize(10)
+            ? (this.onWifi ? '当前在 WiFi，正常下载' : '当前为移动网络，排队等待 WiFi')
+            : '移动网络下也会继续下载')
+            .fontSize(10.5)
             .fontColor(this.wifiOnly && !this.onWifi ? Theme.GOLD : Theme.TEXT_FAINT)
         }
         .alignItems(HorizontalAlign.Start)
@@ -332,184 +306,227 @@ struct OfflinePage {
       }
       .width('100%')
 
-      Divider()
-        .color(Theme.CARD_HI)
+      SettingsRowDivider({ indent: 0 })
 
-      Row({ space: 6 }) {
-        Text('上限')
-          .fontSize(12)
-          .fontColor(Theme.TEXT)
-        Blank()
-        ForEach(LIMITS, (gb: number) => {
-          Text(gb <= 0 ? '不限' : `${gb}G`)
-            .fontSize(11)
-            .fontColor(this.maxGb === gb ? '#FFFFFF' : Theme.TEXT_DIM)
-            .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-            .backgroundColor(this.maxGb === gb ? Theme.ACCENT : Theme.CARD_HI)
-            .borderRadius(9)
-            .onClick(() => {
-              this.maxGb = gb;
-              Downloader.setMaxGb(gb);
-              this.refresh();
+      Column({ space: 8 }) {
+        Text('缓存上限')
+          .fontSize(13)
+          .fontColor(Theme.TEXT_DIM)
+          .width('100%')
+        Row({ space: 7 }) {
+          ForEach(LIMITS, (gb: number) => {
+            VelvetChip({
+              label: gb <= 0 ? '不限' : `${gb} GB`,
+              active: this.maxGb === gb,
+              padH: 12,
+              padV: 6,
+              fs: 11.5,
+              onTap: () => {
+                this.maxGb = gb;
+                Downloader.setMaxGb(gb);
+                this.refresh();
+              }
             })
-        }, (gb: number) => `cap-${gb}`)
+          }, (gb: number) => `cap-${gb}-${this.maxGb === gb ? 1 : 0}`)
+        }
+        .width('100%')
       }
       .width('100%')
     }
     .width('100%')
-    .padding(12)
+    .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(12)
+    .linearGradient({
+      angle: 145,
+      colors: [[Theme.accentAlpha(0.11), 0.0], ['#00000000', 0.60]]
+    })
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
-  /** 快满了的提示条（只在 90% 以上出现）。 */
   @Builder
   WarnBar() {
     Row({ space: 8 }) {
       Text('缓存快满了')
-        .fontSize(12)
+        .fontSize(12.5)
+        .fontWeight(FontWeight.Medium)
         .fontColor(Theme.DANGER)
-      Text(`已用 ${this.mb(this.totalBytes)} / ${this.capText()}`)
-        .fontSize(10)
-        .fontColor(Theme.TEXT_DIM)
-        .layoutWeight(1)
-      Text('按最久没看清理')
+      Text(`${this.mb(this.totalBytes)} / ${this.capText()}`)
         .fontSize(11)
-        .fontColor(Theme.ACCENT)
+        .fontColor(Theme.TEXT_DIM)
+        .fontFeature('"tnum" 1')
+        .layoutWeight(1)
+      Text('按最久未看清理')
+        .fontSize(11)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Theme.ACCENT_INK)
         .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-        .backgroundColor(Theme.accentAlpha(0.30))
-        .border({ width: 1, color: Theme.accentAlpha(0.55) })
-        .borderRadius(9)
+        .backgroundColor(Theme.accentAlpha(0.20))
+        .border({ width: 0.75, color: Theme.inkAlpha(0.48) })
+        .borderRadius(Theme.R_PILL)
         .onClick(() => {
           this.confirmPurge();
         })
     }
     .width('100%')
-    .padding(11)
-    .backgroundColor(Theme.ACCENT_SOFT)
-    .borderRadius(12)
+    .padding(12)
+    .backgroundColor(Theme.alphaOf(Theme.DANGER, 0.14))
+    .border({ width: 0.75, color: Theme.alphaOf(Theme.DANGER, 0.36) })
+    .borderRadius(16)
   }
 
-  /** 盘上有、列表里没有的残留文件提示条（只在真的存在时出现）。 */
   @Builder
   OrphanBar() {
     Row({ space: 8 }) {
-      Text(`${this.orphanFiles} 个文件不在列表里`)
-        .fontSize(12)
-        .fontColor(Theme.TEXT)
+      Text(`${this.orphanFiles} 个残留文件`)
+        .fontSize(12.5)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Theme.GOLD)
       Text(this.mb(this.orphanBytes))
-        .fontSize(10)
+        .fontSize(11)
         .fontColor(Theme.TEXT_DIM)
+        .fontFeature('"tnum" 1')
         .layoutWeight(1)
       Text('清理')
         .fontSize(11)
-        .fontColor(Theme.ACCENT)
-        .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-        .backgroundColor(Theme.accentAlpha(0.30))
-        .border({ width: 1, color: Theme.accentAlpha(0.55) })
-        .borderRadius(9)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Theme.GOLD)
+        .padding({ left: 11, right: 11, top: 5, bottom: 5 })
+        .backgroundColor('#24FFD06B')
+        .border({ width: 0.5, color: '#4DFFD06B' })
+        .borderRadius(Theme.R_PILL)
         .onClick(() => {
           this.confirmOrphans();
         })
     }
     .width('100%')
-    .padding(11)
-    .backgroundColor(Theme.CARD)
-    .borderRadius(12)
+    .padding(12)
+    .backgroundColor('#18FFD06B')
+    .border({ width: 0.75, color: '#38FFD06B' })
+    .borderRadius(16)
   }
 
   @Builder
   TaskRow(t: OfflineTask) {
-    Column({ space: 7 }) {
-      Row({ space: 8 }) {
-        Text(t.number.length > 0 ? t.number : `${t.mid}`)
-          .fontSize(11)
-          .fontColor(Theme.ACCENT)
-          .padding({ left: 7, right: 7, top: 2, bottom: 2 })
-          .backgroundColor(Theme.ACCENT_SOFT)
-          .borderRadius(6)
-        Text(t.name.length > 0 ? t.name : '视频文件')
-          .fontSize(12)
-          .fontColor(Theme.TEXT)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
-        Text(this.statusText(t))
-          .fontSize(10)
-          .fontColor(t.status === 'done' ? Theme.GOLD
-            : (t.status === 'waiting' ? Theme.TEXT_DIM : Theme.TEXT_FAINT))
-      }
-      .width('100%')
-
-      if (t.status === 'run' || (t.status === 'pause' && t.done > 0)) {
-        Progress({ value: this.pct(t) < 0 ? 0 : this.pct(t), total: 100, type: ProgressType.Linear })
-          .width('100%')
-          .height(3)
-          .color(Theme.ACCENT)
-          .backgroundColor(Theme.CARD_HI)
-      }
-
-      Row({ space: 8 }) {
-        if (t.status === 'run') {
-          Text('暂停')
+    Row({ space: 12 }) {
+      Column({ space: 6 }) {
+        Row({ space: 6 }) {
+          Text(t.number.length > 0 ? t.number : `#${t.mid}`)
             .fontSize(11)
-            .fontColor(Theme.TEXT_DIM)
-            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-            .backgroundColor(Theme.CARD_HI)
-            .borderRadius(8)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Theme.ACCENT_INK)
+            .padding({ left: 7, right: 7, top: 2, bottom: 2 })
+            .backgroundColor(Theme.accentAlpha(0.18))
+            .border({ width: 0.5, color: Theme.inkAlpha(0.38) })
+            .borderRadius(Theme.R_PILL)
+          Text(t.name.length > 0 ? t.name : '视频文件')
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Theme.TEXT)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+
+        if (t.status === 'done') {
+          Row({ space: 5 }) {
+            SymbolGlyph($r('sys.symbol.checkmark'))
+              .fontSize(10)
+              .fontColor(['#8EE6B4'])
+            Text(this.statusText(t))
+              .fontSize(10.5)
+              .fontColor('#8EE6B4')
+              .fontFeature('"tnum" 1')
+          }
+          .padding({ left: 8, right: 9, top: 3, bottom: 3 })
+          .backgroundColor('#1A45B075')
+          .border({ width: 0.5, color: '#4245B075' })
+          .borderRadius(Theme.R_PILL)
+        } else {
+          Text(this.statusText(t))
+            .fontSize(11)
+            .fontColor(t.status === 'run' ? Theme.ACCENT_INK : (t.status === 'fail' ? Theme.DANGER : Theme.TEXT_FAINT))
+            .fontFeature('"tnum" 1')
+
+          if (t.status === 'run' || (t.status === 'pause' && t.done > 0)) {
+            Stack({ alignContent: Alignment.Start }) {
+              Column().width('100%').height(4).borderRadius(2).backgroundColor('#1AFFFFFF')
+              Column()
+                .width(`${Math.max(4, this.pct(t) < 0 ? 12 : this.pct(t))}%`)
+                .height(4)
+                .borderRadius(2)
+                .linearGradient(Theme.ctaGradient())
+            }
+            .width('100%')
+            .height(4)
+          }
+        }
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+
+      // 右侧操作按钮组
+      Row({ space: 8 }) {
+        if (t.status === 'done') {
+          Stack({ alignContent: Alignment.Center }) {
+            SymbolGlyph($r('sys.symbol.play_fill'))
+              .fontSize(13)
+              .fontColor([Theme.ON_ACCENT])
+          }
+          .width(34)
+          .height(34)
+          .borderRadius(17)
+          .linearGradient(Theme.ctaGradient())
+          .border({ width: 0.5, color: '#38FFFFFF' })
+          .onClick(() => {
+            router.pushUrl({ url: 'pages/DetailPage', params: { 'id': t.mid } });
+          })
+        } else if (t.status === 'run' || t.status === 'waiting') {
+          Text(t.status === 'run' ? '暂停' : '取消')
+            .fontSize(11)
+            .fontColor(Theme.TEXT)
+            .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+            .backgroundColor('#18FFFFFF')
+            .border({ width: 0.5, color: '#26FFFFFF' })
+            .borderRadius(Theme.R_PILL)
             .onClick(() => {
               this.pause(t);
-            })
-        } else if (t.status === 'waiting') {
-          Text('取消排队')
-            .fontSize(11)
-            .fontColor(Theme.TEXT_DIM)
-            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-            .backgroundColor(Theme.CARD_HI)
-            .borderRadius(8)
-            .onClick(() => {
-              this.pause(t);
-            })
-        } else if (t.status === 'done') {
-          Text('播放')
-            .fontSize(11)
-            .fontColor(Theme.ACCENT)
-            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-            .backgroundColor(Theme.ACCENT_SOFT)
-            .borderRadius(8)
-            .onClick(() => {
-              router.pushUrl({ url: 'pages/DetailPage', params: { 'id': t.mid } });
             })
         } else {
           Text('继续')
             .fontSize(11)
-            .fontColor(Theme.ACCENT)
-            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-            .backgroundColor(Theme.ACCENT_SOFT)
-            .borderRadius(8)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Theme.ACCENT_INK)
+            .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+            .backgroundColor(Theme.accentAlpha(0.18))
+            .border({ width: 0.75, color: Theme.inkAlpha(0.46) })
+            .borderRadius(Theme.R_PILL)
             .onClick(() => {
               this.resume(t);
             })
         }
-        Blank()
-        Text('删除')
-          .fontSize(11)
-          .fontColor(Theme.DANGER)
-          .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-          .backgroundColor(Theme.CARD_HI)
-          .borderRadius(8)
-          .onClick(() => {
-            this.confirmRemove(t);
-          })
+
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph($r('sys.symbol.trash'))
+            .fontSize(14)
+            .fontColor([Theme.DANGER])
+        }
+        .width(34)
+        .height(34)
+        .borderRadius(17)
+        .backgroundColor(Theme.alphaOf(Theme.DANGER, 0.14))
+        .border({ width: 0.5, color: Theme.alphaOf(Theme.DANGER, 0.34) })
+        .onClick(() => {
+          this.confirmRemove(t);
+        })
       }
-      .width('100%')
+      .alignItems(VerticalAlign.Center)
     }
     .width('100%')
-    .padding(12)
-    .backgroundColor(Theme.CARD)
-    .borderRadius(12)
+    .padding({ left: 14, right: 14, top: 13, bottom: 13 })
+    .alignItems(VerticalAlign.Center)
   }
 
   @Builder
@@ -519,30 +536,32 @@ struct OfflinePage {
         GlassBack({
           mat: true,
           onTap: () => {
-          router.back();
+            router.back();
           }
         })
-        Column({ space: 2 }) {
-          PageTitle({ text: '下载管理', fs: 18 })
-          Text(`${this.tasks.length} 份 · 已用 ${this.mb(this.totalBytes)} / ${this.capText()}`)
-            .fontSize(11)
-            .fontColor(Theme.TEXT_FAINT)
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
+        PageTitle({ text: '下载管理', fs: 18 })
+        Blank()
         if (this.tasks.length > 0) {
-          Text('清空')
-            .fontSize(11)
-            .fontColor(Theme.DANGER)
-            .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-            .backgroundColor('#1FFFFFFF')
-            .border({ width: 0.5, color: '#33FFFFFF' })
-            .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
-            .borderRadius(9)
-            .onClick(() => {
+          GlassBox({
+            radius: 18,
+            padH: 12,
+            padV: 7,
+            mat: true,
+            onTap: () => {
               this.confirmClear();
-            })
+            }
+          }) {
+            Row({ space: 4 }) {
+              SymbolGlyph($r('sys.symbol.trash'))
+                .fontSize(13)
+                .fontColor([Theme.DANGER])
+              Text('清空')
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Theme.DANGER)
+            }
+            .alignItems(VerticalAlign.Center)
+          }
         }
       }
       .height(46)
@@ -555,17 +574,10 @@ struct OfflinePage {
     .padding({ top: this.topInset })
   }
 
-  @StorageProp('amaneTopInset') topInset: number = 30;
-
-  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
-  private navStack: NavPathStack = new NavPathStack();
-
-  /** 标题栏实际高度（内容要让开这么多）。 */
   private barH(): number {
     return this.topInset + 46;
   }
 
-  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
   private titleConfig(): NavigationCustomTitle {
     return {
       builder: () => {
@@ -575,70 +587,76 @@ struct OfflinePage {
     };
   }
 
-  /** 真·全屏（七十二改）：窗口铺到系统栏后面；离开本页不关，见 common/PageFullscreen。 */
   onPageShow(): void {
     setPageFullScreen(getContext(this), true);
   }
 
   build() {
     Navigation(this.navStack) {
-      Column() {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
 
         Scroll() {
-          Column({ space: 10 }) {
+          Column({ space: 14 }) {
+            Blank().height(this.barH() + 6)
 
-          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
-          // 材质才有颜色可采样。
-          Blank().height(this.barH())
             if (this.warn) {
               this.WarnBar()
             }
-            this.UsageBar()
-            this.SettingsCard()
+            this.QuotaRulesCard()
             if (this.orphanFiles > 0) {
               this.OrphanBar()
             }
 
+            SettingsBarSectionTitle({ title: '下载队列', count: `${this.tasks.length}` })
+
             if (this.tasks.length === 0) {
               Column({ space: 8 }) {
+                SymbolGlyph($r('sys.symbol.download'))
+                  .fontSize(28)
+                  .fontColor([Theme.TEXT_FAINT])
                 Text('还没有离线缓存')
-                  .fontSize(13)
+                  .fontSize(14)
                   .fontColor(Theme.TEXT_DIM)
                 Text('在影片详情页点「下载」，下完断网也能看。')
-                  .fontSize(10)
+                  .fontSize(11)
                   .fontColor(Theme.TEXT_FAINT)
-                  .textAlign(TextAlign.Center)
-                  .lineHeight(15)
               }
               .width('100%')
-              .padding({ top: 40, bottom: 20 })
+              .padding({ top: 44, bottom: 24 })
               .justifyContent(FlexAlign.Center)
             } else {
-              if (this.runN + this.waitN > 0) {
-                Text(`正在下 ${this.runN} 个，排队 ${this.waitN} 个`)
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
+              Column() {
+                ForEach(this.tasks, (t: OfflineTask, idx: number) => {
+                  Column() {
+                    if (idx > 0) {
+                      SettingsRowDivider({ indent: 14 })
+                    }
+                    this.TaskRow(t)
+                  }
                   .width('100%')
+                }, (t: OfflineTask) => `off-${t.mid}-${t.key}-${t.status}-${t.done}`)
               }
-              ForEach(this.tasks, (t: OfflineTask) => {
-                this.TaskRow(t)
-              }, (t: OfflineTask) => `off-${t.mid}-${t.key}-${t.status}-${t.done}`)
-              Text('缓存存在 App 自己的空间里，卸载 App 会一起清掉。' +
-                '下载时用的是只读播放地址，不额外占用你的流量以外的东西。')
-                .fontSize(9)
+              .width('100%')
+              .backgroundColor(Theme.CARD)
+              .borderRadius(18)
+              .border({ width: 0.75, color: Theme.STROKE })
+              .clip(true)
+
+              Text('离线文件保存在应用空间内，卸载应用时会一并清除。')
+                .fontSize(10.5)
                 .fontColor(Theme.TEXT_FAINT)
                 .width('100%')
-                .lineHeight(14)
-                .padding({ top: 4, bottom: Theme.BOTTOM_SAFE })
+                .padding({ left: 4, top: 2, bottom: Theme.pageBottomSafe() })
             }
           }
           .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4 })
-          // Scroll 会把短内容竖向居中（同 ProfileTab.ets:229），撑满最小高度才贴顶
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.pageBottomSafe() })
           .constraintSize({ minHeight: '100%' })
           .justifyContent(FlexAlign.Start)
         }
-        .layoutWeight(1)
+        .width('100%')
+        .height('100%')
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
       }

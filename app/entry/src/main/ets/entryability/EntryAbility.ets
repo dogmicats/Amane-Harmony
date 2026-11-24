@@ -106,6 +106,15 @@ export default class EntryAbility extends UIAbility {
       mainWindow.setWindowLayoutFullScreen(true).catch((e: BusinessError) => {
         hilog.warn(DOMAIN, TAG, 'fullscreen failed: %{public}s', JSON.stringify(e));
       });
+      // 首帧前同步把状态栏与底部手势条高度写入 AppStorage：避免 Index/HomeTab 第一帧顶栏与底栏跳位
+      try {
+        const sys: window.AvoidArea = mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
+        const nav: window.AvoidArea = mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
+        AppStorage.setOrCreate<number>('amaneTopInset', px2vp(sys.topRect.height));
+        AppStorage.setOrCreate<number>('amaneNavInset', px2vp(nav.bottomRect.height));
+      } catch (e) {
+        hilog.info(DOMAIN, TAG, '%{public}s', 'pre-read avoid area skipped');
+      }
     } catch (error) {
       hilog.warn(DOMAIN, TAG, '%{public}s', 'set window background failed');
     }

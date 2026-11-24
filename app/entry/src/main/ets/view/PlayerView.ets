@@ -12,7 +12,8 @@ import { DetailParams, PlayerParams } from '../common/Types';
 import { clock } from '../common/Util';
 import { inPartGroup, partGroupKeys, partNoOf, partsHint } from '../common/Parts';
 import { common } from '@kit.AbilityKit';
-import { SubtitleClient, SubtitleItem, LocalCandidate, SubtitleChoice } from '../common/Subtitles';
+import { SubtitleClient, SubtitleItem, LocalCandidate, SubtitleChoice,
+  dedupSubtitles, subSourceLabel } from '../common/Subtitles';
 import { PlayerPrefs, PlayerTuning } from '../common/PlayerPrefs';
 import { RATE_LABELS, rateFilm } from '../ext/ratings/RatingStars';
 import { PipHub } from '../common/PipHub';
@@ -238,6 +239,14 @@ export struct PlayerView {
   private panSide: string = '';
   private panBase: number = 0;
   private panStartPos: number = 0;
+  /** 亮度手势防抖与还原标记：退出播放页时还原为系统自动亮度（-1）。 */
+  private brightnessTouched: boolean = false;
+  private lastBrightVal: number = -1;
+  private lastBrightAt: number = 0;
+  /** 画中画尺寸与播放态同步标记。 */
+  private pipSized: boolean = false;
+  private lastPipPlaying: boolean = false;
+  private lockUiTimer: number = -1;
   private win: window.Window | undefined = undefined;
   /** 上一次已知的窗口横竖：只在跨过横竖分界时重绑 surface，旋转中途的连续尺寸变化不重复重建。 */
   private lastWinPortrait: boolean = false;
@@ -289,6 +298,15 @@ export struct PlayerView {
   @Local volume: number = 100;
   @Local bright: number = 0.5;
   @Local seekPreview: number = -1;
+  @Local seekCancel: boolean = false;
+  @Local hudKind: string = '';
+  @Local tempSpeedActive: boolean = false;
+  @Local screenLocked: boolean = false;
+  @Local lockUiShown: boolean = false;
+  @Local aspectMode: string = 'fit';
+  @Local subDelay: number = 0;
+  @Local currentAudioIndex: number = 0;
+  @Local annoColorIdx: number = 0;
   /** 是否显示「缓存中」全屏遮罩：只有真的卡住（>0.4s）才显示。 */
   @Local showBufferOverlay: boolean = false;
   /** 起播时刻：开头这几秒的 buffering 是正常起播，不算「卡住」（用户第 4 条）。 */
@@ -583,6 +601,17 @@ export struct PlayerView {
       clearTimeout(this.releaseTimer);
       this.releaseTimer = -1;
     }
+    if (this.lockUiTimer >= 0) {
+      clearTimeout(this.lockUiTimer);
+      this.lockUiTimer = -1;
+    }
+    // 手势调过亮度：退出播放器时还原为系统自动亮度（-1），避免退出后手机屏幕一直卡在旧亮度
+    if (this.brightnessTouched && this.win !== undefined) {
+      this.win.setWindowBrightness(-1).catch((err: BusinessError) => {
+        console.info(`[amane] reset brightness: ${err.code} ${err.message}`);
+      });
+      this.brightnessTouched = false;
+    }
     // 页面走了 mpv 也销毁了，小窗留着只会黑屏
     this.stopPip();
     this.clearScreenWatch();
@@ -628,6 +657,9 @@ export struct PlayerView {
       this.vpW = px2vp(props.windowRect.width);
       this.vpH = px2vp(props.windowRect.height);
       this.lastWinPortrait = this.vpH >= this.vpW;
+      if (props.brightness >= 0 && props.brightness <= 1) {
+        this.bright = props.brightness;
+      }
       // 窗口到手时可能已经在播（playing 先变、win 后到），补一次常亮申请
       this.applyKeepScreenOn();
       // 只有在「整页播放器」或「已经是全屏形态」时才没收系统栏、才允许转屏。
@@ -1202,6 +1234,35 @@ export struct PlayerView {
             this.openAt = 0;
           }
           this.preparePip();
+          if (this.pipCtrl !== undefined && !this.pipSized && vp0.dh > 0) {
+            this.pipSized = true;
+            try {
+              this.pipCtrl.updateContentSize(Math.round(vp0.dw), Math.round(vp0.dh));
+            } catch (e) {
+              console.info(`[amane] pip contentSize: ${JSON.stringify(e)}`);
+            }
+          }
+        }
+      } else if (this.pipCtrl !== undefined && !this.pipSized) {
+        const vp1 = st.videoParams;
+        if (vp1 !== undefined && vp1.dw > 0 && vp1.dh > 0) {
+          this.pipSized = true;
+          try {
+            this.pipCtrl.updateContentSize(Math.round(vp1.dw), Math.round(vp1.dh));
+          } catch (e) {
+            console.info(`[amane] pip contentSize: ${JSON.stringify(e)}`);
+          }
+        }
+      }
+      if (this.pipCtrl !== undefined && this.playing !== this.lastPipPlaying) {
+        this.lastPipPlaying = this.playing;
+        try {
+          this.pipCtrl.updatePiPControlStatus(
+            PiPWindow.PiPControlType.VIDEO_PLAY_PAUSE,
+            this.playing ? PiPWindow.PiPControlStatus.PLAY : PiPWindow.PiPControlStatus.PAUSE
+          );
+        } catch (e) {
+          console.info(`[amane] pip status: ${JSON.stringify(e)}`);
         }
       }
       if (st.eof && !this.completed) {
@@ -1347,20 +1408,138 @@ export struct PlayerView {
     }
     try {
       if (on) {
-        if (this.speed < this.tempSpeedValue) {
+        if (!this.tempSpeedActive && this.speed < this.tempSpeedValue) {
           this.speedBeforeTemp = this.speed;
           p.setSpeed(this.tempSpeedValue);
           this.speed = this.tempSpeedValue;
-          this.toast(`${this.tempSpeedValue}x（松手恢复）`);
+          this.tempSpeedActive = true;
         }
-      } else if (this.speed > this.tempSpeedValue - 0.001) {
+      } else if (this.tempSpeedActive || this.speed > this.tempSpeedValue - 0.001) {
         const back: number = this.speedBeforeTemp > 0 ? this.speedBeforeTemp : 1.0;
         p.setSpeed(back);
         this.speed = back;
+        this.tempSpeedActive = false;
       }
     } catch (err) {
       const e = err as BusinessError;
+      this.tempSpeedActive = false;
       console.error(`[amane] temp speed: ${e.code} ${e.message}`);
+    }
+  }
+
+  /** 画面比例：适应（fit）/ 铺满（fill）/ 16:9。只调显示比例，不动锁定解码参数。 */
+  private applyAspectMode(mode: string): void {
+    this.aspectMode = mode;
+    const p: Player | undefined = this.player;
+    if (p === undefined) {
+      return;
+    }
+    try {
+      const lib = p.native;
+      if (mode === 'fill') {
+        lib.command(['set', 'video-aspect-override', '-1']);
+        lib.command(['set', 'panscan', '1']);
+        this.toast('画面 · 铺满');
+      } else if (mode === '16:9') {
+        lib.command(['set', 'panscan', '0']);
+        lib.command(['set', 'video-aspect-override', '16:9']);
+        this.toast('画面 · 16:9');
+      } else {
+        lib.command(['set', 'panscan', '0']);
+        lib.command(['set', 'video-aspect-override', '-1']);
+        this.toast('画面 · 适应');
+      }
+    } catch (err) {
+      console.error(`[amane] aspect mode: ${JSON.stringify(err)}`);
+    }
+  }
+
+  /** 全屏锁屏：防误触（锁屏后仅保留左侧玻璃解锁键，禁用手势与其他控件）。 */
+  private toggleScreenLock(): void {
+    this.screenLocked = !this.screenLocked;
+    if (this.screenLocked) {
+      this.showControls = false;
+      this.showPanel = false;
+      this.showPicker = false;
+      this.subStyleOpen = false;
+      this.flashLockUi();
+      this.toast('已锁定屏幕');
+    } else {
+      this.lockUiShown = false;
+      if (this.lockUiTimer >= 0) {
+        clearTimeout(this.lockUiTimer);
+        this.lockUiTimer = -1;
+      }
+      this.showControls = true;
+      this.toast('已解锁屏幕');
+    }
+  }
+
+  private flashLockUi(): void {
+    this.lockUiShown = true;
+    if (this.lockUiTimer >= 0) {
+      clearTimeout(this.lockUiTimer);
+    }
+    this.lockUiTimer = setTimeout(() => {
+      this.lockUiShown = false;
+      this.lockUiTimer = -1;
+    }, 3000);
+  }
+
+  /** 读取当前窗口真实亮度作为手势基线（-1 表示跟随系统自动亮度）。 */
+  private readCurrentBrightness(): number {
+    if (this.win !== undefined) {
+      try {
+        const b: number = this.win.getWindowProperties().brightness;
+        if (b >= 0 && b <= 1) {
+          this.bright = b;
+          return b;
+        }
+      } catch (err) {
+        console.info(`[amane] read brightness: ${JSON.stringify(err)}`);
+      }
+    }
+    return this.bright;
+  }
+
+  /** 节流下发窗口亮度，避免 60~120Hz 手势帧堆积 IPC 导致跳变/卡顿。 */
+  private setBrightnessThrottled(val: number, force: boolean = false): void {
+    const clamped: number = Math.max(0.02, Math.min(1.0, val));
+    this.bright = clamped;
+    this.brightnessTouched = true;
+    const now: number = Date.now();
+    if (!force && this.lastBrightVal >= 0
+      && Math.abs(clamped - this.lastBrightVal) < 0.015
+      && now - this.lastBrightAt < 28) {
+      return;
+    }
+    this.lastBrightVal = clamped;
+    this.lastBrightAt = now;
+    if (this.win !== undefined) {
+      this.win.setWindowBrightness(clamped).catch((err: BusinessError) => {
+        console.error(`[amane] brightness: ${err.code} ${err.message}`);
+      });
+    }
+  }
+
+  /** 字幕时间偏移（sub-delay）：-0.5s / +0.5s / 归零，实时生效不打断播放。 */
+  private adjustSubDelay(delta: number, reset: boolean = false): void {
+    const next: number = reset
+      ? 0 : Math.max(-30, Math.min(30, Math.round((this.subDelay + delta) * 10) / 10));
+    this.subDelay = next;
+    const p: Player | undefined = this.player;
+    if (p === undefined) {
+      return;
+    }
+    const lib = p.native;
+    try {
+      lib.command(['set', 'sub-delay', `${next}`]);
+    } catch (err) {
+      try {
+        lib.setProperty('sub-delay', next);
+      } catch (err2) {
+        console.error(`[amane] sub delay: ${JSON.stringify(err2)}`);
+      }
     }
   }
   /** 直接选一个倍速档位（顶栏胶囊的下拉菜单走这里）。 */
@@ -1834,28 +2013,55 @@ export struct PlayerView {
   @Builder
   VerRow(v: VerItem) {
     Row({ space: 10 }) {
-      Column({ space: 3 }) {
+      if (v.key === this.fileKey) {
+        SymbolGlyph($r('sys.symbol.checkmark'))
+          .fontSize(12)
+          .fontColor([Theme.ACCENT_INK])
+      }
+      Column({ space: 4 }) {
         Text(v.name)
           .fontSize(12)
-          .fontColor(v.key === this.fileKey ? Theme.ACCENT : Theme.TEXT)
+          .fontWeight(v.key === this.fileKey ? FontWeight.Medium : FontWeight.Normal)
+          .fontColor(v.key === this.fileKey ? Theme.TEXT : Theme.TEXT_DIM)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
-        Text(`${v.definition.length > 0 ? v.definition : '未知清晰度'} · ${Math.round(v.size / 1048576)} MB`)
-          .fontSize(9)
-          .fontColor(Theme.TEXT_FAINT)
-          .width('100%')
+        Row({ space: 6 }) {
+          if (v.definition.length > 0) {
+            Text(v.definition)
+              .fontSize(9)
+              .fontColor(v.key === this.fileKey ? Theme.ACCENT_INK : Theme.TEXT_DIM)
+              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+              .backgroundColor(v.key === this.fileKey ? Theme.accentAlpha(0.18) : '#1FFFFFFF')
+              .borderRadius(6)
+          }
+          Text(`${Math.round(v.size / 1048576)} MB`)
+            .fontSize(9)
+            .fontColor(Theme.TEXT_FAINT)
+            .fontFeature('"tnum" 1')
+        }
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
       if (v.key === this.fileKey) {
-        Text('播放中')
+        Text('当前')
           .fontSize(9)
-          .fontColor(Theme.ACCENT)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.ACCENT_INK)
+          .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+          .backgroundColor(Theme.accentAlpha(0.20))
+          .border({ width: 0.75, color: Theme.accentAlpha(0.55) })
+          .borderRadius(9)
       }
     }
     .width('100%')
-    .padding({ left: 16, right: 16, top: 9, bottom: 9 })
+    .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+    .borderRadius(12)
+    .backgroundColor(v.key === this.fileKey ? Theme.accentAlpha(0.16) : '#00000000')
+    .border({
+      width: v.key === this.fileKey ? 0.75 : 0,
+      color: Theme.accentAlpha(0.48)
+    })
     .onClick(() => {
       this.pickVersion(v);
     })
@@ -2190,6 +2396,8 @@ export struct PlayerView {
     this.pipStarting = false;
     this.pipRestoring = false;
     this.pipAutoArmed = false;
+    this.pipSized = false;
+    this.lastPipPlaying = false;
     this.pipState = PiPWindow.PiPState.STOPPED;
     PipHub.autoArmed = false;
     PipHub.release(this.pipOwner);
@@ -2412,7 +2620,15 @@ export struct PlayerView {
         this.toast('没有可选的轨道');
         return;
       }
-      const subsList: SubtitleTrack[] = tracks.subs === undefined || tracks.subs === null ? [] : tracks.subs;
+      const rawSubs: SubtitleTrack[] = tracks.subs === undefined || tracks.subs === null ? [] : tracks.subs;
+      // 过滤掉已挂进 mpv 的外挂 URI 轨道（isUri === true），防止本地/在线外挂字幕
+      // 又在内嵌轨道里重复出现一条「external」，导致切换状态错乱。
+      const subsList: SubtitleTrack[] = [];
+      for (let i = 0; i < rawSubs.length; i++) {
+        if (rawSubs[i].isUri !== true) {
+          subsList.push(rawSubs[i]);
+        }
+      }
       const audioList: AudioTrack[] = tracks.audio === undefined || tracks.audio === null ? [] : tracks.audio;
       this.subTracks = subsList;
       this.audioTracks = audioList;
@@ -2421,8 +2637,13 @@ export struct PlayerView {
       for (let i = 0; i < subsList.length; i++) {
         subs.push(this.trackLabel(subsList[i].title, subsList[i].lang, i));
       }
+      const activeAudioId: string = st.track !== undefined && st.track !== null
+        && st.track.audio !== undefined && st.track.audio !== null ? st.track.audio.id : '';
       for (let i = 0; i < audioList.length; i++) {
         audios.push(this.trackLabel(audioList[i].title, audioList[i].lang, i));
+        if (activeAudioId.length > 0 && audioList[i].id === activeAudioId) {
+          this.currentAudioIndex = i;
+        }
       }
       this.subLabels = subs;
       this.audioLabels = audios;
@@ -2441,7 +2662,7 @@ export struct PlayerView {
   }
 
 
-  /** 打开字幕面板时拉取来源，并自动套用上次的选择。 */
+  /** 打开字幕面板时拉取来源，做去重合并；仅在本会话尚未手动选择时恢复上次选择。 */
   private async loadSubSources(): Promise<void> {
     if (this.metaId <= 0) {
       this.subHint = '没有拿到条目 id，无法查询字幕';
@@ -2450,12 +2671,31 @@ export struct PlayerView {
     this.subBusy = true;
     try {
       const res = await SubtitleClient.list(this.metaId);
-      this.localSubs = res.local === undefined || res.local === null ? [] : res.local;
-      this.extSubs = res.cached === undefined || res.cached === null ? [] : res.cached;
+      const choiceId: string = res.choice !== undefined && res.choice !== null
+        && res.choice.subtitle_id !== undefined && res.choice.subtitle_id !== null
+        ? res.choice.subtitle_id : '';
+      const activeId: string = this.currentSubId.length > 0 ? this.currentSubId : choiceId;
+      const dedup = dedupSubtitles(
+        res.local === undefined || res.local === null ? [] : res.local,
+        res.cached === undefined || res.cached === null ? [] : res.cached,
+        activeId
+      );
+      this.localSubs = dedup.local;
+      this.extSubs = dedup.cached;
       this.subHint = res.hint === undefined || res.hint === null ? '' : res.hint;
-      if (res.choice !== undefined && res.choice !== null && res.choice.subtitle_id.length > 0) {
-        // 面板开着的时候自动套用：**不收面板**（收了就是「闪关」）
-        this.applySub(res.choice.subtitle_id, false);
+      // 关键修复：只有在本会话尚未主动选过/关闭过字幕时才回填服务端 choice；
+      // 以前每次打开面板都无条件 applySub(choice)，导致「关掉或切了别的字幕，一开面板又被强制切回本地字幕」。
+      if (!this.subChosen && choiceId.length > 0 && this.currentSubId !== choiceId) {
+        this.applySub(choiceId, false, false);
+      }
+      // 若当前选中的字幕已在 extSubs 中，清掉多余的 currentLocalName，避免两行同时高亮
+      if (this.currentSubId.length > 0) {
+        for (let i = 0; i < this.extSubs.length; i++) {
+          if (this.extSubs[i].id === this.currentSubId) {
+            this.currentLocalName = '';
+            break;
+          }
+        }
       }
     } catch (error) {
       console.error(`[amane] subtitles: ${JSON.stringify(error)}`);
@@ -2469,11 +2709,11 @@ export struct PlayerView {
    *
    * `down` = 面板容器的 onTouch 有没有收到 Down（见字段注释）。两条判据任一成立即忽略：
    *  - 没收到 Down：按下的那一下落在别处（打开面板的那个按钮），抬手才滑到面板上；
-   *  - 距面板打开不足 400ms：兜底，防个别机型 onTouch 派发顺序不同。
+   *  - 距面板打开不足 280ms：兜底，防个别机型 onTouch 派发顺序不同。
    */
   private panelTapAllowed(down: boolean, sinceOpen: number, label: string): boolean {
     const dt: number = Date.now() - sinceOpen;
-    if (!down || (dt >= 0 && dt < 400)) {
+    if (!down || (dt >= 0 && dt < 280)) {
       AppLog.mark('subpanel', `守卫拦下 ${label}（down=${down} since=${dt}ms）`);
       return false;
     }
@@ -2567,13 +2807,16 @@ export struct PlayerView {
    *
    * `closePanel`：面板打开时异步回填「上次的选择」不能收面板，否则就是「面板闪关」。
    * `remember`：自动恢复不需要把同一个值写回服务端。
+   * `localName`：仅从同目录直接切换时传入；切其它字幕时清空，避免旧本地字幕一直卡高亮。
    */
-  private applySub(id: string, closePanel: boolean = true, remember: boolean = true): void {
+  private applySub(id: string, closePanel: boolean = true, remember: boolean = true,
+    localName: string = ''): void {
     // 先收起面板：字幕加载与 mpv 解析都在后台，不该把用户卡在面板上
     if (closePanel) {
       this.showPanel = false;
     }
     this.currentSubId = id;
+    this.currentLocalName = localName;
     // -999 而不是 -1：`PanelRow('不使用字幕', -1)` 用 index 比对勾选态，
     // 挂外挂字幕时把 -1 写进去会让「不使用字幕」自己打上勾（真机 2026-11-13 23:00 看到）。
     this.currentSubIndex = -999;
@@ -2583,13 +2826,29 @@ export struct PlayerView {
       return;
     }
     try {
+      const lib = this.player.native;
+      // 切换外挂字幕前先移除当前已挂的旧外挂轨并清空 sid，防止已有本地/外挂字幕时
+      // mpv 仍停留在旧轨道、表现为「有本地字幕时切不动其它字幕」。
+      try {
+        lib.command(['sub-remove']);
+      } catch (e) {
+        // 当前若是内嵌轨或无外挂轨，sub-remove 会安全报错，忽略即可
+      }
+      try {
+        lib.command(['set', 'sid', 'no']);
+      } catch (e) {
+        // 忽略
+      }
       const url: string = SubtitleClient.streamUrl(id, true);
       this.player.setSubtitleTrack(SubtitleTrack.uri(url, '', 'chi', 'external'));
       AppLog.mark('sub', `setSubtitleTrack ok url=${url.substring(0, 72)}`);
       // 选了字幕就一定让它显示：以前可能因为上一部片把 sub-visibility 关了（或内核默认 no）
       // 出现「面板里勾上了、画面上没有」的情况，肉眼看着就像「没挂上」。
       try {
-        this.player.native.command(['set', 'sub-visibility', 'yes']);
+        lib.command(['set', 'sub-visibility', 'yes']);
+        if (this.subDelay !== 0) {
+          lib.command(['set', 'sub-delay', `${this.subDelay}`]);
+        }
       } catch (err) {
         console.info(`[amane] sub visibility: ${JSON.stringify(err)}`);
       }
@@ -2662,11 +2921,10 @@ export struct PlayerView {
     if (!this.subTapOk(`本地字幕 ${name}`)) {
       return;
     }
-    this.currentLocalName = name;
     this.showPanel = false;
     try {
       const item: SubtitleItem = await SubtitleClient.loadLocal(this.metaId, name);
-      this.applySub(item.id);
+      this.applySub(item.id, true, true, name);
     } catch (error) {
       console.error(`[amane] local sub: ${JSON.stringify(error)}`);
       this.toast('读取同目录字幕失败');
@@ -2711,22 +2969,50 @@ export struct PlayerView {
   }
 
   private pickSub(index: number): void {
-    // 面板刚打开的 350ms 内忽略：那次点击的抬手会落到第一行上（不然面板「点开即关」）
+    // 面板刚打开的短窗内忽略：那次点击的抬手会落到第一行上（不然面板「点开即关」）
     if (!this.subTapOk(`pickSub(${index})`)) {
       return;
     }
     this.showPanel = false;
     this.currentSubIndex = index;
     this.currentSubId = '';
+    this.currentLocalName = '';
     this.subChosen = true;
+    // 清掉服务端记住的外挂字幕 choice：用户明确切到「不使用」或「内嵌轨」，
+    // 下次重开面板/影片时不再被旧的本地/外挂字幕强制覆写。
+    if (this.metaId > 0) {
+      SubtitleClient.remember(this.metaId, '').catch(() => {
+      });
+    }
     if (this.player === undefined) {
       return;
     }
     try {
+      const lib = this.player.native;
+      // 先卸载此前挂载的外挂/本地轨道，避免有本地字幕时切内嵌或关闭不生效
+      try {
+        lib.command(['sub-remove']);
+      } catch (e) {
+        // 忽略
+      }
       if (index < 0) {
         this.player.disableSubtitleTrack();
+        try {
+          lib.command(['set', 'sid', 'no']);
+          lib.command(['set', 'sub-visibility', 'no']);
+        } catch (e) {
+          // 忽略
+        }
       } else if (index < this.subTracks.length) {
         this.player.setSubtitleTrack(this.subTracks[index]);
+        try {
+          lib.command(['set', 'sub-visibility', 'yes']);
+          if (this.subDelay !== 0) {
+            lib.command(['set', 'sub-delay', `${this.subDelay}`]);
+          }
+        } catch (e) {
+          // 忽略
+        }
       }
       this.toast(index < 0 ? '已关闭字幕' : '已切换字幕');
     } catch (error) {
@@ -2748,6 +3034,8 @@ export struct PlayerView {
     try {
       if (index >= 0 && index < this.audioTracks.length) {
         this.player.setAudioTrack(this.audioTracks[index]);
+        this.currentAudioIndex = index;
+        this.toast('已切换音轨');
       }
     } catch (error) {
       const e = error as BusinessError;
@@ -2888,6 +3176,49 @@ export struct PlayerView {
     return `${clock(value)} / ${clock(this.duration)}`;
   }
 
+  /** 拖拽快进相对位移（例：`+05:40` / `-00:32`）。 */
+  private seekDeltaText(): string {
+    if (this.seekPreview < 0) {
+      return '';
+    }
+    const diff: number = Math.round(this.seekPreview - this.panStartPos);
+    const sign: string = diff >= 0 ? '+' : '-';
+    return `${sign}${clock(Math.abs(diff))}`;
+  }
+
+  /** 字幕时间偏移文案（例：`+0.5s` / `-1.0s` / `0.0s`）。 */
+  private subDelayText(): string {
+    if (Math.abs(this.subDelay) < 0.05) {
+      return '0.0s';
+    }
+    return `${this.subDelay > 0 ? '+' : ''}${this.subDelay.toFixed(1)}s`;
+  }
+
+  /** 字幕样式预览条：按当前字号/描边/位置/背景映射实时预览样式。 */
+  private subPreviewFontSize(): number {
+    return Math.max(11, Math.min(20, Math.round(14 * this.subSizePct / 100)));
+  }
+
+  private subPreviewAlign(): Alignment {
+    if (this.subPosPct <= 85) {
+      return Alignment.Top;
+    }
+    if (this.subPosPct <= 95) {
+      return Alignment.Center;
+    }
+    return Alignment.Bottom;
+  }
+
+  private subPreviewBgColor(): string {
+    if (this.subBgMode === 2) {
+      return '#E6000000';
+    }
+    if (this.subBgMode === 1) {
+      return '#8C000000';
+    }
+    return '#00000000';
+  }
+
   build() {
     // 外层只管「把两层摞起来」：播放器固定在顶部，详情抽屉从下往上滑。
     Stack({ alignContent: Alignment.TopStart }) {
@@ -2954,6 +3285,10 @@ export struct PlayerView {
         GestureGroup(GestureMode.Exclusive,
           TapGesture({ count: 1 })
             .onAction(() => {
+              if (this.screenLocked) {
+                this.flashLockUi();
+                return;
+              }
               // 收缩态点画面 = 展开回 16:9；正常态 = 显隐控件
               if (this.shrunken()) {
                 this.toggleSheet();
@@ -2963,81 +3298,131 @@ export struct PlayerView {
             }),
           TapGesture({ count: 2 })
             .onAction(() => {
+              if (this.screenLocked) {
+                this.flashLockUi();
+                return;
+              }
               this.togglePlay();
               this.toast(this.playing ? '播放' : '暂停');
             }),
           // 长按整屏 = 临时 3 倍速（R11）：触发点是整块画面，不是那个小胶囊
           LongPressGesture({ repeat: false, duration: 420 })
             .onAction(() => {
+              if (this.screenLocked) {
+                return;
+              }
               this.tempSpeed(true);
             })
             .onActionEnd(() => {
               this.tempSpeed(false);
             }),
           PanGesture({ direction: PanDirection.Horizontal })
-            .onActionStart(() => {
+            .onActionStart((event: GestureEvent) => {
+              if (this.screenLocked || this.duration <= 0) {
+                this.panKind = '';
+                return;
+              }
+              const w: number = Math.max(1, this.gestureW());
+              const x: number = event.fingerList.length > 0 ? event.fingerList[0].localX : w / 2;
+              // 避开左右系统返回手势边缘 24vp
+              if (x < 24 || x > w - 24) {
+                this.panKind = '';
+                return;
+              }
               this.panKind = 'seek';
               this.panStartPos = this.pos;
               this.seekPreview = this.pos;
+              this.seekCancel = false;
             })
             .onActionUpdate((event: GestureEvent) => {
               if (this.panKind === 'seek') {
-                const delta: number = event.offsetX / 400 * Math.min(this.duration, 600);
+                const w: number = Math.max(300, this.gestureW());
+                const span: number = Math.min(this.duration, Math.min(Math.max(this.duration * 0.25, 90), 240));
+                const delta: number = (event.offsetX / w) * span;
                 this.seekPreview = Math.max(0, Math.min(this.duration, this.panStartPos + delta));
+                // 上滑超过 56vp 取消本次跳转，滑回来恢复
+                if (event.offsetY < -56) {
+                  this.seekCancel = true;
+                } else if (event.offsetY > -40) {
+                  this.seekCancel = false;
+                }
               }
             })
             .onActionEnd(() => {
               if (this.panKind === 'seek' && this.seekPreview >= 0) {
-                this.seekTo(this.seekPreview);
+                if (this.seekCancel) {
+                  this.toast('已取消跳转');
+                } else {
+                  this.seekTo(this.seekPreview);
+                }
               }
               this.panKind = '';
               this.seekPreview = -1;
+              this.seekCancel = false;
             }),
           PanGesture({ direction: PanDirection.Vertical })
             .onActionStart((event: GestureEvent) => {
-              // 左半屏 = 亮度，右半屏 = 音量（用户第 5 条）。
-              // 之前写死 localX > 300，横屏（780 宽）时几乎恒真 → 两边都调音量。
-              // 现在按「手势层宽度」的比例判断，竖屏/横屏都对。
+              if (this.screenLocked) {
+                this.panKind = '';
+                return;
+              }
               const w: number = Math.max(1, this.gestureW());
               const x: number = event.fingerList.length > 0
                 ? Math.max(0, Math.min(w, event.fingerList[0].localX)) : w / 2;
+              const y: number = event.fingerList.length > 0 ? event.fingerList[0].localY : 60;
+              // 避开左右边缘 24vp 及顶边 20vp（防与系统通知栏/返回手势冲突）
+              if (x < 24 || x > w - 24 || y < 20) {
+                this.panKind = '';
+                return;
+              }
               if (x > w / 2) {
                 this.panKind = 'volume';
+                this.hudKind = 'volume';
                 this.panBase = this.volume;
               } else {
                 this.panKind = 'bright';
-                this.panBase = this.bright * 100;
+                this.hudKind = 'bright';
+                this.panBase = this.readCurrentBrightness() * 100;
               }
               this.panSide = x > w / 2 ? 'right' : 'left';
             })
             .onActionUpdate((event: GestureEvent) => {
-              const delta: number = -event.offsetY / 3;
+              if (this.panKind !== 'volume' && this.panKind !== 'bright') {
+                return;
+              }
+              // 10vp 死区 + 高度归一化灵敏度（有效行程 ≥ 220vp 对应 0→100%），
+              // 彻底修复「轻轻一划直接从 0 拉到 100」的过快问题。
+              const rawY: number = event.offsetY;
+              if (Math.abs(rawY) < 10) {
+                return;
+              }
+              const effY: number = rawY > 0 ? rawY - 10 : rawY + 10;
+              const span: number = Math.max(220, this.gestureH() * 0.72);
+              const delta: number = (-effY / span) * 100;
               if (this.panKind === 'volume') {
                 this.volume = Math.max(0, Math.min(100, this.panBase + delta));
                 this.applyVolume(this.volume);
                 this.volumeHint = Math.round(this.volume);
               } else if (this.panKind === 'bright') {
-                this.bright = Math.max(0.05, Math.min(1, (this.panBase + delta) / 100));
-                if (this.win !== undefined) {
-                  this.win.setWindowBrightness(this.bright).catch((err: BusinessError) => {
-                    console.error(`[amane] brightness: ${err.code} ${err.message}`);
-                  });
-                }
+                const nextBright: number = Math.max(0.02, Math.min(1.0, (this.panBase + delta) / 100));
+                this.setBrightnessThrottled(nextBright, false);
                 this.volumeHint = Math.round(this.bright * 100);
               }
             })
             .onActionEnd(() => {
+              if (this.panKind === 'bright') {
+                this.setBrightnessThrottled(this.bright, true);
+              }
               this.panKind = '';
+              this.hudKind = '';
               this.volumeHint = -1;
             })
         )
         )
 
       // 控件层：顶部悬浮胶囊 + 底部悬浮面板（view/PlayerChrome，纯 ArkUI）
-      // 竖屏只有**收缩态**（画面被压得很小）才强制画 —— 那时 MiniBar 是唯一入口；
-      // 正常竖屏要跟 showControls 走：点一下隐藏就该干净，不能留一条进度条在那
-      // （用户 2026-11-15 00:16 报的就是这个：隐藏控件后进度条还在）。
-      if (this.showControls || (this.viewMode === 'portrait' && this.shrunken())) {
+      if (this.showControls || (this.screenLocked && this.lockUiShown)
+        || (this.viewMode === 'portrait' && this.shrunken())) {
         PlayerChrome({
           number: this.metaNumber,
           title: this.metaTitle,
@@ -3054,6 +3439,8 @@ export struct PlayerView {
           seekStep: this.seekStep,
           layout: this.viewMode === 'portrait' ? 'compact' : this.viewMode,
           collapsed: this.collapsedChrome(),
+          locked: this.screenLocked,
+          aspectMode: this.aspectMode,
           onBack: () => {
             this.onExited();
           },
@@ -3072,6 +3459,12 @@ export struct PlayerView {
           onPickSpeed: (v: number) => {
             this.applySpeed(v);
           },
+          onPickAspect: (mode: string) => {
+            this.applyAspectMode(mode);
+          },
+          onToggleLock: () => {
+            this.toggleScreenLock();
+          },
           onSnap: () => {
             this.snapFrame();
           },
@@ -3082,7 +3475,6 @@ export struct PlayerView {
             this.openAnnoInput();
           },
           onPip: () => {
-            // 保留应用内浮窗入口；Home 的系统 PiP 由 setAutoStartEnabled 单独负责。
             if (PlaySession.handoff !== undefined) {
               PlaySession.handoff();
             } else {
@@ -3099,10 +3491,13 @@ export struct PlayerView {
           pipActive: this.pipActive,
           onSeekMoving: (value: number) => {
             this.seekPreview = value;
+            this.panStartPos = this.pos;
+            this.seekCancel = false;
           },
           onSeekEnd: (value: number) => {
             this.seekTo(value);
             this.seekPreview = -1;
+            this.seekCancel = false;
           },
           onSubs: () => {
             this.toggleSubs();
@@ -3115,42 +3510,12 @@ export struct PlayerView {
           onMute: () => {
             this.volume = this.volume > 0 ? 0 : 100;
             this.applyVolume(this.volume);
-            // 图标本身会跟着变（喇叭 ↔ 带叉），再补一条文字，别看半天不确定
             this.toast(this.volume > 0 ? `音量 ${this.volume}%` : '已静音');
           }
         })
       }
 
-      // 拖动进度条时的画面预览（R08）：从雪碧图里裁一格，不用等 seek 完成
-      if (this.seekPreview >= 0 && this.prevOk && !this.shrunken()) {
-        // ★ alignContent 必须是 TopStart ★
-        // Stack 默认居中：1024×576 的雪碧图被塞进 128×72 的框里时，图上边会在
-        // y=-252，再按格子偏移就切到中间去了 —— 屏幕上就是「一格里有四个小画面」，
-        // 时间轴也跟着对不上。左上对齐之后 offset 才等于「第几格」。
-        Stack({ alignContent: Alignment.TopStart }) {
-          Image(Store.I.img(this.prevUrl))
-            // 每格固定 128×72：雪碧图整张按 cols×rows 铺开，offset 就是「第几格」
-            .width(this.prevCols * 128)
-            .height(this.prevRows * 72)
-            .objectFit(ImageFit.Fill)
-            .offset({
-              x: this.previewX(),
-              y: this.previewY()
-            })
-        }
-        .width(128)
-        .height(72)
-        .clip(true)
-        .borderRadius(6)
-        .backgroundColor('#000000')
-        .border({ width: 0.6, color: '#3DFFFFFF' })
-        .shadow({ radius: 12, color: '#66000000', offsetY: 4 })
-        .margin({ bottom: this.viewMode === 'portrait' ? 44 : 150 })
-      }
-
       // 弹幕层（B 站式）：从右往左飞，按轨道排，不吃触摸。
-      // 每条弹幕是一个独立组件，进入时启动一次 Linear 补间跑完全程 ——
-      // key 只用 id，不会每帧重建（用户第 5 条：之前一跳一跳的）。
       if (this.danmuOn && this.live.length > 0 && !this.shrunken()) {
         Stack({ alignContent: Alignment.TopStart }) {
           ForEach(this.live, (d: DanmuLive) => {
@@ -3163,29 +3528,145 @@ export struct PlayerView {
         .hitTestBehavior(HitTestMode.None)
       }
 
-      // 中央提示
+      // 顶部悬浮长按倍速 HUD 胶囊（Mockup 3 右下）
+      if (this.tempSpeedActive) {
+        Column() {
+          Row({ space: 7 }) {
+            SymbolGlyph($r('sys.symbol.fast_forward'))
+              .fontSize(15)
+              .fontColor([Theme.ACCENT_INK])
+            Text(`${this.tempSpeedValue.toFixed(1)}x 倍速播放中`)
+              .fontSize(12)
+              .fontWeight(FontWeight.Medium)
+              .fontColor('#FFFFFF')
+              .fontFeature('"tnum" 1')
+          }
+          .padding({ left: 15, right: 15, top: 8, bottom: 8 })
+          .backgroundColor('#C4141016')
+          .backdropBlur(24)
+          .border({ width: 0.75, color: Theme.accentAlpha(0.55) })
+          .borderRadius(20)
+          .shadow({ radius: 18, color: Theme.accentAlpha(0.32), offsetY: 4 })
+          .margin({ top: this.viewMode === 'portrait' ? 12 : 22 })
+          Blank()
+        }
+        .width('100%')
+        .height('100%')
+        .alignItems(HorizontalAlign.Center)
+        .hitTestBehavior(HitTestMode.None)
+      }
+
+      // 中央悬浮液态玻璃 HUD（Mockup 3：快进预览+上滑取消 / 亮度音量条 / 轻提示）
       if (this.seekPreview >= 0) {
-        Text(this.seekPreviewLabel())
-          .fontSize(15)
-          .fontColor('#FFFFFF')
-          .padding({ left: 18, right: 18, top: 10, bottom: 10 })
-          .backgroundColor('#B3000000')
-          .borderRadius(10)
+        Column({ space: 6 }) {
+          if (this.prevOk && !this.shrunken()) {
+            // ★ alignContent 必须是 TopStart，否则雪碧图偏到中间 ★
+            Stack({ alignContent: Alignment.TopStart }) {
+              Image(Store.I.img(this.prevUrl))
+                .width(this.prevCols * 128)
+                .height(this.prevRows * 72)
+                .objectFit(ImageFit.Fill)
+                .offset({
+                  x: this.previewX(),
+                  y: this.previewY()
+                })
+            }
+            .width(128)
+            .height(72)
+            .clip(true)
+            .borderRadius(9)
+            .backgroundColor('#000000')
+            .border({
+              width: 0.75,
+              color: this.seekCancel ? '#80FF6B81' : Theme.accentAlpha(0.55)
+            })
+          }
+          Row({ space: 8 }) {
+            Text(clock(this.seekPreview))
+              .fontSize(15)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#FFFFFF')
+              .fontFeature('"tnum" 1')
+            if (this.panKind === 'seek') {
+              Text(this.seekDeltaText())
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(this.seekCancel ? '#FF8FA0' : Theme.ACCENT_INK)
+                .fontFeature('"tnum" 1')
+            } else {
+              Text(`/ ${clock(this.duration)}`)
+                .fontSize(12)
+                .fontColor('#99FFFFFF')
+                .fontFeature('"tnum" 1')
+            }
+          }
+          if (this.panKind === 'seek') {
+            Row({ space: 4 }) {
+              SymbolGlyph($r('sys.symbol.chevron_up'))
+                .fontSize(10)
+                .fontColor([this.seekCancel ? '#FF8FA0' : '#B3FFFFFF'])
+              Text(this.seekCancel ? '松手取消跳转' : '上滑取消')
+                .fontSize(10)
+                .fontColor(this.seekCancel ? '#FF8FA0' : '#B3FFFFFF')
+            }
+          }
+        }
+        .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+        .backgroundColor('#CC141016')
+        .backdropBlur(26)
+        .border({ width: 0.75, color: this.seekCancel ? '#80FF6B81' : '#33FFFFFF' })
+        .borderRadius(16)
+        .shadow({ radius: 22, color: '#80000000', offsetY: 6 })
+        .hitTestBehavior(HitTestMode.None)
+      } else if (this.volumeHint >= 0) {
+        // 亮度 / 音量液态玻璃条（Mockup 3 左下）
+        Row({ space: 10 }) {
+          SymbolGlyph(this.hudKind === 'bright'
+            ? $r('sys.symbol.sun_max')
+            : (this.volumeHint === 0 ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2')))
+            .fontSize(18)
+            .fontColor([Theme.ACCENT_INK])
+          Stack({ alignContent: Alignment.Start }) {
+            Row()
+              .width(114)
+              .height(4)
+              .borderRadius(2)
+              .backgroundColor('#33FFFFFF')
+            Row()
+              .width(Math.max(4, Math.round(114 * Math.max(0, Math.min(100, this.volumeHint)) / 100)))
+              .height(4)
+              .borderRadius(2)
+              .linearGradient(Theme.ctaGradient())
+          }
+          .width(114)
+          .height(6)
+          Text(`${this.volumeHint}%`)
+            .fontSize(12)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#FFFFFF')
+            .fontFeature('"tnum" 1')
+            .width(36)
+            .textAlign(TextAlign.End)
+        }
+        .padding({ left: 15, right: 15, top: 10, bottom: 10 })
+        .backgroundColor('#CC141016')
+        .backdropBlur(26)
+        .border({ width: 0.75, color: '#33FFFFFF' })
+        .borderRadius(22)
+        .shadow({ radius: 20, color: '#80000000', offsetY: 6 })
+        .hitTestBehavior(HitTestMode.None)
       } else if (this.hint.length > 0) {
         Text(this.hint)
-          .fontSize(13)
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
           .fontColor('#FFFFFF')
           .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-          .backgroundColor('#B3000000')
-          .borderRadius(10)
-      } else if (this.volumeHint >= 0) {
-        // 左边调亮度、右边调音量，提示文字要跟着走（之前写死「音量」）
-        Text(`${this.panKind === 'bright' ? '亮度' : '音量'} ${this.volumeHint}%`)
-          .fontSize(13)
-          .fontColor('#FFFFFF')
-          .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-          .backgroundColor('#B3000000')
-          .borderRadius(10)
+          .backgroundColor('#CC141016')
+          .backdropBlur(24)
+          .border({ width: 0.75, color: '#2EFFFFFF' })
+          .borderRadius(18)
+          .shadow({ radius: 16, color: '#66000000', offsetY: 4 })
+          .hitTestBehavior(HitTestMode.None)
       }
 
       // 收缩态：只留一行时间 + 「点一下展开」，画面本身还在播
@@ -3229,47 +3710,80 @@ export struct PlayerView {
         }
       }
 
-      // 画中画占位（第 6 条）：小窗在外面放着，这里原地留一块牌子，
-      // 用户可以继续在应用里逛，关掉小窗也不跳页。
+      // 画中画占位（Mockup 1 中：居中黑曜石玻璃卡 + 蔷薇渐变主按钮）
       if (this.pipActive) {
-        Column({ space: 12 }) {
-          Row() {
-            this.PipGlyph()
+        Column() {
+          Column({ space: 12 }) {
+            Row({ space: 12 }) {
+              Stack({ alignContent: Alignment.Center }) {
+                SymbolGlyph($r('sys.symbol.rectangle_on_rectangle'))
+                  .fontSize(20)
+                  .fontColor([Theme.ACCENT_INK])
+              }
+              .width(42)
+              .height(42)
+              .borderRadius(13)
+              .backgroundColor(Theme.accentAlpha(0.18))
+              .border({ width: 0.75, color: Theme.accentAlpha(0.48) })
+
+              Column({ space: 3 }) {
+                Text('正在画中画播放')
+                  .fontSize(14)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor('#FFFFFF')
+                Text('视频已在系统小窗中继续播放')
+                  .fontSize(11)
+                  .fontColor('#99FFFFFF')
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+            }
+            .width('100%')
+
+            Row({ space: 10 }) {
+              Text('回到播放页')
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Theme.ON_ACCENT)
+                .layoutWeight(1)
+                .height(36)
+                .textAlign(TextAlign.Center)
+                .linearGradient(Theme.ctaGradient())
+                .borderRadius(18)
+                .shadow({ radius: 14, color: Theme.accentAlpha(0.35), offsetY: 3 })
+                .onClick(() => {
+                  this.restoreFromPip();
+                })
+              Text('关闭小窗')
+                .fontSize(12)
+                .fontColor('#E6FFFFFF')
+                .layoutWeight(1)
+                .height(36)
+                .textAlign(TextAlign.Center)
+                .backgroundColor('#24FFFFFF')
+                .border({ width: 0.75, color: '#33FFFFFF' })
+                .borderRadius(18)
+                .onClick(() => {
+                  this.stopPip();
+                  this.onPipClosed();
+                })
+            }
+            .width('100%')
           }
-          Text('正在画中画播放')
-            .fontSize(13)
-            .fontColor('#E6FFFFFF')
-          Text('小窗浮在最上层，你可以继续在应用里做别的事')
-            .fontSize(10)
-            .fontColor('#8CFFFFFF')
-            .textAlign(TextAlign.Center)
-            .padding({ left: 24, right: 24 })
-          Row({ space: 10 }) {
-            Text('回到播放页')
-              .fontSize(12)
-              .fontColor('#FFFFFF')
-              .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-              .backgroundColor(Theme.ACCENT)
-              .borderRadius(14)
-              .onClick(() => {
-                this.restoreFromPip();
-              })
-            Text('关闭小窗')
-              .fontSize(12)
-              .fontColor(Theme.TEXT)
-              .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-              .backgroundColor(Theme.CARD)
-              .borderRadius(14)
-              .onClick(() => {
-                this.stopPip();
-                this.onPipClosed();
-              })
-          }
+          .width('86%')
+          .constraintSize({ maxWidth: 320 })
+          .padding(16)
+          .backgroundColor('#D9141016')
+          .backdropBlur(24)
+          .border({ width: 0.75, color: '#2EFFFFFF' })
+          .borderRadius(20)
+          .shadow({ radius: 24, color: '#80000000', offsetY: 8 })
         }
         .width('100%')
         .height('100%')
         .justifyContent(FlexAlign.Center)
-        .backgroundColor('#0E0E12')
+        .alignItems(HorizontalAlign.Center)
+        .backgroundColor('#E60B090D')
       }
       }
       .width('100%')
@@ -3315,136 +3829,181 @@ export struct PlayerView {
         .backgroundColor('#B3000000')
       }
 
-      // 写批注（R23）：带上当前时间点，保存后下次播到这里就出现
+      // 发弹幕悬浮液态玻璃条（Mockup 2 右下）
       if (this.showAnnoInput) {
         Column() {
-          Column({ space: 12 }) {
-            Row() {
-              Text('发弹幕')
-                .fontSize(15)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(Theme.TEXT)
-              Blank()
-              Text(`@ ${clock(this.pos)}`)
+          Blank()
+          Column({ space: 10 }) {
+            Row({ space: 8 }) {
+              Text(clock(this.pos))
                 .fontSize(11)
-                .fontColor(Theme.ACCENT)
-            }
-            .width('100%')
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Theme.ACCENT_INK)
+                .fontFeature('"tnum" 1')
+                .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+                .backgroundColor(Theme.accentAlpha(0.18))
+                .border({ width: 0.75, color: Theme.accentAlpha(0.45) })
+                .borderRadius(12)
 
-            TextArea({ text: this.annoDraft, placeholder: '这一段怎么样？一句话飘过去' })
-              .width('100%')
-              .height(88)
-              .fontSize(13)
-              .backgroundColor(Theme.CARD)
-              .borderRadius(10)
-              .onChange((v: string) => {
-                this.annoDraft = v;
-              })
-
-            Row({ space: 10 }) {
-              Button('取消')
+              TextInput({ text: this.annoDraft, placeholder: '发一条弹幕记录此刻…' })
                 .layoutWeight(1)
-                .height(38)
-                .fontSize(13)
-                .backgroundColor(Theme.CARD)
-                .fontColor(Theme.TEXT)
-                .onClick(() => {
-                  this.showAnnoInput = false;
-                })
-              Button(this.annoBusy ? '保存中…' : '保存')
-                .layoutWeight(1)
-                .height(38)
-                .fontSize(13)
-                .backgroundColor(Theme.ACCENT)
+                .height(36)
+                .fontSize(12)
                 .fontColor('#FFFFFF')
-                .enabled(!this.annoBusy)
-                .onClick(() => {
+                .placeholderColor('#80FFFFFF')
+                .backgroundColor('#1FFFFFFF')
+                .border({ width: 0.6, color: '#2EFFFFFF' })
+                .borderRadius(14)
+                .onChange((v: string) => {
+                  this.annoDraft = v;
+                })
+                .onSubmit(() => {
                   this.addAnnotation();
                 })
+
+              Row({ space: 6 }) {
+                ForEach(['#FFFFFF', '#FFD166', '#FF7597', '#67E8F9'], (col: string, idx: number) => {
+                  Column()
+                    .width(15)
+                    .height(15)
+                    .borderRadius(8)
+                    .backgroundColor(col)
+                    .border({
+                      width: this.annoColorIdx === idx ? 1.5 : 0.5,
+                      color: this.annoColorIdx === idx ? Theme.ACCENT_INK : '#4DFFFFFF'
+                    })
+                    .onClick(() => {
+                      this.annoColorIdx = idx;
+                    })
+                }, (col: string) => `ac-${col}`)
+              }
+
+              Text(this.annoBusy ? '发送中' : '发送')
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Theme.ON_ACCENT)
+                .padding({ left: 14, right: 14 })
+                .height(34)
+                .textAlign(TextAlign.Center)
+                .linearGradient(Theme.ctaGradient())
+                .borderRadius(17)
+                .opacity(this.annoBusy ? 0.5 : 1)
+                .onClick(() => {
+                  if (!this.annoBusy) {
+                    this.addAnnotation();
+                  }
+                })
             }
             .width('100%')
+            .alignItems(VerticalAlign.Center)
           }
-          .width(this.viewMode === 'portrait' ? '92%' : '58%')
-          // 竖屏这块只有 16:9 那么高，输入框 + 按钮正好塞满，别溢出到详情页
-          .constraintSize({
-            maxHeight: this.viewMode === 'portrait'
-              ? Math.max(150, this.videoH() - 16) : 420
-          })
-          .padding(18)
-          .backgroundColor(Theme.BG_RAISED)
-          .borderRadius(16)
+          .width(this.viewMode === 'portrait' ? '95%' : '76%')
+          .constraintSize({ maxWidth: 620 })
+          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+          .backgroundColor('#D9141016')
+          .backdropBlur(28)
+          .border({ width: 0.75, color: '#33FFFFFF' })
+          .borderRadius(22)
+          .shadow({ radius: 24, color: '#80000000', offsetY: 8 })
+          .margin({ bottom: this.viewMode === 'portrait' ? 10 : 18 })
           .onClick(() => {
           })
         }
         .width('100%')
         .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor('#99000000')
+        .alignItems(HorizontalAlign.Center)
+        .backgroundColor('#66000000')
         .onClick(() => {
           this.showAnnoInput = false;
         })
       }
 
-      // 选集面板（R12）：左边版本、右边同系列，都带海报 —— 挑片不用退回详情页
+      // 选集面板（Mockup 2 右下：丝绒双 Tab + 海报同系列）
       if (this.showPicker) {
         Column() {
           Blank()
-          Column({ space: 8 }) {
+          Column({ space: 10 }) {
             Row() {
               Text('选集')
-                .fontSize(14)
+                .fontSize(15)
                 .fontColor(Theme.TEXT)
-                .fontWeight(FontWeight.Medium)
+                .fontWeight(FontWeight.Bold)
               Blank()
-              Text('关闭')
-                .fontSize(12)
-                .fontColor(Theme.TEXT_FAINT)
-                .onClick(() => {
-                  this.showPicker = false;
-                })
+              Stack({ alignContent: Alignment.Center }) {
+                SymbolGlyph($r('sys.symbol.xmark'))
+                  .fontSize(12)
+                  .fontColor(['#B3FFFFFF'])
+              }
+              .width(26)
+              .height(26)
+              .borderRadius(13)
+              .backgroundColor('#1FFFFFFF')
+              .onClick(() => {
+                this.showPicker = false;
+              })
             }
             .width('100%')
-            .padding({ left: 16, right: 16, top: 12, bottom: 2 })
+            .padding({ left: 16, right: 14, top: 14 })
 
-            Row({ space: 8 }) {
+            // 丝绒双 Tab 分段胶囊
+            Row({ space: 6 }) {
               Text(`${this.versions.length} 个版本`)
                 .fontSize(12)
-                .fontColor(this.pickerTab === 'version' ? '#FFFFFF' : Theme.TEXT_DIM)
-                .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-                .backgroundColor(this.pickerTab === 'version' ? Theme.ACCENT : Theme.CARD)
-                .borderRadius(12)
+                .fontWeight(this.pickerTab === 'version' ? FontWeight.Medium : FontWeight.Normal)
+                .fontColor(this.pickerTab === 'version' ? Theme.ACCENT_INK : Theme.TEXT_DIM)
+                .layoutWeight(1)
+                .height(32)
+                .textAlign(TextAlign.Center)
+                .backgroundColor(this.pickerTab === 'version' ? Theme.accentAlpha(0.22) : '#00000000')
+                .border({
+                  width: this.pickerTab === 'version' ? 0.75 : 0,
+                  color: Theme.accentAlpha(0.55)
+                })
+                .borderRadius(14)
                 .onClick(() => {
                   this.pickerTab = 'version';
                 })
-              Text(this.sibName.length > 0 ? this.sibName : '同系列')
+              Text(this.sibName.length > 0
+                ? `${this.sibName} (${this.siblings.length})`
+                : `同系列 (${this.siblings.length})`)
                 .fontSize(12)
-                .fontColor(this.pickerTab === 'series' ? '#FFFFFF' : Theme.TEXT_DIM)
-                .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-                .backgroundColor(this.pickerTab === 'series' ? Theme.ACCENT : Theme.CARD)
-                .borderRadius(12)
+                .fontWeight(this.pickerTab === 'series' ? FontWeight.Medium : FontWeight.Normal)
+                .fontColor(this.pickerTab === 'series' ? Theme.ACCENT_INK : Theme.TEXT_DIM)
+                .layoutWeight(1)
+                .height(32)
+                .textAlign(TextAlign.Center)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .backgroundColor(this.pickerTab === 'series' ? Theme.accentAlpha(0.22) : '#00000000')
+                .border({
+                  width: this.pickerTab === 'series' ? 0.75 : 0,
+                  color: Theme.accentAlpha(0.55)
+                })
+                .borderRadius(14)
                 .onClick(() => {
                   this.pickerTab = 'series';
                 })
-              Blank()
             }
             .width('100%')
-            .padding({ left: 16, right: 16, bottom: 4 })
+            .padding(3)
+            .backgroundColor('#1AFFFFFF')
+            .border({ width: 0.6, color: '#24FFFFFF' })
+            .borderRadius(17)
+            .margin({ left: 14, right: 14 })
 
             if (this.pickerLoading) {
               Text('读取中…')
                 .fontSize(11)
                 .fontColor(Theme.TEXT_FAINT)
-                .padding({ left: 16, top: 8, bottom: 12 })
+                .padding({ left: 16, top: 4, bottom: 8 })
             }
 
             Scroll() {
               if (this.pickerTab === 'version') {
-                Column({ space: 2 }) {
-                  // 版本：不同画质 / 来源
+                Column({ space: 4 }) {
                   ForEach(this.versionOnly(), (v: VerItem) => {
                     this.VerRow(v)
                   }, (v: VerItem) => `ver-${v.key}`)
-                  // 分集：同一部被切开的 cd1/cd2 —— 与版本分开列，别混成「N 个版本」
                   if (this.partOnly().length > 0) {
                     Row() {
                       Text(`分集 · ${partsHint(this.partOnly().length)}`)
@@ -3452,7 +4011,7 @@ export struct PlayerView {
                         .fontColor(Theme.TEXT_FAINT)
                     }
                     .width('100%')
-                    .padding({ left: 16, right: 16, top: 12, bottom: 4 })
+                    .padding({ left: 10, right: 10, top: 8, bottom: 2 })
 
                     ForEach(this.partOnly(), (v: VerItem) => {
                       this.VerRow(v)
@@ -3460,24 +4019,26 @@ export struct PlayerView {
                   }
                 }
                 .width('100%')
+                .padding({ left: 10, right: 10 })
               } else {
-                Column({ space: 2 }) {
+                Column({ space: 4 }) {
                   ForEach(this.siblings, (s: SibItem) => {
                     Row({ space: 10 }) {
                       Image(Store.I.img(s.poster))
                         .width(38)
-                        .height(53)
+                        .height(52)
                         .objectFit(ImageFit.Cover)
-                        .borderRadius(6)
+                        .borderRadius(7)
                         .backgroundColor(Theme.CARD)
                       Column({ space: 3 }) {
                         Text(s.number)
                           .fontSize(12)
-                          .fontColor(s.current ? Theme.ACCENT : Theme.TEXT)
+                          .fontWeight(s.current ? FontWeight.Medium : FontWeight.Normal)
+                          .fontColor(s.current ? Theme.ACCENT_INK : Theme.TEXT)
                           .maxLines(1)
                           .width('100%')
                         Text(s.actors.length > 0 ? s.actors.join(' · ') : s.title)
-                          .fontSize(9)
+                          .fontSize(10)
                           .fontColor(Theme.TEXT_FAINT)
                           .maxLines(1)
                           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -3488,37 +4049,50 @@ export struct PlayerView {
                       if (s.current) {
                         Text('当前')
                           .fontSize(9)
-                          .fontColor(Theme.ACCENT)
+                          .fontWeight(FontWeight.Medium)
+                          .fontColor(Theme.ACCENT_INK)
+                          .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                          .backgroundColor(Theme.accentAlpha(0.20))
+                          .border({ width: 0.75, color: Theme.accentAlpha(0.55) })
+                          .borderRadius(9)
+                      } else {
+                        SymbolGlyph($r('sys.symbol.chevron_right'))
+                          .fontSize(12)
+                          .fontColor(['#66FFFFFF'])
                       }
                     }
                     .width('100%')
-                    .padding({ left: 16, right: 16, top: 6, bottom: 6 })
+                    .padding({ left: 10, right: 10, top: 7, bottom: 7 })
+                    .borderRadius(12)
+                    .backgroundColor(s.current ? Theme.accentAlpha(0.14) : '#00000000')
+                    .border({
+                      width: s.current ? 0.75 : 0,
+                      color: Theme.accentAlpha(0.42)
+                    })
                     .onClick(() => {
                       this.pickSibling(s);
                     })
                   }, (s: SibItem) => `sib-${s.id}`)
                 }
                 .width('100%')
+                .padding({ left: 10, right: 10 })
               }
             }
-            .constraintSize({ maxHeight: 300 })
+            .layoutWeight(1)
+            .constraintSize({ maxHeight: this.viewMode === 'portrait' ? Math.max(80, this.videoH() - 108) : 300 })
             .scrollBar(BarState.Off)
-            Blank().height(10)
+            Blank().height(8)
           }
           .width(this.viewMode === 'portrait' ? '94%' : '52%')
-          // ★ 竖屏只能待在播放器那一条里 ★
-          // 播放器在详情页顶部只有 16:9 高（≈200vp）。之前面板按 '100%' 排、内容
-          // maxHeight 给到 300，结果下半截直接压到下面的影片详情上（第 2 条）。
-          // 现在竖屏把整块面板限制在播放区高度内，内容超出的部分在面板内部滚动。
           .constraintSize({
             maxHeight: this.viewMode === 'portrait'
-              ? Math.max(150, this.videoH() - 16) : 420
+              ? Math.max(150, this.videoH() - 14) : 420
           })
-          .backgroundColor('#66000000')
-          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
-          .border({ width: 1, color: '#33FFFFFF' })
-          .borderRadius(22)
-          .shadow({ radius: 26, color: '#73000000', offsetY: 10 })
+          .backgroundColor('#D9141016')
+          .backdropBlur(28)
+          .border({ width: 0.75, color: '#33FFFFFF' })
+          .borderRadius(20)
+          .shadow({ radius: 26, color: '#80000000', offsetY: 10 })
           .margin({
             bottom: this.viewMode === 'portrait' ? 8 : 14,
             right: this.viewMode === 'portrait' ? 0 : 14
@@ -3535,159 +4109,306 @@ export struct PlayerView {
         })
       }
 
-      // 字幕 / 音轨面板
+      // 字幕 / 音轨面板（Mockup 2 左上 & 左下：带 Scroll 防裁切 + 时间偏移步进 + 丝绒高亮）
       if (this.showPanel) {
         Column() {
           Blank()
-          Column({ space: 2 }) {
-            Row() {
+          Column({ space: 6 }) {
+            Row({ space: 8 }) {
               Text(this.panelKind === 'subs' ? '字幕' : '音轨')
-                .fontSize(14)
+                .fontSize(15)
                 .fontColor(Theme.TEXT)
-                .fontWeight(FontWeight.Medium)
+                .fontWeight(FontWeight.Bold)
               Blank()
               if (this.panelKind === 'subs') {
-                // 样式面板（2.6.1.55）：改完立刻生效，不打断播放
-                Text('样式')
-                  .fontSize(12)
-                  .fontColor(Theme.ACCENT)
-                  .padding({ left: 8, right: 12 })
-                  .onClick(() => {
-                    if (!this.subTapOk('样式')) {
-                      return;
-                    }
-                    this.showPanel = false;
-                    this.subStyleOpenedAt = Date.now();
-                    this.stylePanelDown = false;
-                    this.subStyleOpen = true;
-                  })
-              }
-              Text('关闭')
-                .fontSize(12)
-                .fontColor(Theme.TEXT_FAINT)
+                Row({ space: 3 }) {
+                  Text('样式')
+                    .fontSize(11)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(Theme.ACCENT_INK)
+                  SymbolGlyph($r('sys.symbol.chevron_right'))
+                    .fontSize(10)
+                    .fontColor([Theme.ACCENT_INK])
+                }
+                .padding({ left: 10, right: 8, top: 5, bottom: 5 })
+                .backgroundColor(Theme.accentAlpha(0.18))
+                .border({ width: 0.75, color: Theme.accentAlpha(0.50) })
+                .borderRadius(12)
                 .onClick(() => {
-                  if (!this.subTapOk('关闭')) {
+                  if (!this.subTapOk('样式')) {
                     return;
                   }
                   this.showPanel = false;
+                  this.subStyleOpenedAt = Date.now();
+                  this.stylePanelDown = false;
+                  this.subStyleOpen = true;
                 })
+              }
+              Stack({ alignContent: Alignment.Center }) {
+                SymbolGlyph($r('sys.symbol.xmark'))
+                  .fontSize(12)
+                  .fontColor(['#B3FFFFFF'])
+              }
+              .width(26)
+              .height(26)
+              .borderRadius(13)
+              .backgroundColor('#1FFFFFFF')
+              .onClick(() => {
+                if (!this.subTapOk('关闭')) {
+                  return;
+                }
+                this.showPanel = false;
+              })
             }
             .width('100%')
-            .padding({ left: 16, right: 16, top: 12, bottom: 8 })
+            .padding({ left: 16, right: 14, top: 14, bottom: 4 })
 
             if (this.panelKind === 'subs') {
-              this.PanelRow('不使用字幕', -1)
-              ForEach(this.subLabels, (label: string, index: number) => {
-                this.PanelRow(label, index)
-              }, (label: string, index: number) => `sub-${index}`)
-
-              Text('外挂字幕').fontSize(11).fontColor(Theme.TEXT_FAINT)
-                .width('100%')
-                .padding({ left: 16, right: 16, top: 10, bottom: 4 })
-              if (this.localSubs.length === 0 && this.subHint.length > 0) {
-                Text(this.subHint)
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-                  .width('100%')
-                  .padding({ left: 16, right: 16, top: 2, bottom: 4 })
-                  .maxLines(3)
-              }
-              ForEach(this.localSubs, (item: LocalCandidate) => {
-                Text(`${this.currentLocalName === item.name ? '✓ ' : ''}同目录 · ${item.name}`)
-                  .fontSize(12)
-                  .fontColor(this.currentLocalName === item.name ? Theme.ACCENT : Theme.TEXT)
-                  .width('100%')
-                  .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .onClick(() => {
-                    this.useLocalSub(item.name);
-                  })
-              }, (item: LocalCandidate) => `local-${item.name}`)
-              ForEach(this.extSubs, (item: SubtitleItem) => {
-                Text(`${this.currentSubId === item.id ? '✓ ' : ''}${item.name} · ${item.source}`)
-                  .fontSize(12)
-                  .fontColor(this.currentLocalName === item.name ? Theme.ACCENT : Theme.TEXT)
-                  .width('100%')
-                  .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .onClick(() => {
-                    // 外挂字幕这几行以前**没加守卫** —— 面板里没有内嵌轨道时它们就是第一行，
-                    // 抬手一落上去直接 applySub → 面板自己关掉，这才是「闪一下就消失」剩下的那半。
-                    if (!this.subTapOk(`远程字幕 ${item.name}`)) {
-                      return;
-                    }
-                    this.applySub(item.id);
-                  })
-              }, (item: SubtitleItem) => `ext-${item.id}`)
-              Row() {
-                Button('手机导入')
+              // 时间偏移微调行（-0.5s / 当前偏移 / +0.5s / 归零）
+              Row({ space: 6 }) {
+                Text('时间偏移')
                   .fontSize(11)
-                  .height(30)
-                  .onClick(() => {
-                    if (!this.subTapOk('手机导入')) {
-                      return;
-                    }
-                    this.importSub();
-                  })
-                Button('手动 URL')
+                  .fontColor(Theme.TEXT_DIM)
+                Blank()
+                Text('-0.5s')
                   .fontSize(11)
-                  .height(30)
+                  .fontColor('#E6FFFFFF')
+                  .fontFeature('"tnum" 1')
+                  .padding({ left: 9, right: 9, top: 5, bottom: 5 })
+                  .backgroundColor('#1FFFFFFF')
+                  .border({ width: 0.6, color: '#29FFFFFF' })
+                  .borderRadius(10)
                   .onClick(() => {
-                    if (!this.subTapOk('手动 URL')) {
+                    if (!this.subTapOk('偏移-0.5')) {
                       return;
                     }
-                    this.addSubUrl();
+                    this.adjustSubDelay(-0.5);
+                  })
+                Text(this.subDelayText())
+                  .fontSize(11)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Math.abs(this.subDelay) >= 0.05 ? Theme.ACCENT_INK : '#B3FFFFFF')
+                  .fontFeature('"tnum" 1')
+                  .width(44)
+                  .textAlign(TextAlign.Center)
+                Text('+0.5s')
+                  .fontSize(11)
+                  .fontColor('#E6FFFFFF')
+                  .fontFeature('"tnum" 1')
+                  .padding({ left: 9, right: 9, top: 5, bottom: 5 })
+                  .backgroundColor('#1FFFFFFF')
+                  .border({ width: 0.6, color: '#29FFFFFF' })
+                  .borderRadius(10)
+                  .onClick(() => {
+                    if (!this.subTapOk('偏移+0.5')) {
+                      return;
+                    }
+                    this.adjustSubDelay(0.5);
+                  })
+                Text('归零')
+                  .fontSize(11)
+                  .fontColor('#B3FFFFFF')
+                  .padding({ left: 8, right: 8, top: 5, bottom: 5 })
+                  .backgroundColor('#18FFFFFF')
+                  .border({ width: 0.6, color: '#24FFFFFF' })
+                  .borderRadius(10)
+                  .onClick(() => {
+                    if (!this.subTapOk('偏移归零')) {
+                      return;
+                    }
+                    this.adjustSubDelay(0, true);
                   })
               }
               .width('100%')
-              .padding({ left: 12, right: 12, top: 6 })
-              TextInput({ placeholder: 'https://.../subtitle.srt' })
-                .fontSize(11)
-                .height(32)
-                .padding({ left: 12, right: 12 })
-                .onChange((value: string) => {
-                  this.subUrlInput = value;
-                })
-            } else {
-              ForEach(this.audioLabels, (label: string, index: number) => {
-                this.PanelRow(label, index)
-              }, (label: string, index: number) => `audio-${index}`)
+              .padding({ left: 16, right: 14, top: 2, bottom: 4 })
             }
-            Blank().height(12)
+
+            // 轨道与外挂列表装进 Scroll，彻底修复 >3 条时底部导入按钮被裁切
+            Scroll() {
+              Column({ space: 3 }) {
+                if (this.panelKind === 'subs') {
+                  this.PanelRow('不使用字幕', -1)
+                  ForEach(this.subLabels, (label: string, index: number) => {
+                    this.PanelRow(`内嵌 · ${label}`, index)
+                  }, (label: string, index: number) => `sub-${index}`)
+
+                  Text('外挂字幕')
+                    .fontSize(10)
+                    .fontColor(Theme.TEXT_FAINT)
+                    .width('100%')
+                    .padding({ left: 6, right: 6, top: 8, bottom: 3 })
+
+                  if (this.localSubs.length === 0 && this.extSubs.length === 0 && this.subHint.length > 0) {
+                    Text(this.subHint)
+                      .fontSize(10)
+                      .fontColor(Theme.TEXT_FAINT)
+                      .width('100%')
+                      .padding({ left: 6, right: 6, top: 2, bottom: 4 })
+                      .maxLines(3)
+                  }
+
+                  ForEach(this.localSubs, (item: LocalCandidate) => {
+                    Row({ space: 8 }) {
+                      if (this.currentLocalName === item.name && this.currentSubId.length === 0) {
+                        SymbolGlyph($r('sys.symbol.checkmark'))
+                          .fontSize(12)
+                          .fontColor([Theme.ACCENT_INK])
+                      }
+                      Text(`同目录 · ${item.name}`)
+                        .fontSize(12)
+                        .fontWeight(this.currentLocalName === item.name ? FontWeight.Medium : FontWeight.Normal)
+                        .fontColor(this.currentLocalName === item.name ? Theme.ACCENT_INK : Theme.TEXT)
+                        .layoutWeight(1)
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    }
+                    .width('100%')
+                    .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+                    .borderRadius(11)
+                    .backgroundColor(this.currentLocalName === item.name ? Theme.accentAlpha(0.18) : '#00000000')
+                    .border({
+                      width: this.currentLocalName === item.name ? 0.75 : 0,
+                      color: Theme.accentAlpha(0.48)
+                    })
+                    .onClick(() => {
+                      this.useLocalSub(item.name);
+                    })
+                  }, (item: LocalCandidate) => `local-${item.name}`)
+
+                  ForEach(this.extSubs, (item: SubtitleItem) => {
+                    Row({ space: 8 }) {
+                      if (this.currentSubId === item.id) {
+                        SymbolGlyph($r('sys.symbol.checkmark'))
+                          .fontSize(12)
+                          .fontColor([Theme.ACCENT_INK])
+                      }
+                      Text(`${subSourceLabel(item.source)} · ${item.name}`)
+                        .fontSize(12)
+                        .fontWeight(this.currentSubId === item.id ? FontWeight.Medium : FontWeight.Normal)
+                        .fontColor(this.currentSubId === item.id ? Theme.ACCENT_INK : Theme.TEXT)
+                        .layoutWeight(1)
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    }
+                    .width('100%')
+                    .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+                    .borderRadius(11)
+                    .backgroundColor(this.currentSubId === item.id ? Theme.accentAlpha(0.18) : '#00000000')
+                    .border({
+                      width: this.currentSubId === item.id ? 0.75 : 0,
+                      color: Theme.accentAlpha(0.48)
+                    })
+                    .onClick(() => {
+                      if (!this.subTapOk(`远程字幕 ${item.name}`)) {
+                        return;
+                      }
+                      this.applySub(item.id);
+                    })
+                  }, (item: SubtitleItem) => `ext-${item.id}`)
+
+                  // 底部：手机导入 + 粘贴字幕 URL + 蔷薇渐变添加按钮
+                  Row({ space: 6 }) {
+                    Text('手机导入')
+                      .fontSize(11)
+                      .fontColor('#E6FFFFFF')
+                      .padding({ left: 10, right: 10 })
+                      .height(32)
+                      .textAlign(TextAlign.Center)
+                      .backgroundColor('#1FFFFFFF')
+                      .border({ width: 0.6, color: '#2EFFFFFF' })
+                      .borderRadius(11)
+                      .onClick(() => {
+                        if (!this.subTapOk('手机导入')) {
+                          return;
+                        }
+                        this.importSub();
+                      })
+                    TextInput({ text: this.subUrlInput, placeholder: '粘贴字幕 URL' })
+                      .fontSize(11)
+                      .fontColor('#FFFFFF')
+                      .placeholderColor('#73FFFFFF')
+                      .backgroundColor('#1AFFFFFF')
+                      .border({ width: 0.6, color: '#29FFFFFF' })
+                      .borderRadius(11)
+                      .height(32)
+                      .layoutWeight(1)
+                      .onChange((value: string) => {
+                        this.subUrlInput = value;
+                      })
+                    Text('添加')
+                      .fontSize(11)
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor(Theme.ON_ACCENT)
+                      .padding({ left: 12, right: 12 })
+                      .height(32)
+                      .textAlign(TextAlign.Center)
+                      .linearGradient(Theme.ctaGradient())
+                      .borderRadius(11)
+                      .onClick(() => {
+                        if (!this.subTapOk('手动 URL')) {
+                          return;
+                        }
+                        this.addSubUrl();
+                      })
+                  }
+                  .width('100%')
+                  .padding({ top: 8, bottom: 4 })
+                } else {
+                  if (this.audioLabels.length === 0) {
+                    Text('当前影片仅有一条默认音轨')
+                      .fontSize(12)
+                      .fontColor(Theme.TEXT_FAINT)
+                      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+                  } else {
+                    ForEach(this.audioLabels, (label: string, index: number) => {
+                      this.PanelRow(label, index)
+                    }, (label: string, index: number) => `audio-${index}`)
+                  }
+                }
+                Blank().height(8)
+              }
+              .width('100%')
+              .padding({ left: 10, right: 10 })
+            }
+            .layoutWeight(1)
+            .constraintSize({
+              maxHeight: this.viewMode === 'portrait'
+                ? Math.max(90, this.videoH() - 96) : 340
+            })
+            .scrollBar(BarState.Off)
+            .onTouch((e: TouchEvent) => {
+              if (e.type === TouchType.Down) {
+                this.subPanelDown = true;
+              }
+            })
           }
-          .width(this.viewMode === 'portrait' ? '92%' : '48%')
+          .width(this.viewMode === 'portrait' ? '94%' : '50%')
           .constraintSize({
             maxHeight: this.viewMode === 'portrait'
-              ? Math.max(150, this.videoH() - 16) : 460
+              ? Math.max(150, this.videoH() - 14) : 440
           })
-          // 面板同样是悬浮玻璃：毛玻璃 + 细边 + 投影，四周留 14vp 让视频透出来
-          .backgroundColor('#66000000')
-          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
-          .border({ width: 0.5, color: '#26FFFFFF' })
-          .borderRadius(22)
-          .shadow({ radius: 26, color: '#73000000', offsetY: 10 })
+          .backgroundColor('#D9141016')
+          .backdropBlur(28)
+          .border({ width: 0.75, color: '#33FFFFFF' })
+          .borderRadius(20)
+          .shadow({ radius: 26, color: '#80000000', offsetY: 10 })
           .margin({
             bottom: this.viewMode === 'portrait' ? 8 : 14,
             right: this.viewMode === 'portrait' ? 0 : 14
           })
           .onTouch((e: TouchEvent) => {
-            // 记录「按下真的落在面板上」：抬手才滑进来的那一次没有 Down（见 panelTapAllowed）
             if (e.type === TouchType.Down) {
               this.subPanelDown = true;
             }
           })
           .onClick(() => {
-            // 吞掉点击：不然会冒泡到下面的遮罩层，面板刚点就关了
           })
         }
         .width('100%')
         .height('100%')
-        .alignItems(HorizontalAlign.Center)
+        .alignItems(this.viewMode === 'portrait' ? HorizontalAlign.Center : HorizontalAlign.End)
         .backgroundColor('#66000000')
         .onClick(() => {
-          // 遮罩同理：面板刚开的那一次点击不能把它关掉
           if (!this.subTapOk('遮罩')) {
             return;
           }
@@ -3695,21 +4416,25 @@ export struct PlayerView {
         })
       }
 
-      // 字幕样式面板（2.6.1.55）：字号 / 描边 / 位置 / 背景。
-      // 每点一下就写进 mpv 并立刻重画 —— 不重开流、不动 surface，播放不中断。
+      // 字幕样式面板（Mockup 2 右上：含实时迷你预览条 + 四行丝绒胶囊）
       if (this.subStyleOpen) {
         Column() {
           Blank()
-          Column({ space: 11 }) {
+          Column({ space: 10 }) {
             Row() {
               Text('字幕样式')
-                .fontSize(14)
+                .fontSize(15)
                 .fontColor(Theme.TEXT)
-                .fontWeight(FontWeight.Medium)
+                .fontWeight(FontWeight.Bold)
               Blank()
               Text('完成')
-                .fontSize(12)
-                .fontColor(Theme.ACCENT)
+                .fontSize(11)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Theme.ACCENT_INK)
+                .padding({ left: 12, right: 12, top: 5, bottom: 5 })
+                .backgroundColor(Theme.accentAlpha(0.20))
+                .border({ width: 0.75, color: Theme.accentAlpha(0.55) })
+                .borderRadius(12)
                 .onClick(() => {
                   if (!this.styleTapOk('完成')) {
                     return;
@@ -3718,150 +4443,218 @@ export struct PlayerView {
                 })
             }
             .width('100%')
-            .padding({ left: 16, right: 16, top: 12, bottom: 2 })
+            .padding({ left: 16, right: 14, top: 14 })
 
-            Row({ space: 7 }) {
-              Text('字号')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width(34)
-              Flex({ wrap: FlexWrap.Wrap }) {
-                ForEach(SUB_SIZE_OPTS, (o: SubOpt) => {
-                  Text(o.l)
-                    .fontSize(12)
-                    .fontColor(this.subSizePct === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
-                    .padding({ left: 11, right: 11, top: 6, bottom: 6 })
-                    .backgroundColor(this.subSizePct === o.v ? Theme.ACCENT : Theme.CARD_HI)
-                    .borderRadius(12)
-                    .margin({ right: 7, bottom: 4 })
-                    .onClick(() => {
-                      if (!this.styleTapOk(`字号 ${o.l}`)) {
-                        return;
-                      }
-                      this.subSizePct = o.v;
-                      SubStyle.setSize(o.v);
-                    this.applySubStyle();
-                    })
-                }, (o: SubOpt) => `ss-${o.v}`)
-              }
-              .layoutWeight(1)
+            // 实时迷你预览条
+            Stack({ alignContent: this.subPreviewAlign() }) {
+              Column()
+                .width('100%')
+                .height('100%')
+                .linearGradient({ angle: 135, colors: [['#FF1B1520', 0.0], ['#FF110E14', 0.5], ['#FF1D1418', 1.0]] })
+              Text('今晚的雪下得很安静')
+                .fontSize(this.subPreviewFontSize())
+                .fontWeight(this.subOutlineW >= 3 ? FontWeight.Medium : FontWeight.Normal)
+                .fontColor('#FFFFFF')
+                .padding({ left: 10, right: 10, top: 3, bottom: 3 })
+                .backgroundColor(this.subPreviewBgColor())
+                .borderRadius(6)
+                .textShadow(this.subOutlineW > 0 ? {
+                  radius: this.subOutlineW * 1.6,
+                  color: '#E6000000',
+                  offsetX: 0,
+                  offsetY: 1
+                } : { radius: 0, color: '#00000000', offsetX: 0, offsetY: 0 })
+                .margin({ top: 6, bottom: 6 })
             }
             .width('100%')
-            .padding({ left: 16, right: 16 })
+            .height(54)
+            .borderRadius(12)
+            .clip(true)
+            .border({ width: 0.75, color: '#29FFFFFF' })
+            .margin({ left: 14, right: 14 })
 
-            Row({ space: 7 }) {
-              Text('描边')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width(34)
-              Flex({ wrap: FlexWrap.Wrap }) {
-                ForEach(SUB_OUTLINE_OPTS, (o: SubOpt) => {
-                  Text(o.l)
-                    .fontSize(12)
-                    .fontColor(this.subOutlineW === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
-                    .padding({ left: 11, right: 11, top: 6, bottom: 6 })
-                    .backgroundColor(this.subOutlineW === o.v ? Theme.ACCENT : Theme.CARD_HI)
-                    .borderRadius(12)
-                    .margin({ right: 7, bottom: 4 })
-                    .onClick(() => {
-                      if (!this.styleTapOk(`描边 ${o.l}`)) {
-                        return;
-                      }
-                      this.subOutlineW = o.v;
-                      SubStyle.setOutline(o.v);
-                    this.applySubStyle();
-                    })
-                }, (o: SubOpt) => `so-${o.v}`)
+            Scroll() {
+              Column({ space: 9 }) {
+                Row({ space: 8 }) {
+                  Text('字号')
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_FAINT)
+                    .width(34)
+                  Flex({ wrap: FlexWrap.Wrap }) {
+                    ForEach(SUB_SIZE_OPTS, (o: SubOpt) => {
+                      Text(o.l)
+                        .fontSize(11)
+                        .fontWeight(this.subSizePct === o.v ? FontWeight.Medium : FontWeight.Normal)
+                        .fontColor(this.subSizePct === o.v ? Theme.ACCENT_INK : '#D9FFFFFF')
+                        .fontFeature('"tnum" 1')
+                        .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+                        .backgroundColor(this.subSizePct === o.v ? Theme.accentAlpha(0.22) : '#1AFFFFFF')
+                        .border({
+                          width: 0.75,
+                          color: this.subSizePct === o.v ? Theme.accentAlpha(0.55) : '#24FFFFFF'
+                        })
+                        .borderRadius(11)
+                        .margin({ right: 6, bottom: 4 })
+                        .onClick(() => {
+                          if (!this.styleTapOk(`字号 ${o.l}`)) {
+                            return;
+                          }
+                          this.subSizePct = o.v;
+                          SubStyle.setSize(o.v);
+                          this.applySubStyle();
+                        })
+                    }, (o: SubOpt) => `ss-${o.v}`)
+                  }
+                  .layoutWeight(1)
+                }
+                .width('100%')
+
+                Row({ space: 8 }) {
+                  Text('描边')
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_FAINT)
+                    .width(34)
+                  Flex({ wrap: FlexWrap.Wrap }) {
+                    ForEach(SUB_OUTLINE_OPTS, (o: SubOpt) => {
+                      Text(o.l)
+                        .fontSize(11)
+                        .fontWeight(this.subOutlineW === o.v ? FontWeight.Medium : FontWeight.Normal)
+                        .fontColor(this.subOutlineW === o.v ? Theme.ACCENT_INK : '#D9FFFFFF')
+                        .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+                        .backgroundColor(this.subOutlineW === o.v ? Theme.accentAlpha(0.22) : '#1AFFFFFF')
+                        .border({
+                          width: 0.75,
+                          color: this.subOutlineW === o.v ? Theme.accentAlpha(0.55) : '#24FFFFFF'
+                        })
+                        .borderRadius(11)
+                        .margin({ right: 6, bottom: 4 })
+                        .onClick(() => {
+                          if (!this.styleTapOk(`描边 ${o.l}`)) {
+                            return;
+                          }
+                          this.subOutlineW = o.v;
+                          SubStyle.setOutline(o.v);
+                          this.applySubStyle();
+                        })
+                    }, (o: SubOpt) => `so-${o.v}`)
+                  }
+                  .layoutWeight(1)
+                }
+                .width('100%')
+
+                Row({ space: 8 }) {
+                  Text('位置')
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_FAINT)
+                    .width(34)
+                  Flex({ wrap: FlexWrap.Wrap }) {
+                    ForEach(SUB_POS_OPTS, (o: SubOpt) => {
+                      Text(o.l)
+                        .fontSize(11)
+                        .fontWeight(this.subPosPct === o.v ? FontWeight.Medium : FontWeight.Normal)
+                        .fontColor(this.subPosPct === o.v ? Theme.ACCENT_INK : '#D9FFFFFF')
+                        .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+                        .backgroundColor(this.subPosPct === o.v ? Theme.accentAlpha(0.22) : '#1AFFFFFF')
+                        .border({
+                          width: 0.75,
+                          color: this.subPosPct === o.v ? Theme.accentAlpha(0.55) : '#24FFFFFF'
+                        })
+                        .borderRadius(11)
+                        .margin({ right: 6, bottom: 4 })
+                        .onClick(() => {
+                          if (!this.styleTapOk(`位置 ${o.l}`)) {
+                            return;
+                          }
+                          this.subPosPct = o.v;
+                          SubStyle.setPos(o.v);
+                          this.applySubStyle();
+                        })
+                    }, (o: SubOpt) => `sp-${o.v}`)
+                  }
+                  .layoutWeight(1)
+                }
+                .width('100%')
+
+                Row({ space: 8 }) {
+                  Text('背景')
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_FAINT)
+                    .width(34)
+                  Flex({ wrap: FlexWrap.Wrap }) {
+                    ForEach(SUB_BG_OPTS, (o: SubOpt) => {
+                      Text(o.l)
+                        .fontSize(11)
+                        .fontWeight(this.subBgMode === o.v ? FontWeight.Medium : FontWeight.Normal)
+                        .fontColor(this.subBgMode === o.v ? Theme.ACCENT_INK : '#D9FFFFFF')
+                        .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+                        .backgroundColor(this.subBgMode === o.v ? Theme.accentAlpha(0.22) : '#1AFFFFFF')
+                        .border({
+                          width: 0.75,
+                          color: this.subBgMode === o.v ? Theme.accentAlpha(0.55) : '#24FFFFFF'
+                        })
+                        .borderRadius(11)
+                        .margin({ right: 6, bottom: 4 })
+                        .onClick(() => {
+                          if (!this.styleTapOk(`背景 ${o.l}`)) {
+                            return;
+                          }
+                          this.subBgMode = o.v;
+                          SubStyle.setBg(o.v);
+                          this.applySubStyle();
+                        })
+                    }, (o: SubOpt) => `sb-${o.v}`)
+                  }
+                  .layoutWeight(1)
+                }
+                .width('100%')
+
+                Text('实时生效，不打断播放')
+                  .fontSize(10)
+                  .fontColor(Theme.TEXT_FAINT)
+                  .width('100%')
+                  .textAlign(TextAlign.Center)
+                  .padding({ top: 2, bottom: 8 })
               }
-              .layoutWeight(1)
-            }
-            .width('100%')
-            .padding({ left: 16, right: 16 })
-
-            Row({ space: 7 }) {
-              Text('位置')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width(34)
-              Flex({ wrap: FlexWrap.Wrap }) {
-                ForEach(SUB_POS_OPTS, (o: SubOpt) => {
-                  Text(o.l)
-                    .fontSize(12)
-                    .fontColor(this.subPosPct === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
-                    .padding({ left: 11, right: 11, top: 6, bottom: 6 })
-                    .backgroundColor(this.subPosPct === o.v ? Theme.ACCENT : Theme.CARD_HI)
-                    .borderRadius(12)
-                    .margin({ right: 7, bottom: 4 })
-                    .onClick(() => {
-                      if (!this.styleTapOk(`位置 ${o.l}`)) {
-                        return;
-                      }
-                      this.subPosPct = o.v;
-                      SubStyle.setPos(o.v);
-                    this.applySubStyle();
-                    })
-                }, (o: SubOpt) => `sp-${o.v}`)
-              }
-              .layoutWeight(1)
-            }
-            .width('100%')
-            .padding({ left: 16, right: 16 })
-
-            Row({ space: 7 }) {
-              Text('背景')
-                .fontSize(10)
-                .fontColor(Theme.TEXT_FAINT)
-                .width(34)
-              Flex({ wrap: FlexWrap.Wrap }) {
-                ForEach(SUB_BG_OPTS, (o: SubOpt) => {
-                  Text(o.l)
-                    .fontSize(12)
-                    .fontColor(this.subBgMode === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
-                    .padding({ left: 11, right: 11, top: 6, bottom: 6 })
-                    .backgroundColor(this.subBgMode === o.v ? Theme.ACCENT : Theme.CARD_HI)
-                    .borderRadius(12)
-                    .margin({ right: 7, bottom: 4 })
-                    .onClick(() => {
-                      if (!this.styleTapOk(`背景 ${o.l}`)) {
-                        return;
-                      }
-                      this.subBgMode = o.v;
-                      SubStyle.setBg(o.v);
-                    this.applySubStyle();
-                    })
-                }, (o: SubOpt) => `sb-${o.v}`)
-              }
-              .layoutWeight(1)
-            }
-            .width('100%')
-            .padding({ left: 16, right: 16 })
-
-            Text('改完立刻生效，不会打断播放')
-              .fontSize(9)
-              .fontColor(Theme.TEXT_FAINT)
               .width('100%')
-              .padding({ left: 16, right: 16 })
-            Blank().height(10)
+              .padding({ left: 16, right: 14 })
+            }
+            .layoutWeight(1)
+            .constraintSize({
+              maxHeight: this.viewMode === 'portrait'
+                ? Math.max(70, this.videoH() - 122) : 260
+            })
+            .scrollBar(BarState.Off)
+            .onTouch((e: TouchEvent) => {
+              if (e.type === TouchType.Down) {
+                this.stylePanelDown = true;
+              }
+            })
           }
-          .width(this.viewMode === 'portrait' ? '90%' : '52%')
-          .backgroundColor('#66000000')
-          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
-          .border({ width: 0.5, color: '#26FFFFFF' })
-          .borderRadius(22)
-          .shadow({ radius: 26, color: '#73000000', offsetY: 10 })
-          .margin({ bottom: 14, right: this.viewMode === 'portrait' ? 0 : 14 })
+          .width(this.viewMode === 'portrait' ? '92%' : '50%')
+          .constraintSize({
+            maxHeight: this.viewMode === 'portrait'
+              ? Math.max(150, this.videoH() - 14) : 410
+          })
+          .backgroundColor('#D9141016')
+          .backdropBlur(28)
+          .border({ width: 0.75, color: '#33FFFFFF' })
+          .borderRadius(20)
+          .shadow({ radius: 26, color: '#80000000', offsetY: 10 })
+          .margin({
+            bottom: this.viewMode === 'portrait' ? 8 : 14,
+            right: this.viewMode === 'portrait' ? 0 : 14
+          })
           .onTouch((e: TouchEvent) => {
             if (e.type === TouchType.Down) {
               this.stylePanelDown = true;
             }
           })
           .onClick(() => {
-            // 吞掉点击，别冒泡到遮罩
           })
         }
         .width('100%')
         .height('100%')
-        .alignItems(HorizontalAlign.Center)
+        .alignItems(this.viewMode === 'portrait' ? HorizontalAlign.Center : HorizontalAlign.End)
         .backgroundColor('#66000000')
         .onClick(() => {
           if (!this.styleTapOk('样式遮罩')) {
@@ -3890,9 +4683,9 @@ export struct PlayerView {
           .fontSize(13)
           .fontColor('#FFFFFF')
           .layoutWeight(1)
-        Text('×')
-          .fontSize(16)
-          .fontColor('#8CFFFFFF')
+        SymbolGlyph($r('sys.symbol.xmark'))
+          .fontSize(14)
+          .fontColor(['#8CFFFFFF'])
           .padding({ left: 8, right: 2 })
           .onClick(() => {
             this.showRateCard = false;
@@ -3903,9 +4696,9 @@ export struct PlayerView {
       Row({ space: 4 }) {
         ForEach([1, 2, 3, 4, 5], (n: number) => {
           Column({ space: 3 }) {
-            Text('★')
-              .fontSize(22)
-              .fontColor(n <= this.myRating ? '#FFC53D' : '#3DFFFFFF')
+            SymbolGlyph($r('sys.symbol.star_fill'))
+              .fontSize(20)
+              .fontColor([n <= this.myRating ? '#FFC53D' : '#3DFFFFFF'])
             Text(RATE_LABELS[n])
               .fontSize(8)
               .fontColor(n <= this.myRating ? '#FFD06B' : '#8CFFFFFF')
@@ -3920,48 +4713,58 @@ export struct PlayerView {
     }
     .width('88%')
     .padding(14)
-    .backgroundColor('#E60B0B0F')
+    .backgroundColor('#E6141016')
     .borderRadius(16)
-    .border({ width: 0.6, color: '#26FFFFFF' })
+    .border({ width: 0.75, color: '#2EFFFFFF' })
     .shadow({ radius: 20, color: '#80000000', offsetY: 6 })
   }
 
   /** 画中画小图标（占位区用，和 PlayerChrome 里那个同一套画法）。 */
   @Builder
   PipGlyph() {
-    Stack({ alignContent: Alignment.Start }) {
-      Path()
-        .commands('M1 1 L25 1 L25 19 L1 19 Z')
-        .stroke('#8CFFFFFF')
-        .strokeWidth(1.6)
-        .fillOpacity(0)
-        .width(26)
-        .height(20)
-      Column()
-        .width(11)
-        .height(7)
-        .backgroundColor('#8CFFFFFF')
-        .position({ x: 12, y: 10 })
+    SymbolGlyph($r('sys.symbol.rectangle_on_rectangle'))
+      .fontSize(22)
+      .fontColor([Theme.ACCENT_INK])
+  }
+
+  private isPanelRowActive(index: number): boolean {
+    if (this.panelKind === 'subs') {
+      return this.subChosen && this.currentSubId.length === 0
+        && this.currentLocalName.length === 0 && this.currentSubIndex === index;
     }
-    .width(26)
-    .height(20)
+    return this.currentAudioIndex === index;
   }
 
   @Builder
   PanelRow(label: string, index: number) {
-    Text((this.panelKind === 'subs' && this.subChosen && this.currentSubIndex === index ? '✓ ' : '') + label)
-      .fontSize(13)
-      .fontColor(Theme.TEXT)
-      .width('100%')
-      .padding({ left: 16, right: 16, top: 11, bottom: 11 })
-      .maxLines(1)
-      .textOverflow({ overflow: TextOverflow.Ellipsis })
-      .onClick(() => {
-        if (this.panelKind === 'subs') {
-          this.pickSub(index);
-        } else {
-          this.pickAudio(index);
-        }
-      })
+    Row({ space: 8 }) {
+      if (this.isPanelRowActive(index)) {
+        SymbolGlyph($r('sys.symbol.checkmark'))
+          .fontSize(12)
+          .fontColor([Theme.ACCENT_INK])
+      }
+      Text(label)
+        .fontSize(12)
+        .fontWeight(this.isPanelRowActive(index) ? FontWeight.Medium : FontWeight.Normal)
+        .fontColor(this.isPanelRowActive(index) ? Theme.ACCENT_INK : Theme.TEXT)
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .borderRadius(11)
+    .backgroundColor(this.isPanelRowActive(index) ? Theme.accentAlpha(0.18) : '#00000000')
+    .border({
+      width: this.isPanelRowActive(index) ? 0.75 : 0,
+      color: Theme.accentAlpha(0.48)
+    })
+    .onClick(() => {
+      if (this.panelKind === 'subs') {
+        this.pickSub(index);
+      } else {
+        this.pickAudio(index);
+      }
+    })
   }
 }

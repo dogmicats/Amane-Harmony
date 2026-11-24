@@ -29,6 +29,33 @@ import {
 
 const PAGE_SIZE: number = 30;
 
+/**
+ * 这几类「我的标签」下的影片要显示「要 / 不要」（2026-11-19）。
+ *
+ * 名字必须与 `extensions/private/pending_pick/pending_pick.json` 的 `tags` 完全一致：
+ * 服务端按名字判定、客户端按名字显示，两边对不上就是「点了没反应」。
+ */
+const PENDING_TAGS: string[] = ['破解待下载', '网友推荐待下载'];
+
+/** 点「要」之前要问「存到破解还是 JAV」的那几类（来源混杂）。 */
+const PENDING_ASK_TAG: string[] = ['网友推荐待下载'];
+
+/** 服务端 pending_pick 表的决策行（客户端只关心 decision）。 */
+interface PickState {
+  decision: string;
+  target: string;
+  state: string;
+}
+
+/** 点「要 / 不要」时提交的 body。 */
+interface DecideBody {
+  number: string;
+  decision: string;
+  target: string;
+  metadata_id: number;
+  source: string;
+}
+
 interface TagStat {
   id: number;
   name: string;
@@ -85,6 +112,13 @@ struct FacetPage {
   @State pickedTags: number[] = [];
   /** 抽卡模式：把这款分类下的影片剧照随机铺成瀑布流，替代海报网格。 */
   @State gachaOn: boolean = false;
+  /**
+   * 待下载决策（2026-11-19）：只有「破解待下载」这类标签才显示「要 / 不要」。
+   * 状态存服务端的 pending_pick 表，这里只是镜像（点完先本地更新，失败再回滚）。
+   */
+  @State pickOn: boolean = false;
+  @State wants: string[] = [];
+  @State skips: string[] = [];
   /** 搜索与抽屉（2.4.6.26 起与媒体库一致）。 */
   @State keyword: string = '';
   @State showSort: boolean = false;
@@ -123,6 +157,8 @@ struct FacetPage {
     }
     // 默认进不进抽卡模式由设置页决定（列表页仍是默认视图）
     this.gachaOn = BuildConfig.ENABLE_GACHA && Store.I.gachaAuto;
+    // 「破解待下载」这类标签才有「要 / 不要」两颗钮（仅 self/ui 通道启用；公版零触发）
+    this.pickOn = BuildConfig.CHANNEL !== 'public' && this.kind === 'user_tag' && PENDING_TAGS.indexOf(this.title) >= 0;
     this.loadCollections();
     this.loadPropTags();
     this.load(0, false);
@@ -143,6 +179,11 @@ struct FacetPage {
    */
   onPageShow(): void {
     this.setFullScreen(true);
+    // 从详情页回来：刚才可能点了「要 / 不要」，那条的标签已经被摘掉 —— 重拉第一页，
+    // 否则列表里还挂着它，看着就像「点了没生效」（2026-11-19 用户第一反应）。
+    if (this.pickOn && this.items.length > 0) {
+      this.load(0, false);
+    }
   }
 
   private setFullScreen(on: boolean): void {
@@ -162,6 +203,128 @@ struct FacetPage {
     this.collectionOptions = await collectionChipOptions();
   }
 
+  /**
+   * 拉这批卡的决策状态（一次批量问，不是每张卡一个请求）。
+   *
+   * 只在 `pickOn` 的标签里跑；翻页后也重新拉一次（新卡需要自己的状态）。
+   * 失败就当全「没选过」——按钮仍在，点下去照样能写服务端。
+   */
+  private async loadPickState(): Promise<void> {
+    if (!this.pickOn || this.items.length === 0) {
+      return;
+    }
+    const nums: string[] = [];
+    for (let i = 0; i < this.items.length; i++) {
+      const n: string = this.items[i].number;
+      if (n !== undefined && n !== null && n.length > 0) {
+        nums.push(n);
+      }
+    }
+    if (nums.length === 0) {
+      return;
+    }
+    try {
+      const url: string = `${Store.I.user}/api/user/pending/state?numbers=${encodeURIComponent(nums.join(','))}`;
+      const text: string = await httpGet(url, Store.I.token);
+      const obj = JSON.parse(text) as Record<string, Object>;
+      const box = obj.items as Record<string, PickState>;
+      const w: string[] = [];
+      const s: string[] = [];
+      for (let i = 0; i < nums.length; i++) {
+        const st: PickState = box[nums[i]];
+        if (st === undefined || st === null) {
+          continue;
+        }
+        if (st.decision === 'want') {
+          w.push(nums[i]);
+        } else if (st.decision === 'skip') {
+          s.push(nums[i]);
+        }
+      }
+      this.wants = w;
+      this.skips = s;
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] pending state: ${e.code} ${e.message}`);
+    }
+  }
+
+  /**
+   * 点「要 / 不要」。
+   *
+   * 「要」= 进下载队列（worker 每几分钟捞一批去提交 115；额度尽了就排队等月初）；
+   * 「不要」= 服务端立刻记账，worker 下一轮摘标签 + 写 CSV + 进黑名单。
+   * 先本地更新再发请求（点了就有反馈），失败回滚并提示。
+   */
+  private async decidePick(m: FacetMediaItem, decision: string): Promise<void> {
+    const num: string = m.number;
+    if (num === undefined || num === null || num.length === 0) {
+      this.tip = '这一条没有番号，无法标记';
+      return;
+    }
+    let target: string = 'pojie';
+    if (decision === 'want' && PENDING_ASK_TAG.indexOf(this.title) >= 0) {
+      // 网友推荐那批来源混杂：点「要」时问一次存到哪个网盘目录
+      const r = await promptAction.showDialog({
+        title: '存到哪个网盘目录？',
+        message: '这条进了下载队列，115 会存到你选的目录',
+        buttons: [
+          { text: '破解', color: Theme.ACCENT },
+          { text: 'JAV', color: Theme.ACCENT }
+        ]
+      });
+      if (r.index < 0) {
+        return;
+      }
+      target = r.index === 1 ? 'jav' : 'pojie';
+    }
+    const oldW: string[] = this.wants;
+    const oldS: string[] = this.skips;
+    if (decision === 'want') {
+      this.wants = this.withNum(this.wants, num);
+      this.skips = this.withoutNum(this.skips, num);
+    } else {
+      this.skips = this.withNum(this.skips, num);
+      this.wants = this.withoutNum(this.wants, num);
+    }
+    try {
+      const payload: DecideBody = {
+        number: num,
+        decision: decision,
+        target: target,
+        metadata_id: m.id,
+        source: 'user_tag'
+      };
+      const body: string = JSON.stringify(payload);
+      await httpPost(`${Store.I.user}/api/user/pending/decide`, Store.I.token, body);
+      this.tip = decision === 'want' ? `已排入下载：${num}` : `已标记不要：${num}`;
+    } catch (err) {
+      const e = err as BusinessError;
+      this.wants = oldW;
+      this.skips = oldS;
+      this.tip = e.code === 404 ? '服务端未启用待下载扩展（pending_pick）' : '标记失败，请重试';
+    }
+  }
+
+  private withNum(src: string[], num: string): string[] {
+    if (src.indexOf(num) >= 0) {
+      return src;
+    }
+    const out: string[] = src.slice();
+    out.push(num);
+    return out;
+  }
+
+  private withoutNum(src: string[], num: string): string[] {
+    const out: string[] = [];
+    for (let i = 0; i < src.length; i++) {
+      if (src[i] !== num) {
+        out.push(src[i]);
+      }
+    }
+    return out;
+  }
+
   private async load(offset: number, append: boolean): Promise<void> {
     // 自建分类没有 id，只能靠名字（服务端按名字把库里 + 覆盖层里的片一起取）
     if (this.facetId <= 0 && this.facetName().length === 0) {
@@ -178,6 +341,11 @@ struct FacetPage {
       `sort_by=${this.sortBy}`,
       `order=${this.order}`
     ];
+    // 「我的标签」里多是待下载片（还没有 media_files），核心 browse 索引不到，
+    // 搜索必须仍在 facets/media 这条链上做；上游 /api/metadata 认 search=（不是 q=）。
+    if (this.keyword.length > 0) {
+      parts.push(`search=${encodeURIComponent(this.keyword)}`);
+    }
     if (this.facetId <= 0) {
       parts.push(`name=${encodeURIComponent(this.facetName())}`);
     }
@@ -205,6 +373,7 @@ struct FacetPage {
     }
     this.loading = false;
     this.loadingMore = false;
+    this.loadPickState();
   }
 
   /** 用了本地筛选或「我的评分」排序就得走本地 browse：上游代理不认识这些条件。 */
@@ -371,6 +540,7 @@ struct FacetPage {
     }
     this.loading = false;
     this.loadingMore = false;
+    this.loadPickState();
   }
 
   private reload(): void {
@@ -873,7 +1043,7 @@ struct FacetPage {
         ForEach(this.propTags, (tg: TagStat) => {
           Text(tg.name + ' ' + Math.round(tg.ratio * 100) + '%')
             .fontSize(12)
-            .fontColor(this.pickedTags.indexOf(tg.id) >= 0 ? '#FFFFFF' :
+            .fontColor(this.pickedTags.indexOf(tg.id) >= 0 ? Theme.ON_ACCENT :
               (tg.ratio >= 0.5 ? Theme.TEXT_DIM : Theme.TEXT_FAINT))
             .padding({ left: 12, right: 12, top: 7, bottom: 7 })
             .backgroundColor(this.pickedTags.indexOf(tg.id) >= 0 ? Theme.ACCENT : Theme.CARD)
@@ -882,7 +1052,7 @@ struct FacetPage {
             .onClick(() => {
               this.toggleTag(tg.id);
             })
-        }, (tg: TagStat) => 'pt-' + tg.id)
+        }, (tg: TagStat) => `pt-${tg.id}-${this.pickedTags.indexOf(tg.id) >= 0 ? 1 : 0}`)
       }
       .width('100%')
     }
@@ -950,6 +1120,7 @@ struct FacetPage {
   /** 与媒体库完全同一张卡：封面 + 评分角标 + 番号 + 标题。 */
   @Builder
   Cell(m: FacetMediaItem) {
+    // 「要 / 不要」已搬到影片详情页（用户 2026-11-19：别压在封面上），列表回到纯浏览。
     PosterCard({
       item: this.cardOf(m),
       fluid: true,
@@ -957,6 +1128,46 @@ struct FacetPage {
         this.open(m);
       }
     })
+  }
+
+  /**
+   * 「要 / 不要」两颗钮（2026-11-19）。
+   *
+   * 压在**左上角**而不是右上角：右上角已经被「无码 / 中字」角标占了，
+   * 叠上去两块都看不清。底色用 40% 黑 + 系统厚玻璃，亮海报上也认得出。
+   */
+  @Builder
+  PickBar(m: FacetMediaItem) {
+    Row({ space: 5 }) {
+      Text(this.wants.indexOf(m.number) >= 0 ? '✓' : '＋')
+        .fontSize(14)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.wants.indexOf(m.number) >= 0 ? Theme.ON_ACCENT : '#FFFFFF')
+        .width(27)
+        .height(27)
+        .textAlign(TextAlign.Center)
+        .borderRadius(14)
+        .backgroundColor(this.wants.indexOf(m.number) >= 0 ? Theme.ACCENT : '#66000000')
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .border({ width: 0.5, color: '#40FFFFFF' })
+        .onClick(() => {
+          this.decidePick(m, 'want');
+        })
+      Text('✕')
+        .fontSize(12)
+        .fontColor(this.skips.indexOf(m.number) >= 0 ? Theme.DANGER : '#FFFFFF')
+        .width(27)
+        .height(27)
+        .textAlign(TextAlign.Center)
+        .borderRadius(14)
+        .backgroundColor('#66000000')
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .border({ width: 0.5, color: '#40FFFFFF' })
+        .onClick(() => {
+          this.decidePick(m, 'skip');
+        })
+    }
+    .margin({ left: 6, top: 6 })
   }
 
   /**
@@ -1091,7 +1302,7 @@ struct FacetPage {
 
           if (BuildConfig.ENABLE_GACHA) {
             GlassCapsule({
-              label: this.gachaOn ? '❖ 抽卡中' : '❖ 抽卡',
+              label: this.gachaOn ? '抽卡中' : '抽卡',
               active: this.gachaOn,
               fs: 11,
               padH: 7,
@@ -1103,7 +1314,7 @@ struct FacetPage {
             })
           }
           GlassCapsule({
-            label: `⇅ ${this.sortLabel()}`,
+            label: `${this.sortLabel()}`,
             fs: 11,
             padH: 7,
             padV: 7,
@@ -1114,7 +1325,7 @@ struct FacetPage {
             }
           })
           GlassCapsule({
-            label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+            label: this.filterCount() > 0 ? `筛选 ${this.filterCount()}` : '筛选',
             active: this.filterCount() > 0,
             fs: 11,
             padH: 7,
@@ -1301,9 +1512,9 @@ struct FacetPage {
             .justifyContent(FlexAlign.Center)
           } else if (this.items.length === 0) {
             Column({ space: 10 }) {
-              Text('▤')
-                .fontSize(32)
-                .fontColor(Theme.TEXT_FAINT)
+              SymbolGlyph($r('sys.symbol.film'))
+                .fontSize(28)
+                .fontColor([Theme.TEXT_FAINT])
               Text(this.keyword.length > 0
                 ? `没有找到「${this.keyword}」`
                 : (this.filterCount() > 0 ? '没有符合筛选条件的影片' : '这个分类下还没有影片'))
@@ -1365,8 +1576,9 @@ struct FacetPage {
             }))
             .columnsGap(8)
             .rowsGap(14)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6, bottom: Theme.BOTTOM_SAFE })
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6, bottom: Theme.pageBottomSafe() })
             .layoutWeight(1)
+            .cachedCount(6)
             .scrollBar(BarState.Off)
             .edgeEffect(EdgeEffect.Spring)
             .onReachEnd(() => {

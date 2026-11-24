@@ -6,6 +6,7 @@ import { runtimeText } from '../common/Util';
 import { MarkBadges } from './MarkBadges';
 import { GlowOrb, ParticleField } from './Fx';
 import { ArtColor } from '../common/ArtColor';
+import { Motion } from '../common/Motion';
 
 /**
  * 首页顶部大海报轮播：横图铺满 + 底部渐变 + 番号/标题/两个按钮。
@@ -139,17 +140,14 @@ export struct HeroBanner {
                   }
                 })
 
-              // 顶部 scrim（2026-11-14）：让状态栏 / 顶部浮层在亮封面上也读得清，
-              // 同时给画面加一层"影院幕布"的压暗感 —— 不加这层，亮片顶部会糊成一片。
-              // 2026-11-16 用户连问两次「更透」→「最透」：55% → 34% → 现在只留 10%。
-              // 状态栏那行字靠这层才不糊在亮封面上，所以没敢直接归零。
+              // 顶部渐隐暗角（2.8.2 P2）：柔和护航状态栏与顶部玻璃胶囊，不压脏中心海报画面。
               Column()
                 .width('100%')
-                .height('38%')
+                .height('30%')
                 .align(Alignment.TopStart)
                 .linearGradient({
                   angle: 180,
-                  colors: [['#1A000000', 0], ['#00000000', 1]]
+                  colors: [['#38000000', 0], ['#14000000', 0.55], ['#00000000', 1]]
                 })
                 .hitTestBehavior(HitTestMode.None)
 
@@ -158,11 +156,9 @@ export struct HeroBanner {
                 .height('100%')
                 .linearGradient({
                   angle: 180,
-                  // 2026-11-16 用户「最透」：原 0.62 处就 80% 黑、0.96 处实色，封面糊成一块。
-                  // 现在 0-70% 高度基本不压，只在底部按钮区收紧到 80%，
-                  // 好处是图全露出来；代价是白色标题压在亮画面上会变糊（用户要看极限效果）。
-                  colors: [['#00000000', 0.35], ['#4D0B0B0F', 0.70], ['#A60B0B0F', 0.92],
-                           ['#CC0B0B0F', 1.0]]
+                  // 2.8.2 P2：0-36% 透亮展现海报，底部丝滑融入页面底色 #0B0B0F
+                  colors: [['#00000000', 0.36], ['#520B0B0F', 0.70], ['#B80B0B0F', 0.90],
+                           ['#F50B0B0F', 1.0]]
                 })
                 // 2026-11-16：这层全屏压暗盖在封面之上，会把触摸全吃掉 ——
                 // 于是大图的 onTouch 永远不触发，「右滑进负一屏」照旧生效。
@@ -207,20 +203,25 @@ export struct HeroBanner {
                 // 2.6.1.30：这块**不是**每日推荐 —— 数据来自服务端 `build_hero` 的独立随机池，
                 // 下拉刷新就换一批。给它一个名字，和下面「每日推荐（每天固定）」分开。
                 Row({ space: 5 }) {
-                  Text('✦')
-                    .fontSize(9)
-                    .fontColor(Theme.GOLD)
+                  SymbolGlyph($r('sys.symbol.wand_and_stars'))
+                    .fontSize(10)
+                    .fontColor([Theme.GOLD])
                   Text('翻牌子')
                     .fontSize(10)
                     .fontColor(Theme.GOLD)
                     .fontWeight(FontWeight.Medium)
+                  Text('|')
+                    .fontSize(9)
+                    .fontColor('#4DFFFFFF')
                   Text('下拉换一批')
                     .fontSize(9)
-                    .fontColor('#B3FFFFFF')
+                    .fontColor('#CCFFFFFF')
                 }
-                .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-                .backgroundColor('#59000000')
-                .borderRadius(9)
+                .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+                .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                .backgroundColor('#4D000000')
+                .border({ width: 0.5, color: '#2EFFFFFF' })
+                .borderRadius(11)
                 .margin({ bottom: 8 })
 
                 Row({ space: 6 }) {
@@ -275,21 +276,23 @@ export struct HeroBanner {
                 Row({ space: 10 }) {
                   Button() {
                     Row({ space: 6 }) {
-                      Text('▶')
+                      SymbolGlyph($r('sys.symbol.play_fill'))
                         .fontSize(13)
-                        .fontColor('#FFFFFF')
+                        .fontColor([Theme.ON_ACCENT])
                       Text(item.position > 0 ? '继续播放' : '立即播放')
                         .fontSize(14)
-                        .fontColor('#FFFFFF')
+                        .fontColor(Theme.ON_ACCENT)
                         .fontWeight(FontWeight.Medium)
                     }
                   }
                   .height(38)
                   .padding({ left: 18, right: 18 })
-                  .backgroundColor(Theme.ACCENT)
+                  .backgroundColor(Color.Transparent)
+                  .linearGradient(Theme.ctaGradient())
+                  .border({ width: 0.75, color: '#38FFFFFF' })
                   .borderRadius(19)
-                  // 主按钮带一圈同色辉光，深色底上才"发光"而不是一块平涂
-                  .shadow({ radius: 18, color: Theme.alphaOf(Theme.ACCENT, 0.45), offsetX: 0, offsetY: 6 })
+                  // 柔和宝石辉光：克制不过曝，自然融入深曜黑底
+                  .shadow({ radius: 16, color: Theme.alphaOf(Theme.ACCENT, 0.36), offsetX: 0, offsetY: 5 })
                   .onClick(() => {
                     this.onPlay(item);
                   })
@@ -298,10 +301,12 @@ export struct HeroBanner {
                     .height(38)
                     .padding({ left: 18, right: 18 })
                     .fontSize(14)
+                    .fontWeight(FontWeight.Medium)
                     .fontColor(Theme.TEXT)
-                    .backgroundColor('#26FFFFFF')
+                    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                    .backgroundColor('#29FFFFFF')
                     .borderRadius(19)
-                    .border({ width: 1, color: Theme.STROKE_HI })
+                    .border({ width: 0.75, color: '#3DFFFFFF' })
                     .onClick(() => {
                       this.onDetail(item);
                     })
@@ -315,11 +320,12 @@ export struct HeroBanner {
                     Row({ space: 4 }) {
                       ForEach(this.items, (it: MediaItem, index: number) => {
                         Column()
-                          .width(index === this.current ? 14 : 4)
+                          .width(index === this.current ? 16 : 5)
                           .height(4)
                           .borderRadius(2)
-                          .backgroundColor(index === this.current ? '#E6FFFFFF' : '#4DFFFFFF')
-                      }, (it: MediaItem, index: number) => `dot-${it.id}-${index}`)
+                          .backgroundColor(index === this.current ? '#F2FFFFFF' : '#4DFFFFFF')
+                          .animation({ curve: Motion.springTap() })
+                      }, (it: MediaItem, index: number) => `dot-${it.id}-${index}-${index === this.current ? 1 : 0}`)
                     }
                     .height(38)
                     .alignItems(VerticalAlign.Center)

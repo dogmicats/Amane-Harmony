@@ -6,6 +6,7 @@ import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { DetailParams } from '../common/Types';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 
 /** 我写过的一条评价（GET /api/user/mycomments，片名与海报由服务端补齐）。 */
 interface MyComment {
@@ -164,7 +165,8 @@ struct MyCommentsPage {
           .fontSize(13)
           .fontColor(Theme.TEXT)
           .backgroundColor(Theme.CARD)
-          .borderRadius(10)
+          .borderRadius(16)
+          .border({ width: 0.75, color: Theme.STROKE })
           .onChange((v: string) => {
             this.draft = v;
           })
@@ -180,12 +182,14 @@ struct MyCommentsPage {
             })
           Text(this.saving ? '保存中…' : '保存')
             .fontSize(13)
-            .fontColor('#FFFFFF')
+            .fontColor(Theme.ON_ACCENT)
             .layoutWeight(1)
             .textAlign(TextAlign.Center)
             .padding({ top: 10, bottom: 10 })
-            .backgroundColor(Theme.ACCENT)
-            .borderRadius(10)
+            .backgroundColor(Color.Transparent)
+            .linearGradient(Theme.ctaGradient())
+            .border({ width: 0.75, color: '#38FFFFFF' })
+            .borderRadius(Theme.R_PILL)
             .onClick(() => {
               this.save();
             })
@@ -263,6 +267,7 @@ struct MyCommentsPage {
   build() {
     Navigation(this.navStack) {
       Stack({ alignContent: Alignment.TopStart }) {
+        SettingsAmbientGlow()
         Column() {
 
   // 六十改：让出浮层标题栏的高度
@@ -306,7 +311,7 @@ struct MyCommentsPage {
                     Column({ space: 4 }) {
                       Text(c.number.length > 0 ? c.number : c.title)
                         .fontSize(12)
-                        .fontColor(Theme.ACCENT)
+                        .fontColor(Theme.ACCENT_INK)
                       Text(this.preview(c.body))
                         .fontSize(12)
                         .fontColor(Theme.TEXT_DIM)
@@ -320,7 +325,7 @@ struct MyCommentsPage {
                         Blank()
                         Text('改')
                           .fontSize(10)
-                          .fontColor(Theme.ACCENT)
+                          .fontColor(Theme.ACCENT_INK)
                           .padding({ left: 8, right: 8, top: 3, bottom: 3 })
                           .backgroundColor(Theme.CARD_HI)
                           .borderRadius(7)
@@ -374,7 +379,7 @@ struct MyCommentsPage {
             }
             .width('100%')
             .layoutWeight(1)
-            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.pageBottomSafe() })
             .scrollBar(BarState.Off)
             .edgeEffect(EdgeEffect.Spring)
           }

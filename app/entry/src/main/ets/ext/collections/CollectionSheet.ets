@@ -267,7 +267,7 @@ export struct CollectionSheet {
           Blank()
           Text(this.busy ? '保存中…' : '完成')
             .fontSize(13)
-            .fontColor('#FFFFFF')
+            .fontColor(Theme.ON_ACCENT)
             .padding({ left: 22, right: 22, top: 10, bottom: 10 })
             .backgroundColor(Theme.ACCENT)
             .borderRadius(10)

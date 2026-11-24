@@ -366,7 +366,10 @@ export function safeHome(raw: HomeData): HomeData {  const home: HomeData = { he
         continue;
       }
       const lib: LibraryInfo = {
-        id: Math.trunc(num(src.id)), name: str(src.name), count: Math.trunc(num(src.count))
+        id: Math.trunc(num(src.id)),
+        name: str(src.name),
+        count: Math.trunc(num(src.count)),
+        cover: src.cover === undefined || src.cover === null ? '' : str(src.cover)
       };
       libs.push(lib);
     }

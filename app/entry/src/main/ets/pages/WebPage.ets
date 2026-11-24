@@ -2,6 +2,7 @@ import { router } from '@kit.ArkUI';
 import { webview } from '@kit.ArkWeb';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 /** 网页兜底：刮削、入库、任务队列等管理动作仍在 amane 自己的页面上做。 */
@@ -83,6 +84,10 @@ struct WebPage {
     };
   }
 
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
   build() {
     Navigation(this.navStack) {
       Column() {
@@ -115,6 +120,7 @@ struct WebPage {
       .height('100%')
       .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .mode(NavigationMode.Stack)
     .hideBackButton(true)
     .hideToolBar(true)

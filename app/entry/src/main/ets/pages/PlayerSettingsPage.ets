@@ -3,10 +3,12 @@ import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { Theme } from '../common/Theme';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { Store } from '../common/Store';
 import { SubStyle, SUB_SIZE_OPTS, SUB_OUTLINE_OPTS, SUB_POS_OPTS, SUB_BG_OPTS, SubOpt } from '../common/SubStyle';
 import { httpGet, httpPost } from '../common/Http';
-import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { PageTitle, GlassBack } from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 import {
   PlayerPrefs, PlayerTuning, PresetOption, PRESETS, confText, presetTuning
 } from '../common/PlayerPrefs';
@@ -337,23 +339,24 @@ struct PlayerSettingsPage {
           .layoutWeight(1)
         Text(`${this.seekStep} 秒`)
           .fontSize(12)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
       }
       .width('100%')
       Flex({ wrap: FlexWrap.Wrap }) {
         ForEach(SEEK_STEPS, (v: number) => {
           Text(`${v} 秒`)
             .fontSize(12)
-            .fontColor(this.seekStep === v ? '#FFFFFF' : Theme.TEXT_DIM)
+            .fontColor(this.seekStep === v ? Theme.ACCENT_INK : Theme.TEXT_DIM)
             .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-            .backgroundColor(this.seekStep === v ? Theme.ACCENT : Theme.CARD_HI)
+            .backgroundColor(this.seekStep === v ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.seekStep === v ? 0.75 : 0.5, color: this.seekStep === v ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
             .borderRadius(13)
             .margin({ right: 8, bottom: 4 })
             .onClick(() => {
               this.seekStep = v;
               Store.I.prefSetString('player_seek_step', `${v}`);
             })
-        }, (v: number) => `seek-${v}`)
+        }, (v: number) => `seek-${v}-${this.seekStep === v ? 1 : 0}`)
       }
       .width('100%')
       Text('播放页正中间那对 « » 按钮，按一下跳多少秒')
@@ -401,16 +404,17 @@ struct PlayerSettingsPage {
           ForEach([14, 16, 18, 20], (v: number) => {
             Text(`${v}`)
               .fontSize(12)
-              .fontColor(this.danmuSize === v ? '#FFFFFF' : Theme.TEXT_DIM)
+              .fontColor(this.danmuSize === v ? Theme.ACCENT_INK : Theme.TEXT_DIM)
               .padding({ left: 11, right: 11, top: 6, bottom: 6 })
-              .backgroundColor(this.danmuSize === v ? Theme.ACCENT : Theme.CARD_HI)
+              .backgroundColor(this.danmuSize === v ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.danmuSize === v ? 0.75 : 0.5, color: this.danmuSize === v ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
               .borderRadius(12)
               .margin({ right: 7, bottom: 4 })
               .onClick(() => {
                 this.danmuSize = v;
                 Store.I.prefSetString('danmu_size', `${v}`);
               })
-          }, (v: number) => `ds-${v}`)
+          }, (v: number) => `ds-${v}-${this.danmuSize === v ? 1 : 0}`)
         }
         .layoutWeight(1)
       }
@@ -425,16 +429,17 @@ struct PlayerSettingsPage {
           ForEach([{ v: 55, l: '慢' }, { v: 90, l: '中' }, { v: 140, l: '快' }], (o: Record<string, number>) => {
             Text(String(o.l))
               .fontSize(12)
-              .fontColor(this.danmuSpeed === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
+              .fontColor(this.danmuSpeed === o.v ? Theme.ACCENT_INK : Theme.TEXT_DIM)
               .padding({ left: 11, right: 11, top: 6, bottom: 6 })
-              .backgroundColor(this.danmuSpeed === o.v ? Theme.ACCENT : Theme.CARD_HI)
+              .backgroundColor(this.danmuSpeed === o.v ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.danmuSpeed === o.v ? 0.75 : 0.5, color: this.danmuSpeed === o.v ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
               .borderRadius(12)
               .margin({ right: 7, bottom: 4 })
               .onClick(() => {
                 this.danmuSpeed = o.v;
                 Store.I.prefSetString('danmu_speed', `${o.v}`);
               })
-          }, (o: Record<string, number>) => `dv-${o.v}`)
+          }, (o: Record<string, number>) => `dv-${o.v}-${this.danmuSpeed === o.v ? 1 : 0}`)
         }
         .layoutWeight(1)
       }
@@ -449,16 +454,17 @@ struct PlayerSettingsPage {
           ForEach([4, 6, 8], (v: number) => {
             Text(`${v} 行`)
               .fontSize(12)
-              .fontColor(this.danmuTracks === v ? '#FFFFFF' : Theme.TEXT_DIM)
+              .fontColor(this.danmuTracks === v ? Theme.ACCENT_INK : Theme.TEXT_DIM)
               .padding({ left: 11, right: 11, top: 6, bottom: 6 })
-              .backgroundColor(this.danmuTracks === v ? Theme.ACCENT : Theme.CARD_HI)
+              .backgroundColor(this.danmuTracks === v ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.danmuTracks === v ? 0.75 : 0.5, color: this.danmuTracks === v ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
               .borderRadius(12)
               .margin({ right: 7, bottom: 4 })
               .onClick(() => {
                 this.danmuTracks = v;
                 Store.I.prefSetString('danmu_tracks', `${v}`);
               })
-          }, (v: number) => `dt-${v}`)
+          }, (v: number) => `dt-${v}-${this.danmuTracks === v ? 1 : 0}`)
         }
         .layoutWeight(1)
       }
@@ -473,16 +479,17 @@ struct PlayerSettingsPage {
           ForEach([{ v: 0.6, l: '淡' }, { v: 0.8, l: '中' }, { v: 1.0, l: '实' }], (o: Record<string, number>) => {
             Text(String(o.l))
               .fontSize(12)
-              .fontColor(Math.abs(this.danmuAlpha - o.v) < 0.01 ? '#FFFFFF' : Theme.TEXT_DIM)
+              .fontColor(Math.abs(this.danmuAlpha - o.v) < 0.01 ? Theme.ACCENT_INK : Theme.TEXT_DIM)
               .padding({ left: 11, right: 11, top: 6, bottom: 6 })
-              .backgroundColor(Math.abs(this.danmuAlpha - o.v) < 0.01 ? Theme.ACCENT : Theme.CARD_HI)
+              .backgroundColor(Math.abs(this.danmuAlpha - o.v) < 0.01 ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: Math.abs(this.danmuAlpha - o.v) < 0.01 ? 0.75 : 0.5, color: Math.abs(this.danmuAlpha - o.v) < 0.01 ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
               .borderRadius(12)
               .margin({ right: 7, bottom: 4 })
               .onClick(() => {
                 this.danmuAlpha = o.v;
                 Store.I.prefSetString('danmu_alpha', `${o.v}`);
               })
-          }, (o: Record<string, number>) => `da-${o.v}`)
+          }, (o: Record<string, number>) => `da-${o.v}-${Math.abs(this.danmuAlpha - o.v) < 0.01 ? 1 : 0}`)
         }
         .layoutWeight(1)
       }
@@ -513,16 +520,17 @@ struct PlayerSettingsPage {
           ForEach(SUB_SIZE_OPTS, (o: SubOpt) => {
             Text(o.l)
               .fontSize(12)
-              .fontColor(this.subSizePct === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
+              .fontColor(this.subSizePct === o.v ? Theme.ACCENT_INK : Theme.TEXT_DIM)
               .padding({ left: 11, right: 11, top: 6, bottom: 6 })
-              .backgroundColor(this.subSizePct === o.v ? Theme.ACCENT : Theme.CARD_HI)
+              .backgroundColor(this.subSizePct === o.v ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.subSizePct === o.v ? 0.75 : 0.5, color: this.subSizePct === o.v ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
               .borderRadius(12)
               .margin({ right: 7, bottom: 4 })
               .onClick(() => {
                 this.subSizePct = o.v;
                 SubStyle.setSize(o.v);
               })
-          }, (o: SubOpt) => `ss-${o.v}`)
+          }, (o: SubOpt) => `ss-${o.v}-${this.subSizePct === o.v ? 1 : 0}`)
         }
         .layoutWeight(1)
       }
@@ -537,16 +545,17 @@ struct PlayerSettingsPage {
           ForEach(SUB_OUTLINE_OPTS, (o: SubOpt) => {
             Text(o.l)
               .fontSize(12)
-              .fontColor(this.subOutlineW === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
+              .fontColor(this.subOutlineW === o.v ? Theme.ACCENT_INK : Theme.TEXT_DIM)
               .padding({ left: 11, right: 11, top: 6, bottom: 6 })
-              .backgroundColor(this.subOutlineW === o.v ? Theme.ACCENT : Theme.CARD_HI)
+              .backgroundColor(this.subOutlineW === o.v ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.subOutlineW === o.v ? 0.75 : 0.5, color: this.subOutlineW === o.v ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
               .borderRadius(12)
               .margin({ right: 7, bottom: 4 })
               .onClick(() => {
                 this.subOutlineW = o.v;
                 SubStyle.setOutline(o.v);
               })
-          }, (o: SubOpt) => `so-${o.v}`)
+          }, (o: SubOpt) => `so-${o.v}-${this.subOutlineW === o.v ? 1 : 0}`)
         }
         .layoutWeight(1)
       }
@@ -561,16 +570,17 @@ struct PlayerSettingsPage {
           ForEach(SUB_POS_OPTS, (o: SubOpt) => {
             Text(o.l)
               .fontSize(12)
-              .fontColor(this.subPosPct === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
+              .fontColor(this.subPosPct === o.v ? Theme.ACCENT_INK : Theme.TEXT_DIM)
               .padding({ left: 11, right: 11, top: 6, bottom: 6 })
-              .backgroundColor(this.subPosPct === o.v ? Theme.ACCENT : Theme.CARD_HI)
+              .backgroundColor(this.subPosPct === o.v ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.subPosPct === o.v ? 0.75 : 0.5, color: this.subPosPct === o.v ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
               .borderRadius(12)
               .margin({ right: 7, bottom: 4 })
               .onClick(() => {
                 this.subPosPct = o.v;
                 SubStyle.setPos(o.v);
               })
-          }, (o: SubOpt) => `sp-${o.v}`)
+          }, (o: SubOpt) => `sp-${o.v}-${this.subPosPct === o.v ? 1 : 0}`)
         }
         .layoutWeight(1)
       }
@@ -585,22 +595,23 @@ struct PlayerSettingsPage {
           ForEach(SUB_BG_OPTS, (o: SubOpt) => {
             Text(o.l)
               .fontSize(12)
-              .fontColor(this.subBgMode === o.v ? '#FFFFFF' : Theme.TEXT_DIM)
+              .fontColor(this.subBgMode === o.v ? Theme.ACCENT_INK : Theme.TEXT_DIM)
               .padding({ left: 11, right: 11, top: 6, bottom: 6 })
-              .backgroundColor(this.subBgMode === o.v ? Theme.ACCENT : Theme.CARD_HI)
+              .backgroundColor(this.subBgMode === o.v ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.subBgMode === o.v ? 0.75 : 0.5, color: this.subBgMode === o.v ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
               .borderRadius(12)
               .margin({ right: 7, bottom: 4 })
               .onClick(() => {
                 this.subBgMode = o.v;
                 SubStyle.setBg(o.v);
               })
-          }, (o: SubOpt) => `sb-${o.v}`)
+          }, (o: SubOpt) => `sb-${o.v}-${this.subBgMode === o.v ? 1 : 0}`)
         }
         .layoutWeight(1)
       }
       .width('100%')
 
-      Text('播放中也能调：播放页 → 字幕面板 → 右上角「样式」，改完立刻生效')
+      Text('播放中也可在字幕面板右上角「样式」微调')
         .fontSize(10)
         .fontColor(Theme.TEXT_FAINT)
         .lineHeight(14)
@@ -623,26 +634,27 @@ struct PlayerSettingsPage {
           .layoutWeight(1)
         Text(`${this.tempSpeed}x`)
           .fontSize(12)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
       }
       .width('100%')
       Flex({ wrap: FlexWrap.Wrap }) {
         ForEach([2, 3, 4, 5], (v: number) => {
           Text(`${v}x`)
             .fontSize(12)
-            .fontColor(this.tempSpeed === v ? '#FFFFFF' : Theme.TEXT_DIM)
+            .fontColor(this.tempSpeed === v ? Theme.ACCENT_INK : Theme.TEXT_DIM)
             .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-            .backgroundColor(this.tempSpeed === v ? Theme.ACCENT : Theme.CARD_HI)
+            .backgroundColor(this.tempSpeed === v ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.tempSpeed === v ? 0.75 : 0.5, color: this.tempSpeed === v ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
             .borderRadius(13)
             .margin({ right: 8, bottom: 4 })
             .onClick(() => {
               this.tempSpeed = v;
               Store.I.prefSetString('player_temp_speed', `${v}`);
             })
-        }, (v: number) => `ts-${v}`)
+        }, (v: number) => `ts-${v}-${this.tempSpeed === v ? 1 : 0}`)
       }
       .width('100%')
-      Text('整块画面按住不放 = 临时加速到这档，松手回到原来的档位')
+      Text('长按画面临时加速，松手恢复原速')
         .fontSize(10)
         .fontColor(Theme.TEXT_FAINT)
         .width('100%')
@@ -675,16 +687,17 @@ struct PlayerSettingsPage {
         ], (o: Record<string, string>) => {
           Text(o.l)
             .fontSize(12)
-            .fontColor(this.openMode === o.k ? '#FFFFFF' : Theme.TEXT_DIM)
+            .fontColor(this.openMode === o.k ? Theme.ACCENT_INK : Theme.TEXT_DIM)
             .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-            .backgroundColor(this.openMode === o.k ? Theme.ACCENT : Theme.CARD_HI)
+            .backgroundColor(this.openMode === o.k ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.openMode === o.k ? 0.75 : 0.5, color: this.openMode === o.k ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
             .borderRadius(13)
             .margin({ right: 8, bottom: 4 })
             .onClick(() => {
               this.openMode = o.k;
               Store.I.prefSetString('player_open_mode', o.k);
             })
-        }, (o: Record<string, string>) => `om-${o.k}`)
+        }, (o: Record<string, string>) => `om-${o.k}-${this.openMode === o.k ? 1 : 0}`)
       }
       .width('100%')
       Text('B 站模式：点播放后播放器直接出现在详情页顶部，不跳页、不重新加载；\n'
@@ -715,16 +728,17 @@ struct PlayerSettingsPage {
         ForEach([{ k: 'portrait', l: '竖屏（顶部播放 + 详情）' }, { k: 'landscape', l: '横屏全屏' }], (o: Record<string, string>) => {
           Text(o.l)
             .fontSize(12)
-            .fontColor(this.jumpMode === o.k ? '#FFFFFF' : Theme.TEXT_DIM)
+            .fontColor(this.jumpMode === o.k ? Theme.ACCENT_INK : Theme.TEXT_DIM)
             .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-            .backgroundColor(this.jumpMode === o.k ? Theme.ACCENT : Theme.CARD_HI)
+            .backgroundColor(this.jumpMode === o.k ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.jumpMode === o.k ? 0.75 : 0.5, color: this.jumpMode === o.k ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
             .borderRadius(13)
             .margin({ right: 8, bottom: 4 })
             .onClick(() => {
               this.jumpMode = o.k;
               Store.I.prefSetString('player_jump_mode', o.k);
             })
-        }, (o: Record<string, string>) => `jm-${o.k}`)
+        }, (o: Record<string, string>) => `jm-${o.k}-${this.jumpMode === o.k ? 1 : 0}`)
       }
       .width('100%')
       Text('从剧照、截帧、弹幕、观看记录点进去时用哪种；播放页里还能随时切')
@@ -756,12 +770,10 @@ struct PlayerSettingsPage {
           .layoutWeight(1)
         Text(this.cacheStat.length > 0 ? this.cacheStat : '读取中…')
           .fontSize(11)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
       }
       .width('100%')
-      Text('看过的片段缓存到服务端磁盘，第二次打开同一部片直接读缓存。'
-        + '只有把网盘挂成媒体库时才需要分配空间（网盘片要重新拉索引，8~27 秒）。'
-        + '上限与清理统一在「存储与数据 → 空间管理」里改：网盘片可调，本地片固定 128 MB。')
+      Text('缓存已播片段以加速网盘起播；额度与清理在「空间管理」调整。')
         .fontSize(10)
         .fontColor(Theme.TEXT_FAINT)
         .width('100%')
@@ -802,7 +814,7 @@ struct PlayerSettingsPage {
         // 这里只读 + 跳转，避免同一个数字两处改让人困惑。
         Text('去空间管理调整 ›')
           .fontSize(11)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
           .padding({ left: 10, right: 10, top: 5, bottom: 5 })
           .backgroundColor(Theme.CARD_HI)
           .borderRadius(8)
@@ -812,7 +824,7 @@ struct PlayerSettingsPage {
         if (this.cacheNote.length > 0) {
           Text(this.cacheNote)
             .fontSize(10)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .layoutWeight(1)
             .maxLines(2)
         }
@@ -836,9 +848,10 @@ struct PlayerSettingsPage {
         ForEach([0, 512, 1024, 2048, 4096], (v: number) => {
           Text(v === 0 ? '关' : (v >= 1024 ? `${v / 1024} GB` : `${v} MB`))
             .fontSize(12)
-            .fontColor(this.diskMiB === v ? '#FFFFFF' : Theme.TEXT_DIM)
+            .fontColor(this.diskMiB === v ? Theme.ACCENT_INK : Theme.TEXT_DIM)
             .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-            .backgroundColor(this.diskMiB === v ? Theme.ACCENT : Theme.CARD_HI)
+            .backgroundColor(this.diskMiB === v ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.diskMiB === v ? 0.75 : 0.5, color: this.diskMiB === v ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
             .borderRadius(13)
             .margin({ right: 8, bottom: 4 })
             .onClick(() => {
@@ -851,7 +864,7 @@ struct PlayerSettingsPage {
               PlayerPrefs.save(ctx, t);
               this.cacheNote = '本机缓冲已保存，下次进播放页生效';
             })
-        }, (v: number) => `dc-${v}`)
+        }, (v: number) => `dc-${v}-${this.diskMiB === v ? 1 : 0}`)
       }
       .width('100%')
     }
@@ -943,16 +956,17 @@ struct PlayerSettingsPage {
           .layoutWeight(1)
         Text(this.labelOf(kind, this.pickValue(kind)))
           .fontSize(12)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
       }
       .width('100%')
       Flex({ wrap: FlexWrap.Wrap }) {
         ForEach(this.optionsOf(kind), (v: number) => {
           Text(this.labelOf(kind, v))
             .fontSize(12)
-            .fontColor(this.pickValue(kind) === v ? '#FFFFFF' : Theme.TEXT_DIM)
+            .fontColor(this.pickValue(kind) === v ? Theme.ACCENT_INK : Theme.TEXT_DIM)
             .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-            .backgroundColor(this.pickValue(kind) === v ? Theme.ACCENT : Theme.CARD_HI)
+            .backgroundColor(this.pickValue(kind) === v ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.pickValue(kind) === v ? 0.75 : 0.5, color: this.pickValue(kind) === v ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
             .borderRadius(13)
             .margin({ right: 8, bottom: 4 })
             .onClick(() => {
@@ -989,7 +1003,7 @@ struct PlayerSettingsPage {
         Blank()
         Text(this.presetLabel())
           .fontSize(11)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
           .padding({ left: 8, right: 8, top: 3, bottom: 3 })
           .backgroundColor(Theme.ACCENT_SOFT)
           .borderRadius(9)
@@ -1024,6 +1038,10 @@ struct PlayerSettingsPage {
     };
   }
 
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
   build() {
     Navigation(this.navStack) {
       Column() {
@@ -1033,7 +1051,7 @@ struct PlayerSettingsPage {
 
           // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
           // 材质才有颜色可采样。
-          Blank().height(this.barH())
+          Blank().height(this.barH() + 6)
             // ── 播放习惯（2026-11-15 重排：先放「怎么播」，性能参数收进下面的折叠区）──
             this.SectionTitle('播放习惯', '下面这些改完立即生效，不用点保存')
 
@@ -1084,16 +1102,17 @@ struct PlayerSettingsPage {
                   .layoutWeight(1)
                 Text(this.deskMode() === 'off' ? '关闭' : (this.deskMode() === 'bg' ? '仅声音' : '画中画'))
                   .fontSize(12)
-                  .fontColor(Theme.ACCENT)
+                  .fontColor(Theme.ACCENT_INK)
               }
               .width('100%')
 
               Flex({ wrap: FlexWrap.Wrap }) {
                 Text('关闭')
                   .fontSize(12)
-                  .fontColor(this.deskMode() === 'off' ? '#FFFFFF' : Theme.TEXT_DIM)
+                  .fontColor(this.deskMode() === 'off' ? Theme.ACCENT_INK : Theme.TEXT_DIM)
                   .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-                  .backgroundColor(this.deskMode() === 'off' ? Theme.ACCENT : Theme.CARD_HI)
+                  .backgroundColor(this.deskMode() === 'off' ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.deskMode() === 'off' ? 0.75 : 0.5, color: this.deskMode() === 'off' ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
                   .borderRadius(13)
                   .margin({ right: 8, bottom: 4 })
                   .onClick(() => {
@@ -1101,9 +1120,10 @@ struct PlayerSettingsPage {
                   })
                 Text('只留声音')
                   .fontSize(12)
-                  .fontColor(this.deskMode() === 'bg' ? '#FFFFFF' : Theme.TEXT_DIM)
+                  .fontColor(this.deskMode() === 'bg' ? Theme.ACCENT_INK : Theme.TEXT_DIM)
                   .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-                  .backgroundColor(this.deskMode() === 'bg' ? Theme.ACCENT : Theme.CARD_HI)
+                  .backgroundColor(this.deskMode() === 'bg' ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.deskMode() === 'bg' ? 0.75 : 0.5, color: this.deskMode() === 'bg' ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
                   .borderRadius(13)
                   .margin({ right: 8, bottom: 4 })
                   .onClick(() => {
@@ -1111,9 +1131,10 @@ struct PlayerSettingsPage {
                   })
                 Text('缩成小窗')
                   .fontSize(12)
-                  .fontColor(this.deskMode() === 'pip' ? '#FFFFFF' : Theme.TEXT_DIM)
+                  .fontColor(this.deskMode() === 'pip' ? Theme.ACCENT_INK : Theme.TEXT_DIM)
                   .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-                  .backgroundColor(this.deskMode() === 'pip' ? Theme.ACCENT : Theme.CARD_HI)
+                  .backgroundColor(this.deskMode() === 'pip' ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+          .border({ width: this.deskMode() === 'pip' ? 0.75 : 0.5, color: this.deskMode() === 'pip' ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
                   .borderRadius(13)
                   .margin({ right: 8, bottom: 4 })
                   .onClick(() => {
@@ -1184,7 +1205,8 @@ struct PlayerSettingsPage {
                   }
                   .layoutWeight(1)
                   .padding({ left: 8, right: 8, top: 10, bottom: 10 })
-                  .backgroundColor(this.preset === p.key ? Theme.ACCENT : Theme.CARD)
+                  .backgroundColor(this.preset === p.key ? Theme.accentAlpha(0.20) : Theme.CARD)
+                  .border({ width: this.preset === p.key ? 0.75 : 0.5, color: this.preset === p.key ? Theme.inkAlpha(0.50) : '#14FFFFFF' })
                   .borderRadius(12)
                   .onClick(() => {
                     this.pickPreset(p.key);
@@ -1243,8 +1265,10 @@ struct PlayerSettingsPage {
             Row({ space: 10 }) {
               Button('恢复推荐值')
                 .layoutWeight(1)
-                .height(40)
-                .backgroundColor(Theme.CARD)
+                .height(42)
+                .backgroundColor('#1AFFFFFF')
+                .border({ width: 0.75, color: '#28FFFFFF' })
+                .borderRadius(21)
                 .fontColor(Theme.TEXT)
                 .fontSize(13)
                 .onClick(() => {
@@ -1252,10 +1276,14 @@ struct PlayerSettingsPage {
                 })
               Button('保存')
                 .layoutWeight(1)
-                .height(40)
-                .backgroundColor(Theme.ACCENT)
-                .fontColor('#FFFFFF')
+                .height(42)
+                .backgroundColor(Color.Transparent)
+                .linearGradient(Theme.ctaGradient())
+                .border({ width: 0.75, color: '#38FFFFFF' })
+                .borderRadius(21)
+                .fontColor(Theme.ON_ACCENT)
                 .fontSize(13)
+                .fontWeight(FontWeight.Medium)
                 .onClick(() => {
                   this.save();
                 })
@@ -1295,7 +1323,7 @@ struct PlayerSettingsPage {
                 .fontColor(Theme.TEXT)
                 .placeholderColor(Theme.TEXT_FAINT)
                 .backgroundColor(Theme.CARD)
-                .caretColor(Theme.ACCENT)
+                .caretColor(Theme.ACCENT_INK)
                 .borderRadius(10)
                 .onChange((v: string) => {
                   this.extra = v;
@@ -1308,8 +1336,8 @@ struct PlayerSettingsPage {
                 .width('100%')
                 .margin({ top: 6 })
               Text(this.confPreview)
-                .fontSize(9)
-                .fontFamily('monospace')
+                .fontSize(10)
+                .fontFeature('"tnum" 1')
                 .fontColor(Theme.TEXT_DIM)
                 .width('100%')
                 .padding(10)
@@ -1320,7 +1348,7 @@ struct PlayerSettingsPage {
                 .borderRadius(10)
             }
 
-            Text('播放习惯 / 返回桌面后 / 字幕与弹幕：改完立即生效。播放性能与高级参数：点「保存」后，下次进播放页生效。')
+            Text('习惯与字幕即时生效；性能与高级参数保存后下次起播生效。')
               .fontSize(10)
               .fontColor(Theme.TEXT_FAINT)
               .width('100%')
@@ -1338,6 +1366,7 @@ struct PlayerSettingsPage {
       .height('100%')
       .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .mode(NavigationMode.Stack)
     .hideBackButton(true)
     .hideToolBar(true)

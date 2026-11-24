@@ -9,7 +9,7 @@ import { PlayerParams } from '../common/Types';
 import { clock } from '../common/Util';
 import { common } from '@kit.AbilityKit';
 import { SubtitleClient, SubtitleItem, LocalCandidate, OnlineSubtitle, OwnedSubtitle,
-  SubtitleChoice } from '../common/Subtitles';
+  SubtitleChoice, dedupSubtitles, subSourceLabel } from '../common/Subtitles';
 import { PlayerPrefs, PlayerTuning } from '../common/PlayerPrefs';
 import { BackgroundPlay } from '../common/BackgroundPlay';
 import { PipHub } from '../common/PipHub';
@@ -47,6 +47,11 @@ struct PlayerPage {
   private panKind: string = '';
   private panBase: number = 0;
   private panStartPos: number = 0;
+  private vpW: number = 720;
+  private vpH: number = 360;
+  private brightnessTouched: boolean = false;
+  private lastBrightVal: number = -1;
+  private lastBrightAt: number = 0;
   private win: window.Window | undefined = undefined;
   /** 当前是否已向系统要了「屏幕常亮」：避免同一状态重复调用。 */
   private keepOn: boolean = false;
@@ -67,6 +72,8 @@ struct PlayerPage {
   @Local volume: number = 100;
   @Local bright: number = 0.5;
   @Local seekPreview: number = -1;
+  @Local seekCancel: boolean = false;
+  @Local hudKind: string = '';
   /** 是否显示「缓存中」全屏遮罩：只有真的卡住（>0.4s）才显示。 */
   @Local showBufferOverlay: boolean = false;
   private bufferSince: number = -1;
@@ -217,7 +224,18 @@ struct PlayerPage {
       win.setPreferredOrientation(window.Orientation.LANDSCAPE);
       win.setWindowLayoutFullScreen(true);
       win.setWindowSystemBarEnable([]);
-      win.getWindowProperties();
+      const props = win.getWindowProperties();
+      this.vpW = Math.max(320, px2vp(props.windowRect.width));
+      this.vpH = Math.max(240, px2vp(props.windowRect.height));
+      if (props.brightness >= 0 && props.brightness <= 1) {
+        this.bright = props.brightness;
+      }
+      win.on('windowSizeChange', (sz: window.Size) => {
+        if (sz.width > 0 && sz.height > 0) {
+          this.vpW = px2vp(sz.width);
+          this.vpH = px2vp(sz.height);
+        }
+      });
       // 切后台继续出声（2.6.1.16 / 2.6.1.37）：回到前台就撤掉长时任务
       win.on('windowVisibilityChange', (visible: boolean) => {
         const ctx = getContext(this) as common.UIAbilityContext;
@@ -259,11 +277,17 @@ struct PlayerPage {
     AppStorage.setOrCreate<boolean>('playerActive', false);
     this.win.setWindowLayoutFullScreen(false);
     this.win.setWindowSystemBarEnable(['status', 'navigation']);
-    // 退出播放页：把常亮还回去，否则页面关了屏幕还一直亮着
+    // 退出播放页：把常亮与亮度还回去，否则页面关了屏幕一直亮/卡在旧亮度
     this.keepOn = false;
     this.win.setWindowKeepScreenOn(false).catch((err: BusinessError) => {
       console.info(`[amane] keep screen off: ${err.code} ${err.message}`);
     });
+    if (this.brightnessTouched) {
+      this.win.setWindowBrightness(-1).catch((err: BusinessError) => {
+        console.info(`[amane] reset brightness: ${err.code} ${err.message}`);
+      });
+      this.brightnessTouched = false;
+    }
   }
 
   private async openMedia(): Promise<void> {
@@ -502,7 +526,13 @@ struct PlayerPage {
         this.toast('没有可选的轨道');
         return;
       }
-      const subsList: SubtitleTrack[] = tracks.subs === undefined || tracks.subs === null ? [] : tracks.subs;
+      const rawSubs: SubtitleTrack[] = tracks.subs === undefined || tracks.subs === null ? [] : tracks.subs;
+      const subsList: SubtitleTrack[] = [];
+      for (let i = 0; i < rawSubs.length; i++) {
+        if (rawSubs[i].isUri !== true) {
+          subsList.push(rawSubs[i]);
+        }
+      }
       const audioList: AudioTrack[] = tracks.audio === undefined || tracks.audio === null ? [] : tracks.audio;
       this.subTracks = subsList;
       this.audioTracks = audioList;
@@ -529,7 +559,7 @@ struct PlayerPage {
   }
 
 
-  /** 打开字幕面板时拉取来源，并自动套用上次的选择。 */
+  /** 打开字幕面板时拉取来源，做去重合并；仅在本会话尚未手动选择时恢复上次选择。 */
   private async loadSubSources(): Promise<void> {
     if (this.metaId <= 0) {
       this.subHint = '没有拿到条目 id，无法查询字幕';
@@ -538,12 +568,28 @@ struct PlayerPage {
     this.subBusy = true;
     try {
       const res = await SubtitleClient.list(this.metaId);
-      this.localSubs = res.local === undefined || res.local === null ? [] : res.local;
-      this.extSubs = res.cached === undefined || res.cached === null ? [] : res.cached;
+      const choiceId: string = res.choice !== undefined && res.choice !== null
+        && res.choice.subtitle_id !== undefined && res.choice.subtitle_id !== null
+        ? res.choice.subtitle_id : '';
+      const activeId: string = this.currentSubId.length > 0 ? this.currentSubId : choiceId;
+      const dedup = dedupSubtitles(
+        res.local === undefined || res.local === null ? [] : res.local,
+        res.cached === undefined || res.cached === null ? [] : res.cached,
+        activeId
+      );
+      this.localSubs = dedup.local;
+      this.extSubs = dedup.cached;
       this.subHint = res.hint === undefined || res.hint === null ? '' : res.hint;
-      if (res.choice !== undefined && res.choice !== null && res.choice.subtitle_id.length > 0) {
-        // 面板开着的时候自动套用：**不要收面板**（收了就是「闪关」）
-        this.applySub(res.choice.subtitle_id, false);
+      if (!this.subChosen && choiceId.length > 0 && this.currentSubId !== choiceId) {
+        this.applySub(choiceId, false, false);
+      }
+      if (this.currentSubId.length > 0) {
+        for (let i = 0; i < this.extSubs.length; i++) {
+          if (this.extSubs[i].id === this.currentSubId) {
+            this.currentLocalName = '';
+            break;
+          }
+        }
       }
     } catch (error) {
       console.error(`[amane] subtitles: ${JSON.stringify(error)}`);
@@ -697,25 +743,41 @@ struct PlayerPage {
    * `showPanel` 置 false，用户看到的就是「面板刚打开自己就关了」（2.6.1.7）。
    * `remember`：自动恢复不需要再把同一个值写回服务端。
    */
-  private applySub(id: string, closePanel: boolean = true, remember: boolean = true): void {
+  private applySub(id: string, closePanel: boolean = true, remember: boolean = true,
+    localName: string = ''): void {
     if (closePanel) {
       // 字幕加载与 mpv 解析都在后台，不该把用户卡在面板上
       this.showPanel = false;
     }
     this.currentSubId = id;
-    this.currentSubIndex = -1;
+    this.currentLocalName = localName;
+    this.currentSubIndex = -999;
     this.subChosen = true;
     if (this.player === undefined) {
       return;
     }
     try {
+      const lib = this.player.native;
+      try {
+        lib.command(['sub-remove']);
+      } catch (e) {
+      }
+      try {
+        lib.command(['set', 'sid', 'no']);
+      } catch (e) {
+      }
       const url: string = SubtitleClient.streamUrl(id, true);
       this.player.setSubtitleTrack(SubtitleTrack.uri(url, '', 'chi', 'external'));
+      try {
+        lib.command(['set', 'sub-visibility', 'yes']);
+      } catch (e) {
+      }
       if (remember) {
         SubtitleClient.remember(this.metaId, id).catch(() => {
           // 记住失败不影响播放
         });
       }
+      this.toast('已切换字幕');
     } catch (error) {
       console.error(`[amane] apply sub: ${JSON.stringify(error)}`);
       this.toast('加载字幕失败');
@@ -745,11 +807,10 @@ struct PlayerPage {
   }
 
   private async useLocalSub(name: string): Promise<void> {
-    this.currentLocalName = name;
     this.showPanel = false;
     try {
       const item: SubtitleItem = await SubtitleClient.loadLocal(this.metaId, name);
-      this.applySub(item.id);
+      this.applySub(item.id, true, true, name);
     } catch (error) {
       console.error(`[amane] local sub: ${JSON.stringify(error)}`);
       this.toast('读取同目录字幕失败');
@@ -794,21 +855,40 @@ struct PlayerPage {
   }
 
   private pickSub(index: number): void {
-    if (Date.now() - this.panelOpenedAt < 350) {
+    if (Date.now() - this.panelOpenedAt < 280) {
       return;
     }
     this.showPanel = false;
     this.currentSubIndex = index;
     this.currentSubId = '';
+    this.currentLocalName = '';
     this.subChosen = true;
+    if (this.metaId > 0) {
+      SubtitleClient.remember(this.metaId, '').catch(() => {
+      });
+    }
     if (this.player === undefined) {
       return;
     }
     try {
+      const lib = this.player.native;
+      try {
+        lib.command(['sub-remove']);
+      } catch (e) {
+      }
       if (index < 0) {
         this.player.disableSubtitleTrack();
+        try {
+          lib.command(['set', 'sid', 'no']);
+          lib.command(['set', 'sub-visibility', 'no']);
+        } catch (e) {
+        }
       } else if (index < this.subTracks.length) {
         this.player.setSubtitleTrack(this.subTracks[index]);
+        try {
+          lib.command(['set', 'sub-visibility', 'yes']);
+        } catch (e) {
+        }
       }
       this.toast(index < 0 ? '已关闭字幕' : '已切换字幕');
     } catch (error) {
@@ -980,28 +1060,66 @@ struct PlayerPage {
         })
       }
 
-      // 中央提示
+      // 中央提示（液态玻璃 HUD）
       if (this.seekPreview >= 0) {
-        Text(this.seekPreviewLabel())
-          .fontSize(15)
-          .fontColor('#FFFFFF')
-          .padding({ left: 18, right: 18, top: 10, bottom: 10 })
-          .backgroundColor('#B3000000')
-          .borderRadius(10)
+        Column({ space: 4 }) {
+          Text(this.seekPreviewLabel())
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#FFFFFF')
+            .fontFeature('"tnum" 1')
+          Text(this.seekCancel ? '松手取消跳转' : '上滑取消')
+            .fontSize(10)
+            .fontColor(this.seekCancel ? '#FF8FA0' : '#B3FFFFFF')
+        }
+        .padding({ left: 18, right: 18, top: 10, bottom: 10 })
+        .backgroundColor('#B3100D11')
+        .backdropBlur(24)
+        .border({ width: 0.75, color: this.seekCancel ? '#80FF6B81' : '#33FFFFFF' })
+        .borderRadius(16)
       } else if (this.hint.length > 0) {
         Text(this.hint)
           .fontSize(13)
           .fontColor('#FFFFFF')
           .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-          .backgroundColor('#B3000000')
-          .borderRadius(10)
+          .backgroundColor('#B3100D11')
+          .backdropBlur(22)
+          .border({ width: 0.75, color: '#2EFFFFFF' })
+          .borderRadius(16)
       } else if (this.volumeHint >= 0) {
-        Text(`音量 ${this.volumeHint}%`)
-          .fontSize(13)
-          .fontColor('#FFFFFF')
-          .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-          .backgroundColor('#B3000000')
-          .borderRadius(10)
+        Row({ space: 10 }) {
+          SymbolGlyph(this.hudKind === 'bright'
+            ? $r('sys.symbol.sun_max')
+            : (this.volumeHint === 0 ? $r('sys.symbol.speaker_slash') : $r('sys.symbol.speaker_wave_2')))
+            .fontSize(17)
+            .fontColor([Theme.ACCENT_INK])
+          Stack({ alignContent: Alignment.Start }) {
+            Row()
+              .width(108)
+              .height(4)
+              .borderRadius(2)
+              .backgroundColor('#33FFFFFF')
+            Row()
+              .width(Math.max(4, Math.round(108 * Math.max(0, Math.min(100, this.volumeHint)) / 100)))
+              .height(4)
+              .borderRadius(2)
+              .linearGradient(Theme.ctaGradient())
+          }
+          .width(108)
+          .height(6)
+          Text(`${this.volumeHint}%`)
+            .fontSize(12)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#FFFFFF')
+            .fontFeature('"tnum" 1')
+            .width(36)
+            .textAlign(TextAlign.End)
+        }
+        .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+        .backgroundColor('#B3100D11')
+        .backdropBlur(24)
+        .border({ width: 0.75, color: '#33FFFFFF' })
+        .borderRadius(22)
       }
 
       if (this.showBufferOverlay) {
@@ -1094,28 +1212,48 @@ struct PlayerPage {
                   .maxLines(3)
               }
               ForEach(this.localSubs, (item: LocalCandidate) => {
-                Text(`${this.currentLocalName === item.name ? '✓ ' : ''}同目录 · ${item.name}`)
-                  .fontSize(12)
-                  .fontColor(this.currentLocalName === item.name ? Theme.ACCENT : Theme.TEXT)
-                  .width('100%')
-                  .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .onClick(() => {
-                    this.useLocalSub(item.name);
-                  })
+                Row({ space: 8 }) {
+                  if (this.currentLocalName === item.name && this.currentSubId.length === 0) {
+                    SymbolGlyph($r('sys.symbol.checkmark'))
+                      .fontSize(12)
+                      .fontColor([Theme.ACCENT_INK])
+                  }
+                  Text(`同目录 · ${item.name}`)
+                    .fontSize(12)
+                    .fontColor(this.currentLocalName === item.name ? Theme.ACCENT_INK : Theme.TEXT)
+                    .layoutWeight(1)
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                }
+                .width('100%')
+                .padding({ left: 14, right: 14, top: 9, bottom: 9 })
+                .borderRadius(10)
+                .backgroundColor(this.currentLocalName === item.name ? Theme.accentAlpha(0.18) : '#00000000')
+                .onClick(() => {
+                  this.useLocalSub(item.name);
+                })
               }, (item: LocalCandidate) => `local-${item.name}`)
               ForEach(this.extSubs, (item: SubtitleItem) => {
-                Text(`${this.currentSubId === item.id ? '✓ ' : ''}${item.name} · ${item.source}`)
-                  .fontSize(12)
-                  .fontColor(this.currentLocalName === item.name ? Theme.ACCENT : Theme.TEXT)
-                  .width('100%')
-                  .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .onClick(() => {
-                    this.applySub(item.id);
-                  })
+                Row({ space: 8 }) {
+                  if (this.currentSubId === item.id) {
+                    SymbolGlyph($r('sys.symbol.checkmark'))
+                      .fontSize(12)
+                      .fontColor([Theme.ACCENT_INK])
+                  }
+                  Text(`${subSourceLabel(item.source)} · ${item.name}`)
+                    .fontSize(12)
+                    .fontColor(this.currentSubId === item.id ? Theme.ACCENT_INK : Theme.TEXT)
+                    .layoutWeight(1)
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                }
+                .width('100%')
+                .padding({ left: 14, right: 14, top: 9, bottom: 9 })
+                .borderRadius(10)
+                .backgroundColor(this.currentSubId === item.id ? Theme.accentAlpha(0.18) : '#00000000')
+                .onClick(() => {
+                  this.applySub(item.id);
+                })
               }, (item: SubtitleItem) => `ext-${item.id}`)
               // ---- 在线搜索：按番号查几个源，点一条就下载并切过去 ----
               Row({ space: 8 }) {
@@ -1321,44 +1459,101 @@ struct PlayerPage {
             this.toast(this.playing ? '播放' : '暂停');
           }),
         PanGesture({ direction: PanDirection.Horizontal })
-          .onActionStart(() => {
+          .onActionStart((event: GestureEvent) => {
+            if (this.duration <= 0) {
+              this.panKind = '';
+              return;
+            }
+            const w: number = Math.max(320, this.vpW);
+            const x: number = event.fingerList.length > 0 ? event.fingerList[0].localX : w / 2;
+            if (x < 24 || x > w - 24) {
+              this.panKind = '';
+              return;
+            }
             this.panKind = 'seek';
             this.panStartPos = this.pos;
             this.seekPreview = this.pos;
+            this.seekCancel = false;
           })
           .onActionUpdate((event: GestureEvent) => {
             if (this.panKind === 'seek') {
-              const delta: number = event.offsetX / 400 * Math.min(this.duration, 600);
+              const w: number = Math.max(320, this.vpW);
+              const span: number = Math.min(this.duration, Math.min(Math.max(this.duration * 0.25, 90), 240));
+              const delta: number = (event.offsetX / w) * span;
               this.seekPreview = Math.max(0, Math.min(this.duration, this.panStartPos + delta));
+              if (event.offsetY < -56) {
+                this.seekCancel = true;
+              } else if (event.offsetY > -40) {
+                this.seekCancel = false;
+              }
             }
           })
           .onActionEnd(() => {
             if (this.panKind === 'seek' && this.seekPreview >= 0) {
-              this.seekTo(this.seekPreview);
+              if (this.seekCancel) {
+                this.toast('已取消跳转');
+              } else {
+                this.seekTo(this.seekPreview);
+              }
             }
             this.panKind = '';
             this.seekPreview = -1;
+            this.seekCancel = false;
           }),
         PanGesture({ direction: PanDirection.Vertical })
           .onActionStart((event: GestureEvent) => {
-            if (event.fingerList.length > 0 && event.fingerList[0].localX > 300) {
+            const w: number = Math.max(320, this.vpW);
+            const x: number = event.fingerList.length > 0 ? event.fingerList[0].localX : w / 2;
+            const y: number = event.fingerList.length > 0 ? event.fingerList[0].localY : 60;
+            if (x < 24 || x > w - 24 || y < 20) {
+              this.panKind = '';
+              return;
+            }
+            if (x > w / 2) {
               this.panKind = 'volume';
+              this.hudKind = 'volume';
               this.panBase = this.volume;
             } else {
               this.panKind = 'bright';
+              this.hudKind = 'bright';
+              if (this.win !== undefined) {
+                try {
+                  const b: number = this.win.getWindowProperties().brightness;
+                  if (b >= 0 && b <= 1) {
+                    this.bright = b;
+                  }
+                } catch (e) {
+                }
+              }
               this.panBase = this.bright * 100;
             }
           })
           .onActionUpdate((event: GestureEvent) => {
-            const delta: number = -event.offsetY / 3;
+            if (this.panKind !== 'volume' && this.panKind !== 'bright') {
+              return;
+            }
+            const rawY: number = event.offsetY;
+            if (Math.abs(rawY) < 10) {
+              return;
+            }
+            const effY: number = rawY > 0 ? rawY - 10 : rawY + 10;
+            const span: number = Math.max(220, this.vpH * 0.72);
+            const delta: number = (-effY / span) * 100;
             if (this.panKind === 'volume') {
               this.volume = Math.max(0, Math.min(100, this.panBase + delta));
               this.applyVolume(this.volume);
               this.volumeHint = Math.round(this.volume);
             } else if (this.panKind === 'bright') {
-              this.bright = Math.max(0.05, Math.min(1, (this.panBase + delta) / 100));
-              if (this.win !== undefined) {
-                this.win.setWindowBrightness(this.bright).catch((err: BusinessError) => {
+              const nextBright: number = Math.max(0.02, Math.min(1.0, (this.panBase + delta) / 100));
+              this.bright = nextBright;
+              this.brightnessTouched = true;
+              const now: number = Date.now();
+              if (this.win !== undefined && (this.lastBrightVal < 0
+                || Math.abs(nextBright - this.lastBrightVal) >= 0.015
+                || now - this.lastBrightAt >= 28)) {
+                this.lastBrightVal = nextBright;
+                this.lastBrightAt = now;
+                this.win.setWindowBrightness(nextBright).catch((err: BusinessError) => {
                   console.error(`[amane] brightness: ${err.code} ${err.message}`);
                 });
               }
@@ -1366,7 +1561,12 @@ struct PlayerPage {
             }
           })
           .onActionEnd(() => {
+            if (this.panKind === 'bright' && this.win !== undefined) {
+              this.win.setWindowBrightness(this.bright).catch(() => {
+              });
+            }
             this.panKind = '';
+            this.hudKind = '';
             this.volumeHint = -1;
           })
       )

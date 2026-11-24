@@ -73,15 +73,16 @@ export struct BannerRow {
           Row({ space: 6 }) {
             Text(this.title)
               .fontSize(17)
-              .fontWeight(FontWeight.Medium)
+              .fontWeight(FontWeight.Bold)
               .fontColor(Theme.TEXT)
             // 2.6.1.30：和顶部「随手翻到」区分开 —— 这一行是当天固定的那批
             Text('每天固定')
               .fontSize(9)
-              .fontColor(Theme.TEXT_FAINT)
-              .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+              .fontColor(Theme.TEXT_DIM)
+              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
               .backgroundColor(Theme.CARD_HI)
-              .borderRadius(4)
+              .border({ width: 0.5, color: '#24FFFFFF' })
+              .borderRadius(8)
           }
           if (this.subtitle.length > 0) {
             Text(this.subtitle)
@@ -99,10 +100,12 @@ export struct BannerRow {
         if (this.whyLabel.length > 0) {
           Text(this.whyLabel)
             .fontSize(10)
-            .fontColor(Theme.ACCENT)
-            .padding({ left: 9, right: 9, top: 5, bottom: 5 })
-            .backgroundColor(Theme.CARD_HI)
-            .borderRadius(9)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Theme.ACCENT_INK)
+            .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+            .backgroundColor(Theme.accentAlpha(0.14))
+            .border({ width: 0.5, color: Theme.inkAlpha(0.34) })
+            .borderRadius(12)
             .margin({ right: 8 })
             .onClick(() => {
               this.onWhy();
@@ -173,6 +176,7 @@ export struct BannerRow {
             .width(this.widthOf(item))
             .height(BannerRow.CARD_H)
             .borderRadius(Theme.RADIUS)
+            .border({ width: 0.75, color: Theme.STROKE })
             .clip(true)
             .backgroundColor(Theme.CARD)
             .onClick(() => {

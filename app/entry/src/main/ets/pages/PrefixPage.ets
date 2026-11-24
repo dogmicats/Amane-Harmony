@@ -179,7 +179,7 @@ struct PrefixPage {
         }
         Blank()
         GlassCapsule({
-          label: `⇅ ${this.sortLabel()}`,
+          label: `${this.sortLabel()}`,
           fs: 12,
           padH: 11,
           padV: 7,
@@ -191,7 +191,7 @@ struct PrefixPage {
           }
         })
         GlassCapsule({
-          label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+          label: this.filterCount() > 0 ? `筛选 ${this.filterCount()}` : '筛选',
           active: this.filterCount() > 0,
           fs: 12,
           padH: 11,
@@ -324,7 +324,8 @@ struct PrefixPage {
             .rowsGap(14)
             .width('100%')
             .layoutWeight(1)
-            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6, bottom: Theme.BOTTOM_SAFE })
+            .cachedCount(6)
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6, bottom: Theme.pageBottomSafe() })
             .scrollBar(BarState.Off)
           }
         }

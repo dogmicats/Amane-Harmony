@@ -10,17 +10,11 @@ import { HomeData, HomeRow } from '../common/Types';
 import { safeHome } from '../common/Safe';
 import { Reason } from '../common/Reason';
 import { PoolFilterCard } from '../view/PoolFilterCard';
-import { GlassCapsule, NavHeader } from '../view/GlassKit';
+import { GlassBack, GlassCapsule, PageTitle } from '../view/GlassKit';
+import {
+  SettingsAmbientGlow, SettingsRowDivider, SettingsSectionTitle, VelvetChip
+} from '../view/SettingsKit';
 
-/**
- * 首页内容（2.5.2）：哪几行显示、从上到下怎么排。
- *
- * 只列「横排 / 卡片」，顶部大图（Hero）固定在第一屏，不参与排序 ——
- * 它决定进 App 的第一眼观感，关掉会得到一个空荡荡的首页。
- *
- * 存的是键名（`cast` / `continue` / `banner` / `row:<库 id>`），
- * 媒体库改名或换顺序都不影响已存的偏好；新出现的库追加在末尾并默认打开。
- */
 interface RowEntry {
   key: string;
   title: string;
@@ -34,14 +28,13 @@ struct SettingsHomePage {
   @State entries: RowEntry[] = [];
   @State loading: boolean = true;
   @State error: string = '';
-  /** 每次改动 +1，让它当 ForEach 的 key 一部分：顺序一变就整段重建，不会串行。 */
   @State rev: number = 0;
   @State reasonOn: boolean = true;
-  /** 顶部大图候选池（自由条件，2026-11-14）：媒体库 + 状态 + 年份 + 标签 + 演员。 */
   @State heroPool: string = 'all';
-  /** 每日推荐取向（服务端 data/daily.json；taste / balanced / explore）。 */
   @State dailyPreset: string = 'balanced';
   @State dailyNote: string = '';
+  @StorageProp('amaneTopInset') topInset: number = 30;
+  private navStack: NavPathStack = new NavPathStack();
 
   aboutToAppear(): void {
     this.reasonOn = Reason.enabled();
@@ -49,7 +42,6 @@ struct SettingsHomePage {
     this.load();
   }
 
-  /** 读回服务端当前取向（老服务端没有这个端点 → 保持默认，不打扰）。 */
   private loadDaily(): void {
     httpGet(`${Store.I.user}/api/user/daily`, Store.I.token)
       .then((text: string) => {
@@ -68,24 +60,11 @@ struct SettingsHomePage {
     this.dailyPreset = name;
     httpPut(`${Store.I.user}/api/user/daily`, Store.I.token, JSON.stringify({ preset: name }))
       .then(() => {
-        this.dailyNote = '已记下，回首页下拉一次就是新的一批';
+        this.dailyNote = '已记下，回首页下拉刷新即可生效';
       })
       .catch((err: BusinessError) => {
-        this.dailyNote = `没存上（${err.code}）`;
+        this.dailyNote = `保存失败（${err.code}）`;
       });
-  }
-
-  @Builder
-  DailyChip(key: string, label: string) {
-    Text(label)
-      .fontSize(12)
-      .fontColor(this.dailyPreset === key ? '#FFFFFF' : Theme.TEXT_DIM)
-      .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-      .backgroundColor(this.dailyPreset === key ? Theme.ACCENT : Theme.CARD_HI)
-      .borderRadius(13)
-      .onClick(() => {
-        this.setDaily(key);
-      })
   }
 
   private async load(): Promise<void> {
@@ -99,19 +78,17 @@ struct SettingsHomePage {
     } catch (error) {
       const err = error as BusinessError;
       console.error(`[amane] home rows: ${err.code} ${err.message}`);
-      // 拿不到首页也让人能看见已有偏好，别显示空白页
       const saved: HomeRowPref[] = Personalize.loadRows();
       const fallback: RowEntry[] = [];
       for (let i = 0; i < saved.length; i++) {
         fallback.push({ key: saved[i].key, title: this.titleOf(saved[i].key), desc: '', on: saved[i].on });
       }
       this.entries = fallback;
-      this.error = '读不到首页数据（用已保存的设置）。连上服务器再进来可看到最新列表。';
+      this.error = '暂未连上服务器，当前显示已保存设置。';
       this.loading = false;
     }
   }
 
-  /** 服务端这次真给了哪些行（顺序即服务端默认顺序）。 */
   private baseEntries(home: HomeData): RowEntry[] {
     const out: RowEntry[] = [];
     if (BuildConfig.ENABLE_ACTORS) {
@@ -120,13 +97,13 @@ struct SettingsHomePage {
     out.push({
       key: 'continue',
       title: '继续观看',
-      desc: home.continue.length > 0 ? `${home.continue.length} 部看到一半` : '暂时没有未看完的',
+      desc: home.continue.length > 0 ? `${home.continue.length} 部未看完` : '暂无未看完',
       on: true
     });
     out.push({
       key: 'banner',
       title: '每日推荐',
-      desc: '每天换一批的高清横幅',
+      desc: '每天固定一批横幅',
       on: true
     });
     for (let i = 0; i < home.rows.length; i++) {
@@ -136,7 +113,6 @@ struct SettingsHomePage {
     return out;
   }
 
-  /** 按已存偏好重排 + 套用开关；偏好里没有的新键追加在末尾、默认打开。 */
   private compose(base: RowEntry[]): RowEntry[] {
     const saved: HomeRowPref[] = Personalize.loadRows();
     const known: Map<string, boolean> = new Map<string, boolean>();
@@ -224,36 +200,63 @@ struct SettingsHomePage {
   }
 
   @Builder
-  Header() {
-    // 四十一改：二级页标准头（返回胶囊 + 标题 + 说明 + 右侧玻璃胶囊）
-    NavHeader({
-      title: '首页内容',
-      subtitle: '哪几行显示、从上到下怎么排；顶部大图取自哪里（刷一刷的范围在「设置 → 刷一刷」）',
-      padTop: 6
-    }) {
-      GlassCapsule({
-        label: '恢复默认',
-        fs: 12,
-        padH: 11,
-        padV: 6,
-        radius: 12,
-        onTap: () => {
-          this.resetAll();
-        }
-      })
+  TitleBar() {
+    Column() {
+      Row({ space: 10 }) {
+        GlassBack({
+          mat: true,
+          onTap: () => {
+            router.back();
+          }
+        })
+        PageTitle({ text: '首页内容', fs: 18 })
+        Blank()
+        GlassCapsule({
+          label: '恢复默认',
+          fs: 12,
+          padH: 12,
+          padV: 6,
+          radius: 16,
+          mat: true,
+          onTap: () => {
+            this.resetAll();
+          }
+        })
+      }
+      .height(46)
+      .alignItems(VerticalAlign.Center)
+      .width('100%')
+      .padding({ left: 8, right: Theme.PAGE_PAD })
     }
+    .width('100%')
+    .height('100%')
+    .padding({ top: this.topInset })
+  }
+
+  private barH(): number {
+    return this.topInset + 46;
+  }
+
+  private titleConfig(): NavigationCustomTitle {
+    return {
+      builder: () => {
+        this.TitleBar();
+      },
+      height: 46 + this.topInset
+    };
   }
 
   @Builder
   RowItem(e: RowEntry, index: number) {
-    Row({ space: 10 }) {
-      Column({ space: 3 }) {
+    Row({ space: 8 }) {
+      Column({ space: 2 }) {
         Text(e.title)
-          .fontSize(15)
+          .fontSize(14.5)
+          .fontWeight(FontWeight.Medium)
           .fontColor(e.on ? Theme.TEXT : Theme.TEXT_FAINT)
         if (e.desc.length > 0) {
           Text(e.desc)
-            .fontSize(10)
+            .fontSize(11)
             .fontColor(Theme.TEXT_FAINT)
             .maxLines(1)
         }
@@ -261,36 +264,39 @@ struct SettingsHomePage {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
 
-      Text('↑')
-        .fontSize(15)
-        .fontColor(index === 0 ? Theme.TEXT_FAINT : Theme.TEXT_DIM)
-        .width(32)
-        .height(32)
-        .textAlign(TextAlign.Center)
-        .backgroundColor(Theme.CARD_HI)
-        .borderRadius(9)
-        .opacity(index === 0 ? 0.35 : 1)
-        .onClick(() => {
-          this.move(index, -1);
-        })
+      Stack() {
+        SymbolGlyph($r('sys.symbol.arrow_up'))
+          .fontSize(13)
+          .fontColor([index === 0 ? Theme.TEXT_FAINT : Theme.TEXT_DIM])
+      }
+      .width(30)
+      .height(30)
+      .backgroundColor(Theme.CARD_HI)
+      .border({ width: 0.5, color: '#16FFFFFF' })
+      .borderRadius(9)
+      .opacity(index === 0 ? 0.35 : 1)
+      .onClick(() => {
+        this.move(index, -1);
+      })
 
-      Text('↓')
-        .fontSize(15)
-        .fontColor(index === this.entries.length - 1 ? Theme.TEXT_FAINT : Theme.TEXT_DIM)
-        .width(32)
-        .height(32)
-        .textAlign(TextAlign.Center)
-        .backgroundColor(Theme.CARD_HI)
-        .borderRadius(9)
-        .opacity(index === this.entries.length - 1 ? 0.35 : 1)
-        .onClick(() => {
-          this.move(index, 1);
-        })
+      Stack() {
+        SymbolGlyph($r('sys.symbol.arrow_down'))
+          .fontSize(13)
+          .fontColor([index === this.entries.length - 1 ? Theme.TEXT_FAINT : Theme.TEXT_DIM])
+      }
+      .width(30)
+      .height(30)
+      .backgroundColor(Theme.CARD_HI)
+      .border({ width: 0.5, color: '#16FFFFFF' })
+      .borderRadius(9)
+      .opacity(index === this.entries.length - 1 ? 0.35 : 1)
+      .onClick(() => {
+        this.move(index, 1);
+      })
 
       Toggle({ type: ToggleType.Switch, isOn: e.on })
         .selectedColor(Theme.ACCENT)
         .onChange((isOn: boolean) => {
-          // 只在用户真改了才写回：程序化刷新也会触发 onChange
           if (isOn !== e.on) {
             this.toggle(index);
           }
@@ -300,141 +306,185 @@ struct SettingsHomePage {
     .padding({ left: 14, right: 14, top: 11, bottom: 11 })
   }
 
-  /** 七十二改：这页没有状态栏让位逻辑，**显式退回非全屏窗口** —— 
-   * 否则从全屏的二级页推过来，标题会被时钟压住。入口是谁都不怕。 */
   onPageShow(): void {
-    setPageFullScreen(getContext(this), false);
+    setPageFullScreen(getContext(this), true);
   }
 
   build() {
-    Column() {
-      this.Header()
+    Navigation(this.navStack) {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
 
-      if (this.loading) {
-        Column({ space: 12 }) {
-          LoadingProgress()
-            .width(26)
-            .height(26)
-            .color(Theme.ACCENT)
-          Text('正在读首页结构…')
-            .fontSize(12)
-            .fontColor(Theme.TEXT_FAINT)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        Scroll() {
-          Column({ space: 14 }) {
-            if (this.error.length > 0) {
-              Text(this.error)
-                .fontSize(11)
-                .fontColor(Theme.GOLD)
-                .width('100%')
-                .padding(12)
-                .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-                .backgroundColor('#1FFFFFFF')
-                .border({ width: 0.5, color: '#33FFFFFF' })
-                .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
-                .borderRadius(12)
-            }
-
-            // 候选范围编辑卡（2026-11-15 抽成组件）：实现与「刷一刷」共用，
-            // 但各自存自己的偏好 —— 这里只编辑顶部大图那一套（hero_pool_spec）。
-            PoolFilterCard({
-              specKey: 'hero_pool_spec',
-              presetKey: 'hero_pool',
-              title: '顶部大图从哪儿挑',
-              hint: '按下面的条件组合出候选范围；都不选 = 全库。刷一刷有自己的一套，在「设置 → 刷一刷」里。',
-              onChanged: () => {
-                // 范围变了：首页聚合缓存作废，回首页下拉即可看到新的一批
-                Store.I.prefSetString('home_pool_rev', `${Date.now()}`);
-              }
-            })
-
-            Column({ space: 1 }) {
-              ForEach(this.entries, (e: RowEntry, index: number) => {
-                this.RowItem(e, index)
-              }, (e: RowEntry) => `${e.key}-${this.rev}`)
-            }
-            .width('100%')
-            .backgroundColor(Theme.CARD)
-            .borderRadius(14)
-            .clip(true)
-
-            Column({ space: 8 }) {
-              Row({ space: 10 }) {
-                Column({ space: 3 }) {
-                  Text('每日推荐理由')
-                    .fontSize(15)
-                    .fontColor(Theme.TEXT)
-                  Text('行头显示今日一句话；点「推荐理由」看整批，今天上榜的片子详情页里也能看到')
-                    .fontSize(10)
-                    .fontColor(Theme.TEXT_FAINT)
-                }
-                .alignItems(HorizontalAlign.Start)
-                .layoutWeight(1)
-
-                Toggle({ type: ToggleType.Switch, isOn: this.reasonOn })
-                  .selectedColor(Theme.ACCENT)
-                  .onChange((isOn: boolean) => {
-                    this.reasonOn = isOn;
-                    Reason.setEnabled(isOn);
-                  })
-              }
-              .width('100%')
-              .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-            }
-            .width('100%')
-            .backgroundColor(Theme.CARD)
-            .borderRadius(14)
-
-            // 每日推荐的「取向」（2026-11-15）：只给三个方向，不列内部理由与比例 ——
-            // 理由类别会持续新增、配比也会跟着调，写死在界面上必然过时。
-            Column({ space: 8 }) {
-              Column({ space: 3 }) {
-                Text('每日推荐的取向')
-                  .fontSize(15)
-                  .fontColor(Theme.TEXT)
-                Text('每天的推荐是几种理由混着来的；这里只调「偏熟悉 / 偏新鲜」的方向')
-                  .fontSize(10)
-                  .fontColor(Theme.TEXT_FAINT)
-              }
-              .alignItems(HorizontalAlign.Start)
-              .width('100%')
-
-              Row({ space: 8 }) {
-                this.DailyChip('taste', '更懂我')
-                this.DailyChip('balanced', '均衡')
-                this.DailyChip('explore', '多惊喜')
-              }
-              .width('100%')
-
-              if (this.dailyNote.length > 0) {
-                Text(this.dailyNote)
-                  .fontSize(10)
-                  .fontColor(Theme.ACCENT)
-                  .width('100%')
-              }
-            }
-            .width('100%')
-            .padding(14)
-            .backgroundColor(Theme.CARD)
-            .borderRadius(14)
-
-            Text('顶部大图固定在第一屏，不在这里；关掉的行首页就不显示，顺序即从上到下。改完直接回首页看，不用重启。')
-              .fontSize(10)
+        if (this.loading) {
+          Column({ space: 12 }) {
+            LoadingProgress()
+              .width(26)
+              .height(26)
+              .color(Theme.ACCENT_INK)
+            Text('正在读取首页结构…')
+              .fontSize(12)
               .fontColor(Theme.TEXT_FAINT)
-              .width('100%')
           }
           .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+          .height('100%')
+          .justifyContent(FlexAlign.Center)
+        } else {
+          Scroll() {
+            Column({ space: 14 }) {
+              Blank().height(this.barH() + 6)
+
+              if (this.error.length > 0) {
+                Text(this.error)
+                  .fontSize(11)
+                  .fontColor(Theme.GOLD)
+                  .width('100%')
+                  .padding(12)
+                  .backgroundColor('#1FFFD06B')
+                  .border({ width: 0.5, color: '#40FFD06B' })
+                  .borderRadius(12)
+              }
+
+              PoolFilterCard({
+                specKey: 'hero_pool_spec',
+                presetKey: 'hero_pool',
+                title: '顶部大图挑片范围',
+                hint: '不选条件则从全库随机挑片（与刷一刷独立）',
+                onChanged: () => {
+                  Store.I.prefSetString('home_pool_rev', `${Date.now()}`);
+                }
+              })
+
+              // 首页分区排序与开关
+              Column({ space: 8 }) {
+                SettingsSectionTitle({ title: '分区顺序与显隐' })
+                Column() {
+                  ForEach(this.entries, (e: RowEntry, index: number) => {
+                    Column() {
+                      if (index > 0) {
+                        SettingsRowDivider({ indent: 14 })
+                      }
+                      this.RowItem(e, index)
+                    }
+                    .width('100%')
+                  }, (e: RowEntry) => `${e.key}-${this.rev}`)
+                }
+                .width('100%')
+                .backgroundColor(Theme.CARD)
+                .borderRadius(18)
+                .border({ width: 0.75, color: Theme.STROKE })
+                .clip(true)
+              }
+              .width('100%')
+
+              // 每日推荐设置合并为一张卡
+              Column({ space: 8 }) {
+                SettingsSectionTitle({ title: '每日推荐' })
+                Column() {
+                  Row({ space: 10 }) {
+                    Column({ space: 2 }) {
+                      Text('展示推荐理由')
+                        .fontSize(14.5)
+                        .fontWeight(FontWeight.Medium)
+                        .fontColor(Theme.TEXT)
+                      Text('在每日推荐与详情页显示推荐短句')
+                        .fontSize(11)
+                        .fontColor(Theme.TEXT_FAINT)
+                    }
+                    .alignItems(HorizontalAlign.Start)
+                    .layoutWeight(1)
+
+                    Toggle({ type: ToggleType.Switch, isOn: this.reasonOn })
+                      .selectedColor(Theme.ACCENT)
+                      .onChange((isOn: boolean) => {
+                        this.reasonOn = isOn;
+                        Reason.setEnabled(isOn);
+                      })
+                  }
+                  .width('100%')
+                  .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+
+                  SettingsRowDivider({ indent: 14 })
+
+                  Column({ space: 10 }) {
+                    Column({ space: 2 }) {
+                      Text('推荐取向')
+                        .fontSize(14.5)
+                        .fontWeight(FontWeight.Medium)
+                        .fontColor(Theme.TEXT)
+                      Text('调节每日推荐偏熟悉还是偏新鲜')
+                        .fontSize(11)
+                        .fontColor(Theme.TEXT_FAINT)
+                    }
+                    .alignItems(HorizontalAlign.Start)
+                    .width('100%')
+
+                    Row({ space: 8 }) {
+                      VelvetChip({
+                        label: '更懂我',
+                        active: this.dailyPreset === 'taste',
+                        onTap: () => {
+                          this.setDaily('taste');
+                        }
+                      })
+                      VelvetChip({
+                        label: '均衡',
+                        active: this.dailyPreset === 'balanced',
+                        onTap: () => {
+                          this.setDaily('balanced');
+                        }
+                      })
+                      VelvetChip({
+                        label: '多惊喜',
+                        active: this.dailyPreset === 'explore',
+                        onTap: () => {
+                          this.setDaily('explore');
+                        }
+                      })
+                    }
+                    .width('100%')
+
+                    if (this.dailyNote.length > 0) {
+                      Text(this.dailyNote)
+                        .fontSize(10.5)
+                        .fontColor(Theme.ACCENT_INK)
+                        .width('100%')
+                    }
+                  }
+                  .width('100%')
+                  .padding(14)
+                }
+                .width('100%')
+                .backgroundColor(Theme.CARD)
+                .borderRadius(18)
+                .border({ width: 0.75, color: Theme.STROKE })
+                .clip(true)
+              }
+              .width('100%')
+
+              Text('顶部大图固定置顶，调整后返回首页即刻生效。')
+                .fontSize(10.5)
+                .fontColor(Theme.TEXT_FAINT)
+                .width('100%')
+                .padding({ left: 4 })
+            }
+            .width('100%')
+            .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.pageBottomSafe() })
+          }
+          .width('100%')
+          .height('100%')
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring)
         }
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
       }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .title(this.titleConfig(), { barStyle: BarStyle.STACK })
     .width('100%')
     .height('100%')
     .backgroundColor(Theme.BG)

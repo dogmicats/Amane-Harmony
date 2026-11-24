@@ -4,6 +4,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 import {
   CollectionInfo, CollectionCreateResult, createCollection, deleteCollection,
   fetchCollections, renameCollection
@@ -129,7 +130,7 @@ struct CollectionsPage {
             })
           Text('保存')
             .fontSize(12)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .padding({ left: 12, right: 12, top: 6, bottom: 6 })
             .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
             .backgroundColor(Theme.accentAlpha(0.30))
@@ -226,9 +227,10 @@ struct CollectionsPage {
         Blank()
         Text('＋ 新建')
           .fontSize(12)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
           .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          .backgroundColor(Theme.ACCENT_SOFT)
+          .backgroundColor(Theme.accentAlpha(0.16))
+            .border({ width: 0.5, color: Theme.inkAlpha(0.38) })
           .borderRadius(10)
           .onClick(() => {
             this.creating = !this.creating;
@@ -266,7 +268,9 @@ struct CollectionsPage {
 
   build() {
     Navigation(this.navStack) {
-      Column() {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
+        Column() {
 
   // 六十改：让出浮层标题栏的高度
   Blank().height(this.barH())
@@ -286,7 +290,7 @@ struct CollectionsPage {
               })
             Text(this.busy ? '…' : '创建')
               .fontSize(12)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
               .padding({ left: 14, right: 14, top: 8, bottom: 8 })
               .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
               .backgroundColor(Theme.accentAlpha(0.30))
@@ -320,9 +324,9 @@ struct CollectionsPage {
           .justifyContent(FlexAlign.Center)
         } else if (this.lists.length === 0) {
           Column({ space: 10 }) {
-            Text('☰')
-              .fontSize(30)
-              .fontColor(Theme.TEXT_FAINT)
+            SymbolGlyph($r('sys.symbol.list_bullet'))
+              .fontSize(28)
+              .fontColor([Theme.TEXT_FAINT])
             Text('还没有清单')
               .fontSize(14)
               .fontColor(Theme.TEXT_DIM)
@@ -344,15 +348,20 @@ struct CollectionsPage {
             }
             .width('100%')
             .backgroundColor(Theme.CARD)
-            .borderRadius(14)
+            .borderRadius(16)
+            .border({ width: 0.75, color: Theme.STROKE })
             .clip(true)
             .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
           }
           .layoutWeight(1)
           .scrollBar(BarState.Off)
           .align(Alignment.Top)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.pageBottomSafe() })
         }
+      }
+      .width('100%')
+      .height('100%')
+
       }
       .width('100%')
       .height('100%')

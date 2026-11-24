@@ -20,7 +20,7 @@ export struct GachaSwitch {
 
   build() {
     GlassCapsule({
-      label: this.on ? '❖ 抽卡中' : '❖ 抽卡',
+      label: this.on ? '抽卡中' : '抽卡',
       active: this.on,
       mat: this.mat,
       fs: 12,

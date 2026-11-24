@@ -10,6 +10,7 @@ import { Theme } from '../common/Theme';
 import { DetailParams } from '../common/Types';
 import { clock } from '../common/Util';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 
 /**
  * 我的截帧（R25 管理页）。
@@ -308,7 +309,7 @@ struct FramePicksPage {
         Row({ space: 8 }) {
           Text(it.still ? '已进剧照' : '设为剧照')
             .fontSize(9)
-            .fontColor(it.still ? Theme.ACCENT : Theme.TEXT_DIM)
+            .fontColor(it.still ? Theme.ACCENT_INK : Theme.TEXT_DIM)
             .padding({ left: 6, right: 6, top: 2, bottom: 2 })
             .backgroundColor(it.still ? Theme.ACCENT_SOFT : Theme.CARD_HI)
             .borderRadius(6)
@@ -322,9 +323,10 @@ struct FramePicksPage {
           } else {
             Text('存到相册')
               .fontSize(9)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
               .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-              .backgroundColor(Theme.ACCENT_SOFT)
+              .backgroundColor(Theme.accentAlpha(0.16))
+            .border({ width: 0.5, color: Theme.inkAlpha(0.38) })
               .borderRadius(6)
               .onClick(() => {
                 this.saveOne(it);
@@ -370,9 +372,10 @@ struct FramePicksPage {
         Blank()
         Text('抽一张')
           .fontSize(11)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
           .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-          .backgroundColor(Theme.ACCENT_SOFT)
+          .backgroundColor(Theme.accentAlpha(0.16))
+            .border({ width: 0.5, color: Theme.inkAlpha(0.38) })
           .borderRadius(9)
           .margin({ right: 8 })
           .onClick(() => {
@@ -419,7 +422,9 @@ struct FramePicksPage {
 
   build() {
     Navigation(this.navStack) {
-      Column() {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
+        Column() {
 
   // 六十改：让出浮层标题栏的高度
   Blank().height(this.barH())
@@ -450,12 +455,13 @@ struct FramePicksPage {
         .padding(12)
         .margin({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: 8 })
         .backgroundColor(Theme.CARD)
-        .borderRadius(12)
+        .borderRadius(16)
+        .border({ width: 0.75, color: Theme.STROKE })
 
         if (this.note.length > 0) {
           Text(this.note)
             .fontSize(10)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .padding({ left: Theme.PAGE_PAD, bottom: 4 })
             .width('100%')
         }
@@ -501,9 +507,13 @@ struct FramePicksPage {
           }
           .width('100%')
           .layoutWeight(1)
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.pageBottomSafe() })
           .scrollBar(BarState.Off)
         }
+      }
+      .width('100%')
+      .height('100%')
+
       }
       .width('100%')
       .height('100%')

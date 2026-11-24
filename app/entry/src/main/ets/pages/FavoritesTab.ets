@@ -366,7 +366,7 @@ export struct FavoritesTab {
         // 它们原来长在内容区（排序/筛选是 ListToolbar 一条、抽卡在标题行），
         // 那几条不透明的底把海报挡在下面，影片段永远做不到真全屏。
         GlassCapsule({
-          label: `⇅ ${this.sortLabel()}`,
+          label: `${this.sortLabel()}`,
           fs: 12,
           padH: 11,
           padV: 7,
@@ -380,7 +380,7 @@ export struct FavoritesTab {
           }
         })
         GlassCapsule({
-          label: this.filterCount() > 0 ? `⚙ 筛选 ${this.filterCount()}` : '⚙ 筛选',
+          label: this.filterCount() > 0 ? `筛选 ${this.filterCount()}` : '筛选',
           active: this.filterCount() > 0,
           fs: 12,
           padH: 11,
@@ -429,13 +429,13 @@ export struct FavoritesTab {
           .width(16)
           .height(16)
           .objectFit(ImageFit.Contain)
-          .fillColor(this.favGrid ? '#66FFFFFF' : Theme.ACCENT)
+          .fillColor(this.favGrid ? '#66FFFFFF' : Theme.ACCENT_INK)
           .draggable(false)
         Image($r('app.media.ic_view_grid'))
           .width(16)
           .height(16)
           .objectFit(ImageFit.Contain)
-          .fillColor(this.favGrid ? Theme.ACCENT : '#66FFFFFF')
+          .fillColor(this.favGrid ? Theme.ACCENT_INK : '#66FFFFFF')
           .draggable(false)
       }
       .height(34)
@@ -461,7 +461,7 @@ export struct FavoritesTab {
           Text(s.label)
             .fontSize(15)
             .fontWeight(this.seg === s.key ? FontWeight.Medium : FontWeight.Normal)
-            .fontColor(this.seg === s.key ? Theme.ACCENT : '#C4FFFFFF')
+            .fontColor(this.seg === s.key ? Theme.ACCENT_INK : '#C4FFFFFF')
             // 与顶栏文字同一条可读性判据：亮海报压上来时白字要有自己的暗边
             .textShadow({ radius: 8, color: '#80000000', offsetX: 0, offsetY: 1 })
             .onClick(() => {
@@ -478,7 +478,7 @@ export struct FavoritesTab {
                 this.seg = s.key;
               }
             })
-        }, (s: FavSeg) => `seg-${s.key}`)
+        }, (s: FavSeg) => `seg-${s.key}-${this.seg === s.key ? 1 : 0}`)
       }
       // 右边 22：让「系列」离圆角远一点（14 时笔画已经咬进弧线里了）
       .padding({ left: 14, right: 22 })
@@ -922,12 +922,16 @@ export struct FavoritesTab {
                   if (item.marks !== undefined && item.marks !== null && item.marks.length > 0) {
                     MarkBadges({ marks: item.marks, max: 2, badgeSize: 8, fill: 'dark' })
                   }
-                  Text('♥')
-                    .fontSize(13)
-                    .fontColor(Theme.ACCENT)
-                    .padding({ left: 5, right: 5, top: 1, bottom: 1 })
-                    .backgroundColor('#99000000')
-                    .borderRadius(10)
+                  Stack() {
+                    SymbolGlyph($r('sys.symbol.heart_fill'))
+                      .fontSize(11)
+                      .fontColor([Theme.ACCENT_INK])
+                  }
+                  .width(20)
+                  .height(18)
+                  .backgroundColor('#99000000')
+                  .border({ width: 0.5, color: Theme.inkAlpha(0.35) })
+                  .borderRadius(9)
                 }
                 .margin(5)
               }
@@ -960,6 +964,8 @@ export struct FavoritesTab {
       // 海报才能钻进两行玻璃底下 —— 放在外层 Column 就是死留白，永远做不到真全屏。
       .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: this.barH() + 6, bottom: 128 })
       .layoutWeight(1)
+      .cachedCount(6, true)
+      .clipContent(ContentClipMode.BOUNDARY)
       .scrollBar(BarState.Off)
       // 往下看收起底栏、往回划弹回来（2026-11-15）：绝对偏移差分，见 common/NavBarWatch
       .onScroll((x: number, y: number) => {

@@ -46,14 +46,14 @@
     },
     {
       "id": "collections",
-      "title": "??????????????????",
+      "title": "收藏夹清单（用户自创）",
       "scope": "public",
       "entry": "ext/collections/server_ext.py",
       "enabled": true
     },
     {
       "id": "ratings",
-      "title": "?????1?5 ?????????",
+      "title": "我的评分（1-5 星）",
       "scope": "public",
       "entry": "ext/ratings/server_ext.py",
       "enabled": true

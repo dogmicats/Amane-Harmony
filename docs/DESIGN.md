@@ -2,12 +2,12 @@
 
 > 面向本仓库所有会话与贡献者。**改 README、换截图、做配图之前先读本文件。**
 > 目标：README 是产品主页，首屏讲清「这是什么 + 怎么装」，亮点交给统一卡片，细节交给文档与 Wiki。
-> 2.8.0 修订：按用户反馈把安装指引提前；功能卡改成同尺寸图片，不再靠图片高度硬撑。
+> 2.9.0 修订：升级为「蔷薇暗夜丝绒 × 鸿蒙液态玻璃」主视觉（底色 `#0B0B0F`、主强调蔷薇 `#D95382 → #F28CB0`）与全新 3D 液态玻璃丝带 `A` 图标；功能卡扩为 16 张统一 720×440（8 行两列），优先突出字幕自动化、我的口味与新视觉，同时保留全部长期核心能力。
 
 ## 1. 风格
 
 - GitHub 原生主题：正文颜色交给 GitHub，Light / Dark 都成立，不用内联 CSS 改页面底色。
-- 强调色只出现在图片里：背景 `#0A0A16`，紫 `#8B5CF6`，蓝 `#536DFE`。
+- 强调色只出现在图片里：背景 `#0B0B0F`（深曜黑），主强调蔷薇 `#D95382 → #F28CB0`、柔光粉字 `#FF9EBF`，辅以蓝紫 `#536DFE` / `#8B5CF6` 区分模块。
 - 字体、字号、行距不手写：用 Markdown 语义层级，`**粗体**` 做卡片标题。
 - 不用「唯一」「最强」「首创」这类自我评价；标题用「有趣的功能」这类中性说法。
 
@@ -43,47 +43,49 @@
 
 生成 Hero 与拼贴图时，只允许拼接真实截图 + 真实 App 图标；README 功能卡可以从真实截图裁切、等比缩放、补深色边，**不能改造截图里的 UI**。
 
-2.8.0 取图规则：六 Tab 顶栏、甄选抽屉、抽卡、演员、收藏用 `v280-*.png`；亮点、出演年龄、番号前缀、统计、座次、俗称搜索、刷一刷、首页范围、备份仍用各能力最清楚的旧截图。统一卡片由 `_publish/.local/prepare_280_readme_images.py` 生成，脚本只做裁切与缩放。
+2.9.0 取图规则：字幕管理工作台与任务结果、我的口味、六 Tab 新视觉（首页 / 媒体库 / 收藏 / 演员 / 标签）、详情页用 `v290-*.png`（排除含内网地址的 `v290-mine.png`）；甄选与抽卡沿用 `v280-*`；亮点、出演年龄、番号前缀、统计、座次、俗称搜索、刷一刷、首页范围、备份仍用各能力最清楚的历史截图。统一卡片由 `_publish/.local/prepare_290_readme_images.py` 生成，脚本只做裁切与缩放。
 
 ## 4. 截图清单
 
-### 2.8.0 新界面原图（`docs/screenshots/v280-*.png`）
+### 2.9.0 新界面原图（`docs/screenshots/v290-*.png`）
 
 | 文件 | 用途 |
 |---|---|
-| `v280-home.png` | 首页：玻璃顶栏、甄选卡、继续观看、六 Tab |
-| `v280-library.png` | 媒体库：搜索 / 排序 / 筛选 / 抽卡顶栏，海报铺边 |
-| `v280-favorites.png` | 收藏页：两行顶栏、类型 chip、搜索 |
-| `v280-actors.png` | 演员墙：头像、作品数、筛选顶栏 |
-| `v280-facets.png` | 标签分类：五类 chip + 卡片墙 |
-| `v280-cast-drawer.png` | 甄选抽屉：01 找谁 / 02 按什么条件 / 结果里再搜 |
-| `v280-gacha.png` | 抽卡中：顶栏高亮 + 筛选结果的剧照瀑布流 |
-| `v280-detail.png` | 详情：真全屏海报、播放按钮、出演头像 |
-| `v280-facet-detail.png` | 标签详情：两行顶栏、封面胶囊、搜索与抽卡 |
-| `v280-actor-detail.png` | 演员详情：头像、别名、资料、评分、作品数 |
+| `v290-subtitle-workbench.png` | 字幕管理：三段工作台（选片补字幕 / 任务与结果 / 下载记录）与全库体检统计 |
+| `v290-subtitle-results.png` | 字幕任务与结果：按片合并结果、候选打分明细、未落库原因入口 |
+| `v290-subtitle-downloads.png` | 字幕下载记录：按片归组与历史明细 |
+| `v290-taste.png` | 我的口味：推荐取向三档、随机探索滑杆、最偏爱演员与高频标签 |
+| `v290-home.png` | 首页（蔷薇主题）：翻牌子、甄选卡、继续观看、新下移玻璃底栏 |
+| `v290-library.png` | 媒体库：玻璃顶栏、海报铺边、新悬浮底栏 |
+| `v290-favorites.png` | 收藏页：两行玻璃顶栏、蔷薇选中态 |
+| `v290-actors.png` | 演员墙：头像清晰、底部无缝预渲染 |
+| `v290-facets.png` | 标签分类：五类入口 + 蔷薇主题高亮 |
+| `v290-detail.png` | 详情页重排：全屏海报、蔷薇渐变主播放条、字母/字幕快捷入口 |
 
-### README 功能卡（`docs/screenshots/cards/`）
+### README 功能卡（`docs/screenshots/cards/`，720×440 共 16 张）
 
 | 文件 | 对应能力 | 来源 |
 |---|---|---|
-| `01-ui.png` | ① 六个页面一套新界面 | 六张 `v280-*.png` 顶栏拼贴 |
-| `02-selection.png` | ② 甄选先圈范围 | `v280-cast-drawer.png` 的 02 段 |
-| `03-gacha.png` | ③ 抽卡跟着筛选走 | `v280-gacha.png` |
-| `04-actors.png` | ④ 演员墙 | `v280-actors.png` |
-| `05-facets.png` | ⑤ 分类体系 | `v280-facets.png` |
-| `06-highlights.png` | ⑥ 亮点 | `highlights-crop.png` |
-| `07-age.png` | ⑦ 出演年龄 | `detail-age-crop.png` |
-| `08-meta.png` | ⑧ 元数据 | `prefix.png` |
-| `09-stats.png` | ⑨ 观看统计 | `stats-crop.png` |
-| `10-tier.png` | ⑩ 从夯到拉 | `tier-board.png` |
-| `11-search.png` | ⑪ 搜索认俗称 | `search-alias-crop.png` |
-| `12-shorts.png` | ⑫ 刷一刷 | `shorts-main.png` |
-| `13-home-scope.png` | ⑬ 首页自己挑 | `home-scope.png` |
-| `14-backup.png` | ⑭ 备份与恢复 | `backup.png` |
+| `01-subtitles.png` | ① 字幕自己找，自己挑 | `v290-subtitle-workbench.png` + `v290-subtitle-results.png` 左右双拼 |
+| `02-taste.png` | ② 我的口味与推荐 | `v290-taste.png` 上下两段并排 |
+| `03-ui.png` | ③ 新图标，蔷薇液态玻璃 | `v290-home.png` + 新 3D 图标/`v290-detail.png` + `v290-library.png` 三列拼贴 |
+| `04-selection.png` | ④ 甄选先圈范围 | `v280-cast-drawer.png` 的 02 段 |
+| `05-gacha.png` | ⑤ 抽卡跟着筛选走 | `v280-gacha.png` |
+| `06-actors.png` | ⑥ 演员墙 | `v290-actors.png` |
+| `07-facets.png` | ⑦ 分类体系 | `v290-facets.png` |
+| `08-highlights.png` | ⑧ 亮点 | `highlights-crop.png` |
+| `09-age.png` | ⑨ 出演年龄 | `detail-age-crop.png` |
+| `10-meta.png` | ⑩ 元数据 | `prefix.png` |
+| `11-stats.png` | ⑪ 观看统计 | `stats-crop.png` |
+| `12-tier.png` | ⑫ 从夯到拉 | `tier-board.png` |
+| `13-search.png` | ⑬ 搜索认俗称 | `search-alias-crop.png` |
+| `14-shorts.png` | ⑭ 刷一刷 | `shorts-main.png` |
+| `15-home-scope.png` | ⑮ 首页自己挑 | `home-scope.png` |
+| `16-backup.png` | ⑯ 备份与恢复 | `backup.png` |
 
 ### 基础功能小卡
 
-`t01-home.png` / `t02-library.png` / `t03-actors.png` / `t04-detail.png` 取 2.8.0 新图；`t05-stills.png` / `t06-filter.png` / `t07-search.png` / `t08-player.png` 取旧图里最能说明该入口的一段。
+`t01-home.png` / `t02-library.png` / `t03-actors.png` / `t04-detail.png` 取 2.9.0 新图；`t05-stills.png` / `t06-filter.png` / `t07-search.png` / `t08-player.png` 取旧图里最能说明该入口的一段。
 
 ### 历史 / 辅助素材
 

@@ -21,40 +21,82 @@ export interface ThemePalette {
   name: string;
   /** 一句话气质，色卡下面那行小字。 */
   hint: string;
-  /** 主强调色：选中态、按钮、进度圈、评分星。 */
+  /** 主强调色（受控低眩光宝石色）：实心主按钮、进度条、开关。 */
   accent: string;
-  /** 渐变第二色（同色系更亮 / 略偏色），只给渐变和大色块用。 */
+  /** 渐变高光端（同色系丝光高点）：给主按钮与进度条做柔和宝石立体渐变。 */
   accent2: string;
+  /** 暗底/玻璃专用文字与图标高亮色（高明度、低刺眼）：绝不让高饱和荧光字在 OLED 暗底上发毛。 */
+  ink: string;
   /** 强调色的深底版本：标签底色、徽章底、选中 chip 底。 */
   soft: string;
   /** 压在 accent 上的文字色（亮色配深字，暗色配白字）。 */
   onAccent: string;
+  /** 微调暗色浮层底（3–5% 同色相温度偏移，消除暖色主题贴在冷蓝灰卡片上的割裂感）。 */
+  bgRaised: string;
+  /** 微调暗色卡片底。 */
+  card: string;
+  /** 微调暗色高亮卡片/次级底。 */
+  cardHi: string;
 }
 
-/** 预设顺序 = 设置页里的展示顺序，第一项是默认值。 */
+/** 预设顺序 = 设置页里的展示顺序，第一项是默认值（2.8.2 暗影院低眩光色系重构）。 */
 export const THEME_PALETTES: ThemePalette[] = [
-  { key: 'violet', name: '幽紫', hint: '经典影院紫', accent: '#8B6CFF', accent2: '#C77DFF', soft: '#2A2350', onAccent: '#FFFFFF' },
-  { key: 'indigo', name: '靛蓝', hint: '深夜放映厅', accent: '#5B8CFF', accent2: '#7BD5FF', soft: '#1C2A4A', onAccent: '#FFFFFF' },
-  { key: 'teal', name: '青碧', hint: '冷调霓虹', accent: '#2FD4BE', accent2: '#86F2E0', soft: '#103B37', onAccent: '#06231F' },
-  { key: 'mint', name: '薄荷', hint: '清爽夜绿', accent: '#55D98C', accent2: '#A8F0B8', soft: '#12341F', onAccent: '#062114' },
-  { key: 'amber', name: '琥珀', hint: '胶片暖光', accent: '#FFB03A', accent2: '#FFD98A', soft: '#3B2A10', onAccent: '#1A1204' },
-  { key: 'coral', name: '珊瑚', hint: '黄昏余温', accent: '#FF7A63', accent2: '#FFB18A', soft: '#3F211B', onAccent: '#1F0A06' },
-  { key: 'rose', name: '玫红', hint: '霓虹灯牌', accent: '#FF5F92', accent2: '#FFA8C7', soft: '#40182A', onAccent: '#2A0512' },
-  { key: 'graphite', name: '石墨', hint: '极简黑白', accent: '#C3C9D6', accent2: '#EFF2F8', soft: '#23262E', onAccent: '#0B0B0F' }
+  {
+    key: 'rose', name: '蔷薇', hint: '暗夜丝绒粉',
+    accent: '#D95382', accent2: '#F28CB0', ink: '#FF9EBF', soft: '#331724', onAccent: '#FFFFFF',
+    bgRaised: '#161215', card: '#1E181C', cardHi: '#282026'
+  },
+  {
+    key: 'violet', name: '暮紫', hint: '深邃影院紫',
+    accent: '#7E62E8', accent2: '#B197FC', ink: '#C2B0FF', soft: '#251D44', onAccent: '#FFFFFF',
+    bgRaised: '#13121B', card: '#1A1824', cardHi: '#242131'
+  },
+  {
+    key: 'indigo', name: '深海', hint: '静谧午夜蓝',
+    accent: '#4E7AE6', accent2: '#80B3FF', ink: '#96BEFF', soft: '#18243E', onAccent: '#FFFFFF',
+    bgRaised: '#11141C', card: '#171B26', cardHi: '#202635'
+  },
+  {
+    key: 'teal', name: '松石', hint: '清透暗青',
+    accent: '#2BA89C', accent2: '#6ADBD0', ink: '#78E2D7', soft: '#11302E', onAccent: '#071D1B',
+    bgRaised: '#111718', card: '#161F20', cardHi: '#1F2B2C'
+  },
+  {
+    key: 'mint', name: '青苔', hint: '低饱和森绿',
+    accent: '#45B075', accent2: '#86E0AC', ink: '#8EE6B4', soft: '#142F20', onAccent: '#081E12',
+    bgRaised: '#111714', card: '#161F1A', cardHi: '#1F2B24'
+  },
+  {
+    key: 'amber', name: '琥珀', hint: '复古胶片金',
+    accent: '#D4913B', accent2: '#F4C97E', ink: '#F6CD84', soft: '#332512', onAccent: '#1A1105',
+    bgRaised: '#171410', card: '#201B15', cardHi: '#2B241C'
+  },
+  {
+    key: 'coral', name: '赤陶', hint: '暖雾暮红',
+    accent: '#D96857', accent2: '#F6A192', ink: '#FFA798', soft: '#361C18', onAccent: '#FFFFFF',
+    bgRaised: '#171212', card: '#201918', cardHi: '#2B2120'
+  },
+  {
+    key: 'graphite', name: '月银', hint: '极简冷银灰',
+    accent: '#B8BFC9', accent2: '#E4E8F0', ink: '#DFE4EC', soft: '#22252C', onAccent: '#0B0B0F',
+    bgRaised: '#131418', card: '#1B1C22', cardHi: '#25272F'
+  }
 ];
 
-export const DEFAULT_THEME_KEY: string = 'violet';
+export const DEFAULT_THEME_KEY: string = 'rose';
 
 export class Theme {
+  /** 极深黑曜石根底色：所有主题共用，确保冷启零色差与 OLED 纯暗底。 */
   static readonly BG: string = '#0B0B0F';
-  static readonly BG_RAISED: string = '#14141A';
-  static readonly CARD: string = '#1B1B22';
-  static readonly CARD_HI: string = '#24242D';
+  /** 浮层 / 抽屉 / 卡片底色：随主题带有 3–5% 同色相暗调，彻底消除暖主题贴在冷蓝灰卡上的突兀感。 */
+  static BG_RAISED: string = '#161215';
+  static CARD: string = '#1E181C';
+  static CARD_HI: string = '#282026';
   static readonly TEXT: string = '#F4F4F7';
-  static readonly TEXT_DIM: string = '#A3A3AE';
-  static readonly TEXT_FAINT: string = '#6C6C78';
+  static readonly TEXT_DIM: string = '#A8A5B0';
+  static readonly TEXT_FAINT: string = '#726E7B';
   /** 未选中的底栏图标/文字：比 TEXT_FAINT 亮，深底上才看得清。 */
-  static readonly TAB_IDLE: string = '#C2C2CE';
+  static readonly TAB_IDLE: string = '#C4C2CD';
   /**
    * 页面底部安全距离（TabBar 58 + 系统导航条 + 余量）。
    *
@@ -79,11 +121,18 @@ export class Theme {
     const v: number | undefined = AppStorage.get<number>('amaneNavInset');
     return v === undefined ? 0 : v;
   }
+
+  /** 无底栏独立二级页的底部安全留白（24vp 余量 + 系统手势条，避免误用 108vp 的 TabBar 留白）。 */
+  static pageBottomSafe(): number {
+    return 24 + Theme.navInset();
+  }
   /** 当前强调色：由 `applyPalette()` 改写，别在页面里写死十六进制。 */
-  static ACCENT: string = '#8B6CFF';
+  static ACCENT: string = '#D95382';
   /** 渐变的第二色：`linearGradient` 的终点，别单独拿它当文字色。 */
-  static ACCENT2: string = '#C77DFF';
-  static ACCENT_SOFT: string = '#2A2350';
+  static ACCENT2: string = '#F28CB0';
+  /** 暗底/玻璃专用文字与图标高亮色（高明度、低刺眼，消除 OLED 暗底荧光眩光）。 */
+  static ACCENT_INK: string = '#FF9EBF';
+  static ACCENT_SOFT: string = '#331724';
   /** 压在 ACCENT 上的文字色（亮色主题要用深字）。 */
   static ON_ACCENT: string = '#FFFFFF';
   /** 当前主题键（`violet` / `teal` / …），设置页用来高亮选中项。 */
@@ -130,8 +179,12 @@ export class Theme {
     Theme.paletteKey = picked.key;
     Theme.ACCENT = picked.accent;
     Theme.ACCENT2 = picked.accent2;
+    Theme.ACCENT_INK = picked.ink;
     Theme.ACCENT_SOFT = picked.soft;
     Theme.ON_ACCENT = picked.onAccent;
+    Theme.BG_RAISED = picked.bgRaised;
+    Theme.CARD = picked.card;
+    Theme.CARD_HI = picked.cardHi;
   }
 
   /** 按 key 取整套（未知键退回默认）。设置页画色卡也用它。 */
@@ -156,6 +209,19 @@ export class Theme {
    */
   static accentAlpha(alpha: number): string {
     return Theme.alphaOf(Theme.ACCENT, alpha);
+  }
+
+  /** 高明度暗底高亮色 + 透明度（玻璃选中描边、柔光边框首选）。 */
+  static inkAlpha(alpha: number): string {
+    return Theme.alphaOf(Theme.ACCENT_INK, alpha);
+  }
+
+  /** 主 CTA 按钮专用宝石渐变：告别生硬平涂塑料块，与深曜黑背景自然融合。 */
+  static ctaGradient(): LinearGradientOptions {
+    return {
+      angle: 132,
+      colors: [[Theme.ACCENT, 0.0], [Theme.ACCENT2, 1.0]]
+    };
   }
 
   /** 任意色 + 透明度 → `#AARRGGBB`（`accent2` 的蒙层也用得上）。 */

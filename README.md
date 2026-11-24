@@ -3,9 +3,9 @@
 </p>
 
 <p>
-  <a href="https://github.com/dogmicats/Amane-Harmony/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/dogmicats/Amane-Harmony?style=flat-square&color=8b5cf6"></a>
+  <a href="https://github.com/dogmicats/Amane-Harmony/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/dogmicats/Amane-Harmony?style=flat-square&color=d95382"></a>
   <img alt="HarmonyOS" src="https://img.shields.io/badge/HarmonyOS-native-536dfe?style=flat-square">
-  <img alt="ArkTS" src="https://img.shields.io/badge/ArkTS-client-8b5cf6?style=flat-square">
+  <img alt="ArkTS" src="https://img.shields.io/badge/ArkTS-client-d95382?style=flat-square">
   <img alt="mpv" src="https://img.shields.io/badge/Player-mpv-7c3aed?style=flat-square">
   <img alt="Python" src="https://img.shields.io/badge/Sidecar-Python-3776ab?style=flat-square">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/dogmicats/Amane-Harmony?style=flat-square"></a>
@@ -16,21 +16,19 @@
   想找谁就认真找，没主意就刷一刷；看对眼的，从详情看到精彩，再留给下一次重逢。
 </p>
 
-<p><sub>共演甄选 · 筛选抽卡 · 丰富详情 · 记录回看</sub></p>
+<p><sub>共演甄选 · 随机抽卡 · 丰富详情 · 记录回看</sub></p>
 
-<p><sub><strong>2.8.0</strong>　六个页面，一套新界面 · 甄选能圈范围 · 抽卡只抽筛出来的片子<br>服务端自升级更稳，中文检索词表随包提供；手机端仍需自己签名装包。</sub></p>
+<p><sub><strong>2.9.0</strong>　字幕自己找，自己挑 · 我的口味与推荐正式进包 · 新图标、新启动动画与蔷薇液态玻璃界面<br>播放控件、字幕面板与底栏手感一并重做；手机端仍需自己签名装包。</sub></p>
 
-> 把自己的 Amane 媒体库带到 HarmonyOS NEXT。沿着演员与甄选找片，让剧照抽卡带来惊喜；打开详情了解阵容、选择版本，再把精彩画面、评分和观看记录留下来。2.7.2 起服务端能在 App 里点一下升级；2.8.0 把六个 Tab 和所有二级页换成同一套玻璃顶栏，海报铺到屏幕边。
+> 把自己的 Amane 媒体库带到 HarmonyOS NEXT。沿着演员、甄选与口味发现好片，没中文字幕时交给「字幕管理」自动找、自动挑；点开详情直接播放，再把精彩画面、评分和观看记录留下来。2.7.2 起服务端能在 App 里点一下升级；2.9.0 换上全新液态玻璃丝带图标与默认「蔷薇」主题，从打开到看片都更顺手。
 
 > [!IMPORTANT]
-> **服务端低于 2.7.2 时，先手动升一次到 2.7.2 或更新版本。** 升级逻辑本身在这一版里，旧服务端不认识它；装好新包之后，「我的 → 检查更新」才会出现「升级服务器」按钮。
-> 已经在 2.7.2 及以上：服务端的更新在 App 里点一下就行，下载、校验、切换、重启都有进度；失败或连续两次起不来会退回上一版。
-> 手机端仍需下载安装包自己装 —— 鸿蒙不允许应用商店外自动安装。
-> 2.8.0 一并带上了此前服务端自升级的修补；旧版升级时误拷数据卷、词表丢失的问题不会再出现。
+> **服务端低于 2.7.2 时，先手动升一次到 2.7.2 或更新版本**；已经在 2.7.2 及以上，打开 App「我的 → 关于 → 检查更新」点「升级服务器」即可自动下载、校验、切换并重启（失败自动回滚）。
+> 手机端仍需下载安装包自行签名安装 —— 鸿蒙不允许应用商店外自动安装。
 
 > 截图取自作者自建媒体库；封面、横幅与剧照已打码，演员头像保留原样。
 
-<p><sub>面向已有 Amane 媒体库的 HarmonyOS NEXT 手机用户，需部署旁挂服务并自行签名安装。<br><strong>客户端与服务端配套到 2.8.0</strong>；只升手机、保留旧服务端时，多库甄选会受限。<a href="docs/START.md">从零开始</a> · <a href="../../releases">下载</a></sub></p>
+<p><sub>面向已有 Amane 媒体库的 HarmonyOS NEXT 手机用户，需部署旁挂服务并自行签名安装。<br><strong>客户端与服务端配套到 2.9.0</strong>；只升手机、保留旧服务端时，自动补字幕与多库甄选会受限。<a href="docs/START.md">从零开始</a> · <a href="../../releases">下载</a></sub></p>
 
 ## 快速开始
 
@@ -39,14 +37,14 @@
 已经知道自己在干什么的，按三步走：
 
 1. **部署旁挂服务**　在运行 Amane 的机器上 `cp deploy/.env.example .env`，填好 `AMANE_DATA` 与 `MEDIA_PATH_MAP`，再 `docker compose -f deploy/compose.example.yml up -d`。
-2. **安装客户端**　从 [Releases](../../releases) 下载 `Amane-2.8.0-unsigned.hap`，用你自己的证书签名后安装，或交给 Hokit 这类侧载工具。
+2. **安装客户端**　从 [Releases](../../releases) 下载 `Amane-2.9.0-unsigned.hap`，用你自己的证书签名后安装，或交给 Hokit 这类侧载工具。
 3. **连接媒体库**　「我的 → 连接设置」填 Amane 地址 `:8000`、用户服务地址 `:8770` 与 API token。
 
 详细步骤见 [部署指南](docs/DEPLOY.md) 与 [签名安装](docs/BUILD_HAP.md)；不想手写配置，就把部署指南开头那段话发给 AI 助手，它会用 `tools/agentctl.py` 带你部署并验证。
 
 ### 以后怎么更新
 
-**服务端**：手机打开「我的 → 检查更新」，有新版本时点「升级服务器」。升级包落在服务端数据卷 `<数据目录>/app`，原来的 compose 不用改，重建容器也不会冲掉；失败或连续两次起不来自动退回上一版。
+**服务端**：手机打开「我的 → 关于 → 检查更新」，有新版本时点「升级服务器」。升级包落在服务端数据卷 `<数据目录>/app`，原来的 compose 不用改，重建容器也不会冲掉；失败或连续两次起不来自动退回上一版。
 
 **手机端**：下载安装包自己装 —— 鸿蒙不允许应用商店外自动安装。
 
@@ -57,91 +55,103 @@
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/cards/01-ui.png" width="100%" alt="六个页面一套新界面">
+      <img src="docs/screenshots/cards/01-subtitles.png" width="100%" alt="字幕自动补与任务中心">
       <br>
-      <strong>① 六个页面，一套新界面</strong>　顶栏与返回键统一成玻璃胶囊，海报铺到状态栏底下，底栏滑走又滑回来。
+      <strong>① 字幕自己找，自己挑</strong>　没中文字幕不用再翻站对时长：全库体检、双源检索、按时长与中文密度打分挑最优，任务进度看得见也能取消，没补上写清原因。
     </td>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/cards/02-selection.png" width="100%" alt="甄选抽屉">
+      <img src="docs/screenshots/cards/02-taste.png" width="100%" alt="我的口味与推荐">
       <br>
-      <strong>② 甄选先圈范围</strong>　找共演与高级筛选合在一起：演员、标签、系列、制片商一起下条件，结果里还能再搜。
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="docs/screenshots/cards/03-gacha.png" width="100%" alt="筛选后抽卡">
-      <br>
-      <strong>③ 抽卡跟着筛选走</strong>　筛出来的片子就是卡池；画质、字幕、年份、评分、状态都算，多库只抽两边共有的。
-    </td>
-    <td width="50%" valign="top">
-      <img src="docs/screenshots/cards/04-actors.png" width="100%" alt="演员墙">
-      <br>
-      <strong>④ 演员墙</strong>　从熟悉的人一路翻到作品，按身材、年龄、作品数挑；点开能看别名、写真与出演年龄。
+      <strong>② 我的口味与推荐</strong>　基于你自己的库生成口味画像，「更懂我 / 均衡 / 多惊喜」三档加探索滑杆自由调，多样性闸防刷屏；负一屏点「⋯」直接改刷片范围。
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/cards/05-facets.png" width="100%" alt="分类体系">
+      <img src="docs/screenshots/cards/03-ui.png" width="100%" alt="新图标与蔷薇液态玻璃界面">
       <br>
-      <strong>⑤ 分类体系</strong>　标签、系列、导演、制片商都能翻；番号前缀、系列属性、收藏隐藏在同一套版式里。
+      <strong>③ 新图标，蔷薇液态玻璃</strong>　换上 3D 液态玻璃丝带图标与一镜到底启动过渡，新装默认「蔷薇」主题；详情、播放控件、字幕面板与悬浮底栏统一样式，列表边缘不再闪黑带。
     </td>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/cards/06-highlights.png" width="100%" alt="时间点亮点">
+      <img src="docs/screenshots/cards/04-selection.png" width="100%" alt="甄选抽屉">
       <br>
-      <strong>⑥ 亮点</strong>　详情页那几条自己的画面带时间点，点哪张从哪秒开始播；网盘片首次打开会现场抽帧。
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="docs/screenshots/cards/07-age.png" width="100%" alt="出演年龄">
-      <br>
-      <strong>⑦ 出演年龄</strong>　演员行直接标「出演 N 岁」，点一下翻同龄片，女优 / 男优都能排。
-    </td>
-    <td width="50%" valign="top">
-      <img src="docs/screenshots/cards/08-meta.png" width="100%" alt="番号前缀">
-      <br>
-      <strong>⑧ 元数据</strong>　系列按属性筛，制片厂按番号前缀连着翻；片名、标签和封面在手机上就能改。
+      <strong>④ 甄选先圈范围</strong>　找共演与高级筛选合在一起：演员、导演、标签、系列、制片商一起下条件，结果里还能再搜，俗称也能命中。
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/cards/09-stats.png" width="100%" alt="观看统计">
+      <img src="docs/screenshots/cards/05-gacha.png" width="100%" alt="筛选后抽卡">
       <br>
-      <strong>⑨ 观看统计</strong>　次数、时长、趋势和偏好放一起看；样本少时明说「还在积累」，不拿 0 骗人。
+      <strong>⑤ 抽卡跟着筛选走</strong>　筛出来的片子就是卡池；画质、字幕、年份、评分、状态都算，多库只抽两边共有的。
     </td>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/cards/10-tier.png" width="100%" alt="从夯到拉">
+      <img src="docs/screenshots/cards/06-actors.png" width="100%" alt="演员墙">
       <br>
-      <strong>⑩ 从夯到拉</strong>　星级排成五档座次，按内容、时间、性别筛，也能导出成图。
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="docs/screenshots/cards/11-search.png" width="100%" alt="俗称搜索">
-      <br>
-      <strong>⑪ 搜索认俗称</strong>　拼音、繁简、日文写法和俗称一起找；搜不到的词进「待处理」，点一下就成了别名。
-    </td>
-    <td width="50%" valign="top">
-      <img src="docs/screenshots/cards/12-shorts.png" width="100%" alt="刷一刷">
-      <br>
-      <strong>⑫ 刷一刷</strong>　首页右滑，一条一个片段，点心留住那一下。「我的喜爱」只存本机，和正片收藏分开。
+      <strong>⑥ 演员墙</strong>　从熟悉的人一路翻到作品，按身材、年龄、作品数挑；点开能看别名、写真与出演年龄。
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/cards/13-home-scope.png" width="100%" alt="首页范围">
+      <img src="docs/screenshots/cards/07-facets.png" width="100%" alt="分类体系">
       <br>
-      <strong>⑬ 首页自己挑</strong>　库、状态、年份、标签、演员组合成首页范围，打开先看自己挑的那几行。
+      <strong>⑦ 分类体系</strong>　标签、系列、导演、制片商都能翻；番号前缀、系列属性、收藏隐藏在同一套版式里。
     </td>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/cards/14-backup.png" width="100%" alt="备份与恢复">
+      <img src="docs/screenshots/cards/08-highlights.png" width="100%" alt="时间点亮点">
       <br>
-      <strong>⑭ 备份与恢复</strong>　收藏评分清单能带走，导入先预览再挑；线上记录按番号匹配。
+      <strong>⑧ 亮点</strong>　详情页那几条自己的画面带时间点，点哪张从哪秒开始播；网盘片首次打开会现场抽帧。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/09-age.png" width="100%" alt="出演年龄">
+      <br>
+      <strong>⑨ 出演年龄</strong>　演员行直接标「出演 N 岁」，点一下翻同龄片，女优 / 男优都能排。
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/10-meta.png" width="100%" alt="番号前缀">
+      <br>
+      <strong>⑩ 元数据</strong>　系列按属性筛，制片厂按番号前缀连着翻；片名、标签和封面在手机上就能改。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/11-stats.png" width="100%" alt="观看统计">
+      <br>
+      <strong>⑪ 观看统计</strong>　次数、时长、趋势和偏好放一起看；样本少时明说「还在积累」，不拿 0 骗人。
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/12-tier.png" width="100%" alt="从夯到拉">
+      <br>
+      <strong>⑫ 从夯到拉</strong>　星级排成五档座次，按内容、时间、性别筛，也能导出成图。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/13-search.png" width="100%" alt="俗称搜索">
+      <br>
+      <strong>⑬ 搜索认俗称</strong>　拼音、繁简、日文写法和俗称一起找；搜不到的词进「待处理」，点一下就成了别名。
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/14-shorts.png" width="100%" alt="刷一刷">
+      <br>
+      <strong>⑭ 刷一刷</strong>　首页右滑，一条一个片段，点心留住那一下。「我的喜爱」只存本机，和正片收藏分开。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/15-home-scope.png" width="100%" alt="首页范围">
+      <br>
+      <strong>⑮ 首页自己挑</strong>　库、状态、年份、标签、演员组合成首页范围，打开先看自己挑的那几行。
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/cards/16-backup.png" width="100%" alt="备份与恢复">
+      <br>
+      <strong>⑯ 备份与恢复</strong>　收藏评分清单能带走，导入先预览再挑；线上记录按番号匹配。
     </td>
   </tr>
   <tr>
     <td colspan="2" valign="top">
-      <sub>没有配图的三项：<strong>⑮ 播放体验</strong> 原地起播、三态窗口、退出记进度；<strong>⑯ 弹幕与评价</strong> 评价留给整片，弹幕留给那一刻；<strong>⑰ 打分</strong> 1–5 星，从夯到拉，顺手留句锐评。</sub>
+      <sub>没有配图的三项：<strong>⑰ 播放体验</strong> 原地起播、三态窗口、横竖屏液态玻璃控件、左亮度右音量平滑调节、退出记进度；<strong>⑱ 弹幕与评价</strong> 评价留给整片，弹幕留给那一刻；<strong>⑲ 打分</strong> 1–5 星，从夯到拉，顺手留句锐评。</sub>
     </td>
   </tr>
 </table>
@@ -176,13 +186,13 @@
 
 - **块缓存**：读过的块留在内存（默认 320MB），拖动回看不回源。
 - **并行预取**：提前读后续分段，网盘与冷区的首包更快。
-- **mpv 硬解**：左右拖进度、竖直调亮度音量、0.75–2x 倍速、音轨字幕切换、退出记进度。
-- **悬浮玻璃控制层**：视频从栏下透出，播放页两侧用封面晕出光晕。
+- **mpv 硬解**：左右拖进度（上滑可取消）、竖直平滑调亮度音量、0.75–2x 倍速、锁屏防误触、画面比例切换、退出记进度。
+- **悬浮液态玻璃控制层**：视频从栏下透出，小窗与展开面板统一样式。
 - **参数锁定**：旧配置自动重置；诊断行看缓存秒数，一眼分清网络还是解码。
 
 </details>
 
-- **外挂字幕**：同目录 / 手机导入 / URL / 在线搜索，记住每部片的选择；多种常见编码自动转 WebVTT。
+- **外挂字幕**：同目录 / 手机导入 / URL / 在线搜索与一键自动补，去重并记住每部片的选择，支持播放中提前 / 延后时间轴；多种常见编码自动转 WebVTT。
 
 ## 文档
 

@@ -83,7 +83,7 @@ struct LibraryPage {
           }
         })
         GlassCapsule({
-          label: this.filterOn ? '⚙ 筛选 ·' : '⚙ 筛选',
+          label: this.filterOn ? '筛选 ·' : '筛选',
           active: this.filterOn,
           fs: 12,
           padH: 11,

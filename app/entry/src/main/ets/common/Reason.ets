@@ -1361,12 +1361,10 @@ function makeHeadline(items: MediaItem[], c: BatchCtx): string {
 }
 
 function makeTopic(pack: ReasonPack, c: BatchCtx): string {
-  const base: string = `今天这 ${c.n} 部是从库里随机翻出来的，不是按你的口味算的。`;
   if (c.stats !== undefined && c.libTotal > 0) {
-    return base + `下面多数句子是全库 ${c.libTotal} 部里真实存在的小事，` +
-      `也有几句纯粹是气氛话 —— 翻到它就是缘分，别太当真。`;
+    return `从 ${c.libTotal} 部片库里挑出这 ${c.n} 部，留给今天的你。`;
   }
-  return base + `下面每句都是这批数据里真实存在的小事 —— 有些是它自己，有些是你和它。`;
+  return `今天挑出这 ${c.n} 部，慢慢翻翻看。`;
 }
 
 export class Reason {

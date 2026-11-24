@@ -76,6 +76,60 @@ class HomeMixin(object):
         limit = int((query.get("limit") or ["20"])[0])
         self._json({"items": build_recommend(limit)})
 
+    @route("GET", r"/api/user/taste")
+    def taste(self, query, *_) -> None:
+        """兴趣画像（2026-11-20）：「我的口味」页用。
+
+        `_daily_profile()` 原来只服务每日推荐（挑片 + 写理由），这里把它翻成
+        「排行 + 权重百分比」给客户端 —— 用户第一次能看到「算法眼里的我」：
+        哪些演员/标签/系列在拉高分，各自占多少。
+
+        只回**显式**偏好（评分 ≥4 的片 + 收藏）统计出来的东西；隐式行为
+        （观看时长、跳过）不放这儿 —— 那些由推荐侧自己用，算错了不该让用户看见。
+        """
+        try:
+            limit = max(3, min(int((query.get("limit") or ["10"])[0]), 30))
+        except (TypeError, ValueError):
+            limit = 10
+        prof = _daily_profile()
+        try:
+            with user_db() as conn:
+                fav_n = int(conn.execute("SELECT COUNT(*) AS n FROM favorites").fetchone()["n"] or 0)
+        except sqlite3.Error:
+            fav_n = 0
+
+        def rank(d: dict, top: int) -> list[dict]:
+            pairs = [(str(k), round(float(v), 2)) for k, v in d.items() if k]
+            pairs.sort(key=lambda kv: -kv[1])
+            pairs = pairs[:top]
+            total = sum(v for _k, v in pairs) or 1.0
+            return [{"name": k, "count": v, "ratio": round(v / total, 3)} for k, v in pairs]
+
+        self._json({
+            "preset": daily_preset(),
+            "explore_ratio": daily_ratio(),
+            "presets": [
+                {"key": "taste", "label": "更懂我", "desc": "多一点你熟悉的口味"},
+                {"key": "balanced", "label": "均衡", "desc": "老口味和新发现各来一些"},
+                {"key": "explore", "label": "多惊喜", "desc": "多推你还没碰过的"},
+            ],
+            # 样本量：画像就是从这些数据里算出来的，0 就说明还没「喂」过
+            "samples": {
+                "rated": len(prof["stars"]),
+                "favorites": fav_n,
+                "watched": len(prof["seen"]),
+                "implicit": len(prof["implicit"]),
+                "seeds": len(prof["seeds"]),
+                "disliked": len(prof["disliked"]),
+            },
+            "actors": rank(prof["actors"], limit),
+            "tags": rank(prof["tags"], limit),
+            "series": rank(prof["series"], limit),
+            "studios": rank(prof["studios"], limit),
+            "eras": rank(prof["eras"], limit),
+            "prefixes": rank(prof["prefixes"], limit),
+        })
+
     @route("GET", r"/api/user/daily")
     def daily_prefs(self, query, *_) -> None:
         """每日推荐的「取向」（2026-11-15）。
@@ -104,6 +158,13 @@ class HomeMixin(object):
     @route("PUT", r"/api/user/daily")
     def daily_set(self, query, *_) -> None:
         body = self._body()
+        # 2026-11-20：滑杆。给了 explore_ratio 就存比例（0~0.5），preset 只作缺省保留。
+        if body.get("explore_ratio") is not None:
+            try:
+                out = set_daily_ratio(float(body.get("explore_ratio")))
+            except (TypeError, ValueError, OSError) as exc:
+                return self._error(400, f"保存失败：{exc}")
+            return self._json({"ok": True, **out})
         name = str(body.get("preset") or "").strip()
         try:
             set_daily_preset(name)

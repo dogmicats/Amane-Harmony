@@ -245,7 +245,7 @@ struct CastTokenPage {
                 .fontColor(Theme.TEXT_FAINT)
                 .width('100%')
                 .lineHeight(14)
-                .padding({ top: 4, bottom: Theme.BOTTOM_SAFE })
+                .padding({ top: 4, bottom: Theme.pageBottomSafe() })
             }
             .width('100%')
             .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, top: 4 })

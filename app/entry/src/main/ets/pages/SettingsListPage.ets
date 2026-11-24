@@ -1,38 +1,19 @@
 import { router } from '@kit.ArkUI';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
-import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
-
-/**
- * 设置 · 列表页（二级页）：抽卡模式的两个参数。
- *
- * 这些是「列表页怎么展示」的偏好，跟连接、数据无关，所以单独成页。
- * 改了立刻落盘（不跟任何「保存」按钮绑定），回列表页就是新值。
- */
-@Component
-struct Chip {
-  @Prop label: string = '';
-  @Prop active: boolean = false;
-  onTap: () => void = () => {};
-
-  build() {
-    Text(this.label)
-      .fontSize(13)
-      .fontColor(this.active ? '#FFFFFF' : Theme.TEXT_DIM)
-      .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-      .backgroundColor(this.active ? Theme.ACCENT : Theme.CARD_HI)
-      .borderRadius(14)
-      .onClick(() => {
-        this.onTap();
-      })
-  }
-}
+import { setPageFullScreen } from '../common/PageFullscreen';
+import { PageTitle, GlassBack } from '../view/GlassKit';
+import {
+  SettingsAmbientGlow, SettingsIconTile, SettingsRowDivider, VelvetChip
+} from '../view/SettingsKit';
 
 @Entry
 @Component
 struct SettingsListPage {
   @State count: number = Store.I.gachaCount;
   @State auto: boolean = Store.I.gachaAuto;
+  @StorageProp('amaneTopInset') topInset: number = 30;
+  private navStack: NavPathStack = new NavPathStack();
 
   private pickCount(n: number): void {
     this.count = n;
@@ -53,7 +34,7 @@ struct SettingsListPage {
         GlassBack({
           mat: true,
           onTap: () => {
-          router.back();
+            router.back();
           }
         })
         PageTitle({ text: '列表与抽卡', fs: 18 })
@@ -69,17 +50,10 @@ struct SettingsListPage {
     .padding({ top: this.topInset })
   }
 
-  @StorageProp('amaneTopInset') topInset: number = 30;
-
-  /** 导航栈（六十改）：整页套 Navigation 只为拿到「标题栏」这个材质落点。 */
-  private navStack: NavPathStack = new NavPathStack();
-
-  /** 标题栏实际高度（内容要让开这么多）。 */
   private barH(): number {
     return this.topInset + 46;
   }
 
-  /** 标题栏配置：高度 = 状态栏 + 46，内容行落在状态栏下面（与媒体库同一套）。 */
   private titleConfig(): NavigationCustomTitle {
     return {
       builder: () => {
@@ -89,74 +63,113 @@ struct SettingsListPage {
     };
   }
 
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
   build() {
     Navigation(this.navStack) {
-      Column() {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
 
         Scroll() {
-          Column({ space: 12 }) {
+          Column({ space: 14 }) {
+            Blank().height(this.barH() + 6)
 
-          // 六十改：标题栏浮在内容之上 —— 首屏落在玻璃下方，一滚动就从玻璃底下穿过去，
-          // 材质才有颜色可采样。
-          Blank().height(this.barH())
-            Column({ space: 12 }) {
-              Row({ space: 8 }) {
-                Text('抽卡模式')
-                  .fontSize(14)
-                  .fontColor(Theme.TEXT)
-                  .width(88)
-                Chip({ label: '关', active: !this.auto, onTap: () => {
-                  this.pickAuto(false);
-                } })
-                Chip({ label: '开', active: this.auto, onTap: () => {
-                  this.pickAuto(true);
-                } })
-                Blank()
+            Column() {
+              Row({ space: 12 }) {
+                SettingsIconTile({ icon: $r('sys.symbol.rectangle_stack'), tileSize: 36, iconSize: 17 })
+                Column({ space: 2 }) {
+                  Text('默认开启抽卡墙')
+                    .fontSize(14.5)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(Theme.TEXT)
+                  Text('进入列表页直接以随机剧照瀑布流展示')
+                    .fontSize(11)
+                    .fontColor(Theme.TEXT_FAINT)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                Toggle({ type: ToggleType.Switch, isOn: this.auto })
+                  .selectedColor(Theme.ACCENT)
+                  .onChange((v: boolean) => {
+                    this.pickAuto(v);
+                  })
               }
               .width('100%')
-              .alignItems(VerticalAlign.Center)
+              .padding({ left: 14, right: 14, top: 13, bottom: 13 })
 
-              Row({ space: 8 }) {
-                Text('每轮张数')
-                  .fontSize(14)
-                  .fontColor(Theme.TEXT)
-                  .width(88)
-                Chip({ label: '6 张', active: this.count === 6, onTap: () => {
-                  this.pickCount(6);
-                } })
-                Chip({ label: '10 张', active: this.count === 10, onTap: () => {
-                  this.pickCount(10);
-                } })
-                Chip({ label: '16 张', active: this.count === 16, onTap: () => {
-                  this.pickCount(16);
-                } })
-                Blank()
-              }
-              .width('100%')
-              .alignItems(VerticalAlign.Center)
+              SettingsRowDivider()
 
-              Text('抽卡模式 = 把标签 / 系列 / 导演 / 制片商 / 媒体库 / 收藏这些列表页换成随机剧照瀑布流，' +
-                '点图直接进那部片的详情。每轮张数越大一次铺得越多；「开」是一进列表页就是剧照墙。')
-                .fontSize(11)
-                .fontColor(Theme.TEXT_FAINT)
+              Column({ space: 10 }) {
+                Row({ space: 12 }) {
+                  SettingsIconTile({ icon: $r('sys.symbol.picture'), tileSize: 36, iconSize: 17 })
+                  Column({ space: 2 }) {
+                    Text('每轮张数')
+                      .fontSize(14.5)
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor(Theme.TEXT)
+                    Text('每次抽卡铺开的剧照数量')
+                      .fontSize(11)
+                      .fontColor(Theme.TEXT_FAINT)
+                  }
+                  .alignItems(HorizontalAlign.Start)
+                  .layoutWeight(1)
+                }
                 .width('100%')
-                .lineHeight(17)
+
+                Row({ space: 8 }) {
+                  VelvetChip({
+                    label: '6 张',
+                    active: this.count === 6,
+                    padH: 16,
+                    padV: 7,
+                    onTap: () => {
+                      this.pickCount(6);
+                    }
+                  })
+                  VelvetChip({
+                    label: '10 张',
+                    active: this.count === 10,
+                    padH: 16,
+                    padV: 7,
+                    onTap: () => {
+                      this.pickCount(10);
+                    }
+                  })
+                  VelvetChip({
+                    label: '16 张',
+                    active: this.count === 16,
+                    padH: 16,
+                    padV: 7,
+                    onTap: () => {
+                      this.pickCount(16);
+                    }
+                  })
+                }
+                .width('100%')
+                .padding({ left: 48 })
+              }
+              .width('100%')
+              .padding({ left: 14, right: 14, top: 13, bottom: 14 })
             }
             .width('100%')
-            .padding(14)
             .backgroundColor(Theme.CARD)
-            .borderRadius(14)
-            .alignItems(HorizontalAlign.Start)
+            .borderRadius(18)
+            .border({ width: 0.75, color: Theme.STROKE })
+            .clip(true)
 
-            Text('改完立即生效，不需要额外保存。')
-              .fontSize(10)
+            Text('适用于媒体库、收藏、标签、系列与导演列表，改完即刻生效。')
+              .fontSize(10.5)
               .fontColor(Theme.TEXT_FAINT)
               .width('100%')
+              .padding({ left: 4, right: 4 })
           }
           .width('100%')
-          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.BOTTOM_SAFE })
+          .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD, bottom: Theme.pageBottomSafe() })
         }
-        .layoutWeight(1)
+        .width('100%')
+        .height('100%')
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
       }
@@ -164,6 +177,7 @@ struct SettingsListPage {
       .height('100%')
       .backgroundColor(Theme.BG)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .mode(NavigationMode.Stack)
     .hideBackButton(true)
     .hideToolBar(true)

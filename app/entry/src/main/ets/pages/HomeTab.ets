@@ -5,7 +5,8 @@ import { util } from '@kit.ArkTS';
 import { fileIo } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { httpDelete, httpGet, httpGetCached, cachedBody, dropPageCache, httpPost, httpWarmStream } from '../common/Http';
-import { cachePut } from '../common/PageCache';
+import { cachePut, cacheReadStale } from '../common/PageCache';
+import { HOME_BOOT_CACHE_KEY } from '../common/Motion';
 import { Store } from '../common/Store';
 import { PoolParams } from '../common/PoolParams';
 import { NavBarWatch } from '../common/NavBarWatch';
@@ -22,6 +23,7 @@ import { MediaRow } from '../view/MediaRow';
 import { BannerRow } from '../view/BannerRow';
 import { GlowOrb, ParticleField } from '../view/Fx';
 import { GlassBox, GlassIcon, PageTitle } from '../view/GlassKit';
+import { HeroGlassSkeleton, HomeGlassSkeleton } from '../view/Skeleton';
 
 /** 首页「媒体库」一栏的一张卡（2.5.5.4）。 */
 interface LibCard {
@@ -168,7 +170,7 @@ struct LibraryRow {
     Column({ space: 8 }) {
       Row() {
         Text('媒体库')
-          .fontSize(15)
+          .fontSize(17)
           .fontWeight(FontWeight.Bold)
           .fontColor(Theme.TEXT)
         Blank()
@@ -303,14 +305,19 @@ struct LibCardCell {
         Stack({ alignContent: Alignment.TopEnd }) {
           this.CoverArt()
           // 明确可点：点它出菜单（长按在很多机型上会被滚动手势抢掉）
-          Text('⇄')
-            .fontSize(10)
-            .fontColor('#F2FFFFFF')
-            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-            .backgroundColor('#99000000')
-            .borderRadius(7)
-            .margin({ top: 5, right: 5 })
-            .bindMenu(this.menuItems())
+          Stack() {
+            SymbolGlyph($r('sys.symbol.swap'))
+              .fontSize(11)
+              .fontColor(['#F2FFFFFF'])
+          }
+          .width(22)
+          .height(18)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+          .backgroundColor('#8C000000')
+          .border({ width: 0.5, color: '#33FFFFFF' })
+          .borderRadius(7)
+          .margin({ top: 5, right: 5 })
+          .bindMenu(this.menuItems())
         }
         .width('100%')
         .height(84)
@@ -434,6 +441,9 @@ export struct HomeTab {
   private cachedScreenH: number = 0;
 
   aboutToAppear(): void {
+    // 2.8.2 P1 零割裂冷启：在建连完成之前先同步读一次本地首屏缓存，
+    // 命中时首帧直接铺出真实分区 + 顶部玻璃骨架，未命中时维持 HomeGlassSkeleton 占位。
+    this.hydrateBootCache();
     this.load();
     // 光晕：**1 秒硬延时**（2026-11-16 用户「不要管他加载多久了」）。
     // 之前挂在 `loading` 的 @Watch 上，但 `minus_glow` 这个偏好被"进过一次负一屏就自动关掉"
@@ -441,6 +451,32 @@ export struct HomeTab {
     setTimeout(() => {
       this.pulseGlowOnce();
     }, 1000);
+  }
+
+  /** 同步读取跨内/外网通用的首屏快照，让冷启动首帧零转圈。 */
+  private hydrateBootCache(): boolean {
+    if (this.home.rows.length > 0 || this.home.hero.length > 0) {
+      return true;
+    }
+    let stale: string | undefined = cacheReadStale(HOME_BOOT_CACHE_KEY);
+    if (stale === undefined && Store.I.user.length > 0) {
+      stale = cachedBody(this.homeUrl(false));
+    }
+    if (stale === undefined) {
+      return false;
+    }
+    try {
+      this.home = safeHome(JSON.parse(stale) as HomeData);
+      this.heroSkeleton = true;
+      this.loading = false;
+      this.refreshReasons();
+      this.buildLibCards();
+      this.buildSections();
+      return true;
+    } catch (err) {
+      console.info('[amane] home boot cache parse failed');
+      return false;
+    }
   }
 
   /**
@@ -579,6 +615,7 @@ export struct HomeTab {
       const text: string = await httpGet(
         `${this.homeUrl(true)}`, Store.I.token);
       this.home = safeHome(JSON.parse(text) as HomeData);
+      cachePut(HOME_BOOT_CACHE_KEY, text, 86400000);
       this.syncCard();
       this.error = '';
       this.loading = false;
@@ -623,6 +660,7 @@ export struct HomeTab {
       const text: string = await httpGet(
         `${this.homeUrl(true)}`, Store.I.token);
       this.home = safeHome(JSON.parse(text) as HomeData);
+      cachePut(HOME_BOOT_CACHE_KEY, text, 86400000);
       this.syncCard();
       this.error = '';
       this.loading = false;
@@ -641,15 +679,18 @@ export struct HomeTab {
 
   private async load(): Promise<void> {
     if (!Store.I.ready) {
-      // 冷启动时 Index 还没拿到 config，稍后 refreshKey 变化会再来一次
-      this.loading = false;
+      // 冷启动时 Index 正在后台建连：若有首屏缓存已铺出则保持显示，
+      // 无缓存时保持 loading=true 展示整屏玻璃骨架，待建连完成后由 refreshKey 触发拉新。
+      if (this.home.rows.length > 0 || this.home.hero.length > 0) {
+        this.loading = false;
+      }
       return;
     }
     this.error = '';
     const url: string = this.homeUrl(false);
     // 先用缓存把首页画出来（哪怕已过期）：来回切 tab 不用每次都看骨架屏
     if (this.home.rows.length === 0 && this.home.hero.length === 0) {
-      const stale: string | undefined = cachedBody(url);
+      const stale: string | undefined = cachedBody(url) ?? cacheReadStale(HOME_BOOT_CACHE_KEY);
       if (stale !== undefined) {
         try {
           this.home = safeHome(JSON.parse(stale) as HomeData);
@@ -660,6 +701,9 @@ export struct HomeTab {
           this.heroSkeleton = true;
           this.syncCard();
           this.loading = false;
+          this.refreshReasons();
+          this.buildLibCards();
+          this.buildSections();
         } catch (err) {
           console.info('[amane] home cache parse failed');
         }
@@ -672,8 +716,9 @@ export struct HomeTab {
       const text: string = await httpGet(
         `${this.homeUrl(true)}`, Store.I.token);
       this.home = safeHome(JSON.parse(text) as HomeData);
-      // 留一份给下次冷启动"先画出来"用（只是画面上的一帧，不代表数据是最新的）
+      // 留一份给下次冷启动"先画出来"用（含跨内/外网固定键，切网不断档）
       cachePut(url, text, 1800000);
+      cachePut(HOME_BOOT_CACHE_KEY, text, 86400000);
       // 真数据到了：顶部大图从骨架换成这一次的那部（首次挂载带淡入，见 HeroBanner）
       this.heroSkeleton = false;
       this.syncCard();
@@ -1068,7 +1113,18 @@ export struct HomeTab {
     // 100% 就是「已减掉留白」的宽度，不会像 margin 那样把整条撑出屏幕。
     Column() {
       Row({ space: 12 }) {
-        Column({ space: 4 }) {
+        Stack() {
+          SymbolGlyph($r('sys.symbol.layer'))
+            .fontSize(18)
+            .fontColor([Theme.ACCENT_INK])
+        }
+        .width(38)
+        .height(38)
+        .borderRadius(12)
+        .backgroundColor(Theme.accentAlpha(0.14))
+        .border({ width: 0.5, color: Theme.inkAlpha(0.30) })
+
+        Column({ space: 3 }) {
           Row({ space: 6 }) {
             Text('甄选')
               .fontSize(15)
@@ -1076,15 +1132,18 @@ export struct HomeTab {
               .fontColor(Theme.TEXT)
             Text('特色')
               .fontSize(9)
-              .fontColor(Theme.ACCENT)
-              .padding({ left: 5, right: 5, top: 1, bottom: 1 })
-              .backgroundColor(Theme.ACCENT_SOFT)
-              .borderRadius(4)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Theme.GOLD)
+              .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+              .backgroundColor('#24FFD06B')
+              .border({ width: 0.5, color: '#4DFFD06B' })
+              .borderRadius(6)
           }
-          Text('按演员、标签、人数、媒体库等条件自由组合，筛出你要的片子')
-            .fontSize(10)
+          Text('按演员、标签与片库组合筛片')
+            .fontSize(11)
             .fontColor(Theme.TEXT_FAINT)
-            .maxLines(2)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
             .width('100%')
         }
         .alignItems(HorizontalAlign.Start)
@@ -1092,24 +1151,25 @@ export struct HomeTab {
 
         Text('去试 ›')
           .fontSize(12)
-          .fontColor(Theme.TEXT)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.ACCENT_INK)
           .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-          .backgroundColor(Theme.accentAlpha(0.22))
+          .backgroundColor(Theme.accentAlpha(0.18))
           .borderRadius(Theme.R_PILL)
-          .border({ width: 1, color: Theme.accentAlpha(0.45) })
+          .border({ width: 0.75, color: Theme.inkAlpha(0.44) })
       }
       .width('100%')
-      .padding(Theme.G_L)
+      .padding({ left: 12, right: 14, top: 12, bottom: 12 })
       .backgroundColor(Theme.CARD)
       .borderRadius(Theme.R_CARD)
-      .border({ width: 1, color: Theme.STROKE })
+      .border({ width: 0.75, color: '#24FFFFFF' })
       .onClick(() => {
         router.pushUrl({ url: 'ext/actors/CastFinderPage' });
       })
     }
     .width('100%')
     .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
-    .margin({ bottom: 12 })
+    .margin({ bottom: 16 })
   }
 
   /** 理由卡左侧的封面：按 id 从当天这批里找，找不到就不画图（不占位）。 */
@@ -1186,18 +1246,7 @@ export struct HomeTab {
         .hitTestBehavior(HitTestMode.None)
 
       if (this.loading) {
-        Column({ space: 12 }) {
-          LoadingProgress()
-            .width(30)
-            .height(30)
-            .color(Theme.ACCENT)
-          Text('正在整理媒体库…')
-            .fontSize(12)
-            .fontColor(Theme.TEXT_FAINT)
-        }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
+        HomeGlassSkeleton()
       } else if (this.error.length > 0) {
         Column({ space: 12 }) {
           Text(this.error)
@@ -1223,25 +1272,7 @@ export struct HomeTab {
           List({ scroller: this.sc }) {
           ListItem() {
             if (this.heroSkeleton) {
-              // 缓存首帧：不画任何色块（2026-11-16 用户：别留一大块丑的灰片），
-              // 但也不能是纯黑 —— 用和「启动加载连库」同一套背景（呼吸光团 + 浮尘），
-              // 让这块看起来本来就是背景的一部分。
-              Stack({ alignContent: Alignment.Center }) {
-                if (this.fx >= 1) {
-                  GlowOrb({
-                    color: Theme.ACCENT,
-                    diameter: this.fx >= 2 ? 320 : 240,
-                    alpha: 0.22,
-                    breath: true,
-                    period: 3600
-                  })
-                }
-                if (this.fx >= 2) {
-                  ParticleField({ count: 18, color: '#FFFFFF', alpha: 0.30, drift: 0.6 })
-                }
-              }
-              .width('100%')
-              .height(Theme.HERO_H)
+              HeroGlassSkeleton()
             } else {
               HeroBanner({
                 items: this.heroList(),
@@ -1341,6 +1372,8 @@ export struct HomeTab {
           }
           .width('100%')
           .height('100%')
+          .cachedCount(4, true)
+          .clipContent(ContentClipMode.BOUNDARY)
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
           // 滚动时让粒子闭嘴（2.6.1.18 光效预算）：指到新的可见行就喊一声，

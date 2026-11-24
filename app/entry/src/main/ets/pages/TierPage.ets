@@ -8,6 +8,7 @@ import { Gallery } from '../common/Gallery';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
+import { SettingsAmbientGlow } from '../view/SettingsKit';
 
 /**
  * 从夯到拉 · Tier 图（2.5.5 重做）。
@@ -654,9 +655,10 @@ struct TierPage {
   KindChip(k: string) {
     Text(this.kindLabel(k))
       .fontSize(11)
-      .fontColor(this.hasKind(k) ? Theme.ON_ACCENT : Theme.TEXT_DIM)
+      .fontColor(this.hasKind(k) ? Theme.ACCENT_INK : Theme.TEXT_DIM)
       .padding({ left: 11, right: 11, top: 5, bottom: 5 })
-      .backgroundColor(this.hasKind(k) ? Theme.ACCENT : Theme.CARD_HI)
+      .backgroundColor(this.hasKind(k) ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+            .border({ width: this.hasKind(k) ? 0.75 : 0.5, color: this.hasKind(k) ? Theme.inkAlpha(0.50) : '#16FFFFFF' })
       .borderRadius(12)
       .margin({ right: 6, bottom: 6 })
       .onClick(() => {
@@ -709,9 +711,9 @@ struct TierPage {
             ForEach(['all', '30', '90', 'year'], (key: string) => {
               Text(this.rangeLabel(key))
                 .fontSize(10)
-                .fontColor(this.rangeKey === key ? Theme.ACCENT : Theme.TEXT_FAINT)
+                .fontColor(this.rangeKey === key ? Theme.ACCENT_INK : Theme.TEXT_FAINT)
                 .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-                .backgroundColor(this.rangeKey === key ? Theme.ACCENT_SOFT : '#00FFFFFF')
+                .backgroundColor(this.rangeKey === key ? Theme.accentAlpha(0.18) : '#00FFFFFF')
                 .borderRadius(10)
                 .onClick(() => {
                   this.applyRange(key);
@@ -740,10 +742,10 @@ struct TierPage {
               ForEach([0, 1, 2], (id: number) => {
                 Text(this.genderLabel(id))
                   .fontSize(10)
-                  .fontColor(this.genderOf(id) === this.gender ? Theme.ACCENT : Theme.TEXT_FAINT)
+                  .fontColor(this.genderOf(id) === this.gender ? Theme.ACCENT_INK : Theme.TEXT_FAINT)
                   .padding({ left: 10, right: 10, top: 4, bottom: 4 })
                   .backgroundColor(this.genderOf(id) === this.gender
-                    ? Theme.ACCENT_SOFT : '#00FFFFFF')
+                    ? Theme.accentAlpha(0.18) : '#00FFFFFF')
                   .borderRadius(10)
                   .onClick(() => {
                     this.gender = this.genderOf(id);
@@ -771,7 +773,7 @@ struct TierPage {
             if (this.customTitle.length > 0) {
               Text('清空')
                 .fontSize(9)
-                .fontColor(Theme.ACCENT)
+                .fontColor(Theme.ACCENT_INK)
                 .onClick(() => {
                   this.customTitle = '';
                 })
@@ -800,7 +802,7 @@ struct TierPage {
           Row({ space: 6 }) {
             Text(this.favoriteOnly ? '☑' : '☐')
               .fontSize(12)
-              .fontColor(this.favoriteOnly ? Theme.ACCENT : Theme.TEXT_FAINT)
+              .fontColor(this.favoriteOnly ? Theme.ACCENT_INK : Theme.TEXT_FAINT)
             Text('只看收藏')
               .fontSize(10)
               .fontColor(Theme.TEXT_DIM)
@@ -812,7 +814,7 @@ struct TierPage {
           Row({ space: 6 }) {
             Text(this.includeUnrated ? '☑' : '☐')
               .fontSize(12)
-              .fontColor(this.includeUnrated ? Theme.ACCENT : Theme.TEXT_FAINT)
+              .fontColor(this.includeUnrated ? Theme.ACCENT_INK : Theme.TEXT_FAINT)
             Text('带上未评分')
               .fontSize(10)
               .fontColor(Theme.TEXT_DIM)
@@ -842,8 +844,10 @@ struct TierPage {
       .width('100%')
       .height(42)
       .justifyContent(FlexAlign.Center)
-      .backgroundColor(Theme.ACCENT)
-      .borderRadius(21)
+      .backgroundColor(Color.Transparent)
+      .linearGradient(Theme.ctaGradient())
+      .border({ width: 0.75, color: '#38FFFFFF' })
+      .borderRadius(Theme.R_PILL)
       .opacity(this.generating ? 0.6 : 1)
       .onClick(() => {
         this.generate();
@@ -852,7 +856,8 @@ struct TierPage {
     .width('100%')
     .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(14)
+    .borderRadius(18)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   /** 一格：图（影片竖版 / 其余方块），取不到图画首字。 */
@@ -1034,9 +1039,10 @@ struct TierPage {
         if (this.curPicked) {
           Text('展示中')
             .fontSize(9)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .padding({ left: 5, right: 5, top: 1, bottom: 1 })
-            .backgroundColor(Theme.ACCENT_SOFT)
+            .backgroundColor(Theme.accentAlpha(0.16))
+            .border({ width: 0.5, color: Theme.inkAlpha(0.38) })
             .borderRadius(4)
         }
         Text(this.curAt.length > 0 ? stamp(this.curAt) : '')
@@ -1081,7 +1087,7 @@ struct TierPage {
       Row({ space: 6 }) {
         Text(this.exportWithTitle ? '☑' : '☐')
           .fontSize(12)
-          .fontColor(this.exportWithTitle ? Theme.ACCENT : Theme.TEXT_FAINT)
+          .fontColor(this.exportWithTitle ? Theme.ACCENT_INK : Theme.TEXT_FAINT)
         Text('导出时带上标题')
           .fontSize(10)
           .fontColor(Theme.TEXT_DIM)
@@ -1130,9 +1136,10 @@ struct TierPage {
             if (it.picked) {
               Text('展示中')
                 .fontSize(8)
-                .fontColor(Theme.ACCENT)
+                .fontColor(Theme.ACCENT_INK)
                 .padding({ left: 4, right: 4, top: 1, bottom: 1 })
-                .backgroundColor(Theme.ACCENT_SOFT)
+                .backgroundColor(Theme.accentAlpha(0.16))
+            .border({ width: 0.5, color: Theme.inkAlpha(0.38) })
                 .borderRadius(3)
             }
           }
@@ -1152,9 +1159,10 @@ struct TierPage {
       Row({ space: 8 }) {
         Text(this.downloadingId === it.id ? '准备中…' : '下载')
           .fontSize(10)
-          .fontColor(Theme.ACCENT)
+          .fontColor(Theme.ACCENT_INK)
           .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-          .backgroundColor(Theme.ACCENT_SOFT)
+          .backgroundColor(Theme.accentAlpha(0.16))
+            .border({ width: 0.5, color: Theme.inkAlpha(0.38) })
           .borderRadius(11)
           .onClick(() => {
             this.downloadSnapshot(it);
@@ -1244,9 +1252,10 @@ struct TierPage {
         Blank()
         Text(this.exporting ? '…' : '导出')
           .fontSize(11)
-          .fontColor(this.st === ST_OK ? Theme.ON_ACCENT : Theme.TEXT_FAINT)
+          .fontColor(this.st === ST_OK ? Theme.ACCENT_INK : Theme.TEXT_FAINT)
           .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          .backgroundColor(this.st === ST_OK ? Theme.ACCENT : Theme.CARD_HI)
+          .backgroundColor(this.st === ST_OK ? Theme.accentAlpha(0.20) : Theme.CARD_HI)
+            .border({ width: this.st === ST_OK ? 0.75 : 0.5, color: this.st === ST_OK ? Theme.inkAlpha(0.50) : '#16FFFFFF' })
           .borderRadius(13)
           .onClick(() => {
             this.exportPng('tier-current');
@@ -1289,7 +1298,9 @@ struct TierPage {
 
   build() {
     Navigation(this.navStack) {
-      Column() {
+      Stack({ alignContent: Alignment.Top }) {
+        SettingsAmbientGlow()
+        Column() {
 
         Scroll() {
           Column({ space: 12 }) {
@@ -1320,6 +1331,9 @@ struct TierPage {
         .layoutWeight(1)
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
+      }
+      .width('100%')
+      .height('100%')
       }
       .width('100%')
       .height('100%')

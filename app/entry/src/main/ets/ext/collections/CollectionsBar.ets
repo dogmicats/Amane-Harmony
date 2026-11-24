@@ -246,7 +246,7 @@ export struct CollectionsBar {
               ForEach(this.draft, (k: string) => {
                 Text(`${this.labelOf(k)} ✕`)
                   .fontSize(11)
-                  .fontColor('#FFFFFF')
+                  .fontColor(Theme.ON_ACCENT)
                   .padding({ left: 10, right: 10, top: 5, bottom: 5 })
                   .backgroundColor(Theme.ACCENT)
                   .borderRadius(12)
@@ -308,7 +308,7 @@ export struct CollectionsBar {
             })
           Text(this.busy ? '…' : '创建')
             .fontSize(12)
-            .fontColor('#FFFFFF')
+            .fontColor(Theme.ON_ACCENT)
             .padding({ left: 14, right: 14, top: 8, bottom: 8 })
             .backgroundColor(Theme.ACCENT)
             .borderRadius(9)

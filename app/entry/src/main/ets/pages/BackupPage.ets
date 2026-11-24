@@ -15,6 +15,7 @@ import { util } from '@kit.ArkTS';
 import { httpGet, httpPost } from '../common/Http';
 import { Store } from '../common/Store';
 import { Theme } from '../common/Theme';
+import { setPageFullScreen } from '../common/PageFullscreen';
 import { GlassGlyph, PageTitle, GlassBack} from '../view/GlassKit';
 
 interface ImportResult {
@@ -271,7 +272,7 @@ struct BackupPage {
       .layoutWeight(1)
       Text(action)
         .fontSize(12)
-        .fontColor(Theme.ACCENT)
+        .fontColor(Theme.ACCENT_INK)
         .padding({ left: 12, right: 12, top: 6, bottom: 6 })
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .backgroundColor(Theme.accentAlpha(0.30))
@@ -284,7 +285,8 @@ struct BackupPage {
     .width('100%')
     .padding(14)
     .backgroundColor(Theme.CARD)
-    .borderRadius(Theme.RADIUS)
+    .borderRadius(16)
+    .border({ width: 0.75, color: Theme.STROKE })
   }
 
   @Builder
@@ -310,9 +312,10 @@ struct BackupPage {
           ForEach(KIND_LABELS, (label: string, i: number) => {
             Text(`${this.kindsOn[i] ? '✓ ' : ''}${label}`)
               .fontSize(10)
-              .fontColor(this.kindsOn[i] ? '#FFFFFF' : Theme.TEXT_DIM)
+              .fontColor(this.kindsOn[i] ? Theme.ACCENT_INK : Theme.TEXT_DIM)
               .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-              .backgroundColor(this.kindsOn[i] ? Theme.ACCENT : Theme.CARD)
+              .backgroundColor(this.kindsOn[i] ? Theme.accentAlpha(0.20) : Theme.CARD)
+            .border({ width: this.kindsOn[i] ? 0.75 : 0.5, color: this.kindsOn[i] ? Theme.inkAlpha(0.50) : '#16FFFFFF' })
               .borderRadius(10)
               .margin({ right: 6, bottom: 6 })
               .onClick(() => {
@@ -320,7 +323,7 @@ struct BackupPage {
                 next[i] = !next[i];
                 this.kindsOn = next;
               })
-          }, (label: string) => label)
+          }, (label: string, i: number) => `${label}-${this.kindsOn[i] ? 1 : 0}`)
         }
         .width('100%')
         Row({ space: 8 }) {
@@ -341,7 +344,7 @@ struct BackupPage {
           Blank()
           Text('确认导入')
             .fontSize(11)
-            .fontColor(Theme.ACCENT)
+            .fontColor(Theme.ACCENT_INK)
             .padding({ left: 12, right: 12, top: 6, bottom: 6 })
             .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
             .backgroundColor(Theme.accentAlpha(0.30))
@@ -356,7 +359,8 @@ struct BackupPage {
       .width('100%')
       .padding(12)
       .backgroundColor(Theme.CARD)
-      .borderRadius(Theme.RADIUS)
+      .borderRadius(16)
+      .border({ width: 0.75, color: Theme.STROKE })
     }
   }
 
@@ -409,6 +413,10 @@ struct BackupPage {
     };
   }
 
+  onPageShow(): void {
+    setPageFullScreen(getContext(this), true);
+  }
+
   build() {
     Navigation(this.navStack) {
       Scroll() {
@@ -419,7 +427,7 @@ struct BackupPage {
 
           Text(this.note.length > 0 ? this.note : (this.detail.length > 0 ? this.detail : ' '))
             .fontSize(11)
-            .fontColor(this.note.length > 0 ? Theme.ACCENT : Theme.TEXT_DIM)
+            .fontColor(this.note.length > 0 ? Theme.ACCENT_INK : Theme.TEXT_DIM)
             .lineHeight(15)
             .width('100%')
             .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
@@ -470,7 +478,8 @@ struct BackupPage {
             .width('100%')
             .padding(12)
             .backgroundColor(Theme.CARD)
-            .borderRadius(Theme.RADIUS)
+            .borderRadius(16)
+            .border({ width: 0.75, color: Theme.STROKE })
             .margin({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
           }
 
@@ -490,6 +499,7 @@ struct BackupPage {
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
     }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .mode(NavigationMode.Stack)
     .hideBackButton(true)
     .hideToolBar(true)

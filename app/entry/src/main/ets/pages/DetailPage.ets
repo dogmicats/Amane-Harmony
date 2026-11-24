@@ -1,5 +1,6 @@
-import { router, uiMaterial, promptAction } from '@kit.ArkUI';
+import { router, promptAction } from '@kit.ArkUI';
 import { setPageFullScreen } from '../common/PageFullscreen';
+import { GlassBack } from '../view/GlassKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
@@ -38,6 +39,7 @@ import { SkeletonBlock } from '../view/Skeleton';
 import { SectionHead } from '../view/SectionHead';
 import { ArtColor } from '../common/ArtColor';
 import { Haptics } from '../common/Haptics';
+import { Motion, CoverRect } from '../common/Motion';
 
 import { CommentSheet, commentPreview } from '../view/CommentSheet';
 import { PlayerView } from '../view/PlayerView';
@@ -71,6 +73,20 @@ function emptyDetail(): ItemDetail {
  * 模块级，页面来回进出不会重置；同一部片 10 分钟内只热一次。
  */
 const WARM_AT: Map<number, number> = new Map();
+
+/** 服务端 pending_pick 的决策行。 */
+interface PickRow {
+  decision: string;
+}
+
+/** 点「要 / 不要」时提交的 body。 */
+interface PendingDecide {
+  number: string;
+  decision: string;
+  target: string;
+  metadata_id: number;
+  source: string;
+}
 
 @Entry
 @Component
@@ -151,6 +167,16 @@ export struct DetailPage {
   // 盲盒转场：从中心的小图放大铺满，等详情就绪后再从中心扩散淡出
   @State heroOn: boolean = false;
   @State heroUrl: string = '';
+  // 一镜到底封面展开（2.8.2 P1）：点击海报卡进入详情时，从真实卡片坐标顺滑展开到详情封面槽
+  @State morphOn: boolean = false;
+  @State morphSettled: boolean = false;
+  @State morphPoster: string = '';
+  @State morphX: number = 0;
+  @State morphY: number = 0;
+  @State morphW: number = 104;
+  @State morphH: number = 148;
+  @State morphR: number = 12;
+  @StorageProp('amaneTopInset') topInset: number = 30;
   /** 一片一色（2.6.1.18）：这张海报的主色 / 第二色。空串 = 没取到，各处退回主题色。 */
   @State tint: string = '';
   @State tint2: string = '';
@@ -166,9 +192,25 @@ export struct DetailPage {
   private heroGone: boolean = false;
   @State expanded: boolean = false;
   @State toast: string = '';
+  /**
+   * 待下载「要 / 不要」（2026-11-19）。
+   *
+   * 只在**这部片挂着「破解待下载」/「网友推荐待下载」标签**时显示：那两个标签下的片
+   * 是「站点上有、网盘里还没有」的，需要人决定要不要下；其余片子一行都不该看到它。
+   * 决策存服务端 pending_pick，点完由 NAS 上的 worker 去提交 115。
+   */
+  @State pendingOn: boolean = false;
+  @State pendingAsk: boolean = false;
+  @State pickWant: boolean = false;
+  @State pickSkip: boolean = false;
+  private pendingTags: string[] = ['破解待下载', '网友推荐待下载'];
+  private pendingAskTag: string = '网友推荐待下载';
   /** 离线缓存记录快照：下载/排队/完成时刷新按钮文字（2.5.7）。 */
   @State dlTasks: OfflineTask[] = [];
   private stopDl: () => void = () => {};
+  /** 本页实例注册给 PlaySession 的回调引用，销毁时仅在仍归属本页时才清理，避免多详情页栈误清前页回调。 */
+  private myHandoff: (() => void) | undefined = undefined;
+  private myOpener: ((h: PlayHandoff) => void) | undefined = undefined;
   private metaId: number = 0;
   /**
    * 起播意图：-1 = 按进度续播（默认），>=0 = 从这一秒开始。
@@ -181,15 +223,17 @@ export struct DetailPage {
 
   aboutToAppear(): void {
     // 播放器点「画中画」时由它发起交接，落地在这里（停内嵌 + 开浮窗）
-    PlaySession.handoff = () => {
+    this.myHandoff = () => {
       this.handoffToFloat();
     };
+    PlaySession.handoff = this.myHandoff;
     // 浮窗点「回详情页」时由它回调这里（2.6.1.59 真机修）：
     // 这时候本页**往往还在栈里**（浮窗只是盖在它上面），`router.back` 等于原地不动，
     // 所以不能再靠路由回来 —— 由页面直接把画面接回去。
-    PlaySession.opener = (h: PlayHandoff) => {
+    this.myOpener = (h: PlayHandoff) => {
       this.takeOverFromFloat(h);
     };
+    PlaySession.opener = this.myOpener;
     // 离线缓存要先拿到沙箱路径才能建目录；只在离线页初始化会出现「从没进过离线页就下不了」（2.5.7 修）
     try {
       Downloader.init(getContext(this) as common.UIAbilityContext);
@@ -216,6 +260,11 @@ export struct DetailPage {
     if (params !== undefined && params !== null && params.heroUrl !== undefined
       && params.heroUrl !== null && params.heroUrl.length > 0) {
       this.startHero(params.heroUrl);
+    } else if (this.metaId > 0) {
+      const cov: CoverRect | undefined = Motion.takeCover(this.metaId);
+      if (cov !== undefined) {
+        this.startCoverMorph(cov);
+      }
     }
     // 带 autoplay 进来：等详情就绪后原地开播（观看记录 / 弹幕 / 截帧的跳转入口）
     if (params !== undefined && params !== null && params.autoplay === true) {
@@ -262,9 +311,12 @@ export struct DetailPage {
 
   aboutToDisappear(): void {
     this.stopDl();
-    // 页面没了就别再留回调：浮窗那边会退化成 router（新开一页详情）
-    if (PlaySession.opener !== undefined) {
+    // 仅清理仍归属本页的回调：避免从详情页 A 跳相似影片详情页 B 再返回时，B 销毁把 A 刚恢复的回调清掉
+    if (this.myOpener !== undefined && PlaySession.opener === this.myOpener) {
       PlaySession.opener = undefined;
+    }
+    if (this.myHandoff !== undefined && PlaySession.handoff === this.myHandoff) {
+      PlaySession.handoff = undefined;
     }
   }
 
@@ -307,15 +359,50 @@ export struct DetailPage {
    *   2) 等详情数据就绪
    *   3) 从中心扩散淡出（380ms），露出底下的详情
    */
+  /** 一镜到底封面展开（2.8.2 P1）：从 PosterCard 真实屏幕坐标以物理弹簧顺滑落位到详情页封面。 */
+  private startCoverMorph(cov: CoverRect): void {
+    this.morphPoster = cov.poster;
+    this.morphX = cov.x;
+    this.morphY = cov.y;
+    this.morphW = cov.w;
+    this.morphH = cov.h;
+    this.morphR = cov.radius;
+    this.morphSettled = false;
+    this.morphOn = true;
+    setTimeout(() => {
+      try {
+        this.getUIContext().animateTo({ curve: Motion.springHero() }, () => {
+          this.morphSettled = true;
+        });
+      } catch (e) {
+        this.morphSettled = true;
+      }
+    }, 16);
+    setTimeout(() => {
+      this.morphOn = false;
+    }, 420);
+  }
+
+  /** 目标详情封面的纵坐标（vp）：顶部 16:9 剧照区高度 + 12vp 间距。 */
+  private morphTargetY(): number {
+    return Math.round(Motion.screenWidthVp() * 9 / 16) + 12;
+  }
+
   private startHero(url: string): void {
     this.heroUrl = url;
     this.heroOn = true;
     this.heroScale = 0.3;
     this.heroFade = 1;
     this.heroT0 = Date.now();
-    animateTo({ duration: 340, curve: Curve.EaseOut }, () => {
-      this.heroScale = 1.0;
-    });
+    try {
+      this.getUIContext().animateTo({ curve: Motion.springHero() }, () => {
+        this.heroScale = 1.0;
+      });
+    } catch (e) {
+      animateTo({ duration: 340, curve: Curve.EaseOut }, () => {
+        this.heroScale = 1.0;
+      });
+    }
     setTimeout(() => {
       this.heroZoomed = true;
       this.tryReveal();
@@ -668,9 +755,9 @@ export struct DetailPage {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
 
-      Text('▶')
-        .fontSize(9)
-        .fontColor(Theme.ACCENT)
+      SymbolGlyph($r('sys.symbol.play_fill'))
+        .fontSize(10)
+        .fontColor([Theme.ACCENT])
     }
     .width('100%')
     .padding({ left: 10, right: 10, top: 6, bottom: 6 })
@@ -791,7 +878,16 @@ export struct DetailPage {
    * （用户上一轮第 3 条：提示改成高亮，别用弹窗打断）。
    */
   onPageShow(): void {
-    setPageFullScreen(getContext(this), false);
+    if (!this.embedded) {
+      setPageFullScreen(getContext(this), true);
+    }
+    // 重新回到前台（例如从相似影片的二级详情页返回）：恢复本页对 PlaySession 的回调归属
+    if (this.myHandoff !== undefined) {
+      PlaySession.handoff = this.myHandoff;
+    }
+    if (this.myOpener !== undefined) {
+      PlaySession.opener = this.myOpener;
+    }
     // 带着浮窗回到这一页：把画面接回页面内，别让小窗和页面同时出声
     if (FloatBox.isOpen) {
       const s: PlayHandoff | undefined = PlaySession.active;
@@ -836,8 +932,111 @@ export struct DetailPage {
    * @param skipCache 跳过磁盘缓存直接走网络（从播放页回来刷新进度时用，
    *                  否则会先把 30 分钟前的旧进度铺一遍再跳成新的）
    */
-  private async load(skipCache: boolean = false): Promise<void> {
-    // 今日推荐理由：按 id 从当天快照里取，所以从收藏 / 搜索 / 演员页进来也能看到。
+  // ─────────────────────────────── 待下载「要 / 不要」（2026-11-19）
+  /**
+   * 这部片是否挂着待下载标签；是的话再问一次服务端它当前被点成什么。
+   *
+   * 标签名与服务端 `pending_pick.json` 的 `tags` 必须一致，否则这里永远不显示。
+   */
+  private async loadPendingState(): Promise<void> {
+    if (BuildConfig.CHANNEL === 'public') {
+      return;
+    }
+    try {
+      // 自己拉一份 facets，**不依赖页面里那块懒加载**：标签区块往往要滚到才加载，
+      // 而右上角这两个钮一进页面就得决定显示不显示（第一版等的是 this.facets，
+      // 结果用户进来什么都没有 —— 就是时序问题）。
+      const text: string = await httpGet(
+        `${Store.I.user}/api/user/item/${this.metaId}/facets`, Store.I.token);
+      const f: ItemFacets = safeItemFacets(JSON.parse(text) as ItemFacets);
+      let hit: boolean = false;
+      let ask: boolean = false;
+      for (let i = 0; i < f.user_tags.length; i++) {
+        const n: string = f.user_tags[i].name;
+        if (this.pendingTags.indexOf(n) >= 0) {
+          hit = true;
+        }
+        if (n === this.pendingAskTag) {
+          ask = true;
+        }
+      }
+      this.pendingOn = hit;
+      this.pendingAsk = ask;
+      if (!hit) {
+        return;
+      }
+      const num: string = this.detail.number;
+      const stUrl: string =
+        `${Store.I.user}/api/user/pending/state?numbers=${encodeURIComponent(num)}`;
+      const stText: string = await httpGet(stUrl, Store.I.token);
+      const obj = JSON.parse(stText) as Record<string, Object>;
+      const box = obj.items as Record<string, PickRow>;
+      const st: PickRow = box[num];
+      const decided: string = st === undefined || st === null ? '' : st.decision;
+      this.pickWant = decided === 'want';
+      this.pickSkip = decided === 'skip';
+    } catch (err) {
+      const e = err as BusinessError;
+      console.info(`[amane] pending state: ${e.code} ${e.message}`);
+    }
+  }
+
+  /** 点「要 / 不要」：要 → 进下载队列；不要 → worker 摘标签 + 写 CSV + 拉黑。 */
+  private async decidePending(decision: string): Promise<void> {
+    const num: string = this.detail.number;
+    if (num === undefined || num === null || num.length === 0) {
+      return;
+    }
+    let target: string = 'pojie';
+    if (decision === 'want' && this.pendingAsk) {
+      // 网友推荐那批来源混杂：问一次存到哪个网盘目录
+      const r = await promptAction.showDialog({
+        title: '存到哪个网盘目录？',
+        message: '这条进了下载队列，115 会存到你选的目录',
+        buttons: [
+          { text: '破解', color: Theme.ACCENT },
+          { text: 'JAV', color: Theme.ACCENT }
+        ]
+      });
+      if (r.index < 0) {
+        return;
+      }
+      target = r.index === 1 ? 'jav' : 'pojie';
+    }
+    const oldW: boolean = this.pickWant;
+    const oldS: boolean = this.pickSkip;
+    this.pickWant = decision === 'want';
+    this.pickSkip = decision === 'skip';
+    try {
+      const payload: PendingDecide = {
+        number: num,
+        decision: decision,
+        target: target,
+        metadata_id: this.detail.id,
+        source: 'detail'
+      };
+      await httpPost(`${Store.I.user}/api/user/pending/decide`, Store.I.token,
+        JSON.stringify(payload));
+      // 决策一落库，服务端就把标签摘了 —— 这里立刻把两颗钮收掉，
+      // 稍等再退回列表，让用户看到「那条不见了」而不是「点了没反应」。
+      this.pendingOn = false;
+      this.toast = decision === 'want' ? '已排入下载队列' : '已标记不要（会从标签里清掉）';
+      setTimeout(() => {
+        this.toast = '';
+        router.back();
+      }, 900);
+    } catch (err) {
+      const e = err as BusinessError;
+      this.pickWant = oldW;
+      this.pickSkip = oldS;
+      this.toast = e.code === 404 ? '服务端未启用待下载扩展' : '标记失败，请重试';
+      setTimeout(() => {
+        this.toast = '';
+      }, 2000);
+    }
+  }
+
+  private async load(skipCache: boolean = false): Promise<void> {    // 今日推荐理由：按 id 从当天快照里取，所以从收藏 / 搜索 / 演员页进来也能看到。
     // 跨天、开关关掉、没上推荐位都会得到 undefined，整张卡不渲染。
     this.todayReason = Reason.forId(this.metaId);
     // 预热进度条预览：服务端首次要现抽 64 格（网盘约 15s），
@@ -884,6 +1083,8 @@ export struct DetailPage {
     this.tryReveal();
     // 一片一色：详情主体已经能显示，取色在后台跑（取到才变色，取不到就是主题色）
     this.loadTint();
+    // 「要 / 不要」：只有挂着待下载标签的片才需要问服务端当前决策（其余一个请求都不发）
+    this.loadPendingState();
     // 从观看记录 / 弹幕 / 截帧点进来的「直接开播」：详情就绪后再起播，
     // 这样页面一渲染就是「顶部已经在放」，切回竖屏也还有详情可看（第 8 条）。
     if (this.pendingAuto && this.detail.id > 0) {
@@ -1589,7 +1790,7 @@ export struct DetailPage {
           if (s.key === this.defaultKey) {
             Text('默认')
               .fontSize(9)
-              .fontColor('#FFFFFF')
+              .fontColor(Theme.ON_ACCENT)
               .padding({ left: 5, right: 5, top: 1, bottom: 1 })
               .backgroundColor(Theme.ACCENT)
               .borderRadius(4)
@@ -1597,9 +1798,10 @@ export struct DetailPage {
           if (s.definition.length > 0) {
             Text(s.definition)
               .fontSize(9)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
               .padding({ left: 5, right: 5, top: 1, bottom: 1 })
-              .backgroundColor(Theme.ACCENT_SOFT)
+              .backgroundColor(Theme.accentAlpha(0.16))
+              .border({ width: 0.5, color: Theme.inkAlpha(0.32) })
               .borderRadius(4)
           }
           if (s.has_subtitle) {
@@ -1650,14 +1852,17 @@ export struct DetailPage {
         this.downloadStream(s);
       })
 
-      Text('▶')
-        .fontSize(12)
-        .fontColor('#FFFFFF')
-        .width(30)
-        .height(30)
-        .textAlign(TextAlign.Center)
-        .borderRadius(Theme.R_PILL)
-        .backgroundColor(Theme.ACCENT)
+      Stack() {
+        SymbolGlyph($r('sys.symbol.play_fill'))
+          .fontSize(13)
+          .fontColor([Theme.ON_ACCENT])
+      }
+      .width(30)
+      .height(30)
+      .borderRadius(Theme.R_PILL)
+      .backgroundColor(Color.Transparent)
+      .linearGradient(Theme.ctaGradient())
+      .border({ width: 0.5, color: '#38FFFFFF' })
     }
     .width('100%')
     .padding(11)
@@ -1689,9 +1894,10 @@ export struct DetailPage {
           if (this.castOn) {
             Text('投屏')
               .fontSize(12)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
               .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-              .backgroundColor(Theme.ACCENT_SOFT)
+              .backgroundColor(Theme.accentAlpha(0.16))
+              .border({ width: 0.5, color: Theme.inkAlpha(0.36) })
               .borderRadius(9)
               .onClick(() => {
                 this.showVersions = false;
@@ -1730,7 +1936,7 @@ export struct DetailPage {
               .fontColor(Theme.TEXT_DIM)
             Text('直接用默认文件播放')
               .fontSize(11)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
               .onClick(() => {
                 this.playFile('', '');
               })
@@ -1772,7 +1978,7 @@ export struct DetailPage {
           if (this.streams.length > 1) {
             Text(`把 ${this.streams.length} 个版本都排进下载队列`)
               .fontSize(11)
-              .fontColor(Theme.ACCENT)
+              .fontColor(Theme.ACCENT_INK)
               .width('100%')
               .textAlign(TextAlign.Center)
               .padding({ top: 10, bottom: 10 })
@@ -1851,7 +2057,7 @@ export struct DetailPage {
   private askDeleteComment(id: number): void {
     AlertDialog.show({
       title: '删除这条评价？',
-      message: '删了就找不回来了（只删你写的这条，影片本身不受影响）。',
+      message: '删除后不可恢复，不影响影片本身。',
       primaryButton: {
         value: '再想想',
         action: () => {
@@ -1893,7 +2099,7 @@ export struct DetailPage {
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
           .fontColor(Theme.TEXT)
-        TextArea({ text: this.commentDraft, placeholder: '写点什么…（会同步到你的服务端，只有你自己看得到这条标记）' })
+        TextArea({ text: this.commentDraft, placeholder: '写点锐评或笔记…（仅自己可见）' })
           .height(160)
           .fontSize(13)
           .fontColor(Theme.TEXT)
@@ -1914,7 +2120,7 @@ export struct DetailPage {
             })
           Text(this.savingComment ? '保存中…' : '保存')
             .fontSize(13)
-            .fontColor('#FFFFFF')
+            .fontColor(Theme.ON_ACCENT)
             .layoutWeight(1)
             .textAlign(TextAlign.Center)
             .padding({ top: 10, bottom: 10 })
@@ -2044,9 +2250,12 @@ export struct DetailPage {
   @Builder
   ReasonCard() {
     if (this.todayReason !== undefined && this.reasonMain().length > 0) {
-      Column({ space: 8 }) {
+      Column({ space: 6 }) {
         Row({ space: 6 }) {
-          Text('✦ 今日推荐理由')
+          SymbolGlyph($r('sys.symbol.wand_and_stars'))
+            .fontSize(12)
+            .fontColor([Theme.GOLD])
+          Text('今日推荐理由')
             .fontSize(11)
             .fontColor(Theme.GOLD)
             .fontWeight(FontWeight.Medium)
@@ -2056,18 +2265,14 @@ export struct DetailPage {
             .fontColor(Theme.TEXT_FAINT)
         }
         .width('100%')
+        .alignItems(VerticalAlign.Center)
 
         Text(this.reasonMain())
-          .fontSize(15)
+          .fontSize(14)
           .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.GOLD)
+          .fontColor(Theme.TEXT)
           .width('100%')
-          .lineHeight(23)
-          .padding({ left: 9 })
-          .border({
-            width: { left: 2 },
-            color: { left: Theme.GOLD }
-          })
+          .lineHeight(21)
 
         if (this.reasonExtra().length > 0) {
           Text(this.reasonExtra())
@@ -2079,11 +2284,11 @@ export struct DetailPage {
       }
       .alignItems(HorizontalAlign.Start)
       .width('100%')
-      .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+      .padding({ left: 14, right: 14, top: 11, bottom: 11 })
       .backgroundColor(Theme.CARD)
-      .borderRadius(12)
-      .border({ width: 0.5, color: '#26FFFFFF' })
-      .margin({ top: 12 })
+      .borderRadius(14)
+      .border({ width: 0.75, color: '#24FFFFFF' })
+      .margin({ top: 14 })
     }
   }
 
@@ -2112,9 +2317,11 @@ export struct DetailPage {
                     .width(104)
                     .height(148)
                     .objectFit(ImageFit.Cover)
-                    .borderRadius(10)
+                    .borderRadius(12)
                     .backgroundColor(Theme.CARD)
                     .shadow({ radius: 16, color: '#99000000', offsetY: 6 })
+                    .opacity(this.morphOn && !this.morphSettled ? 0 : 1)
+                    .geometryTransition(`cover-${this.metaId}`)
 
                   if (this.metaOk) {
                     Text(this.coverBusy ? '…' : (this.detail.poster_is_custom === true ? '已换' : '换'))
@@ -2130,53 +2337,77 @@ export struct DetailPage {
                 .width(104)
                 .height(148)
 
-                Column({ space: 6 }) {
-                  Text(this.detail.number)
-                    .fontSize(12)
-                    .fontColor(this.tintColor())
-                    .fontWeight(FontWeight.Medium)
+                Column({ space: 7 }) {
+                  Row({ space: 8 }) {
+                    Text(this.detail.number)
+                      .fontSize(11)
+                      .fontColor(this.tintColor())
+                      .fontWeight(FontWeight.Medium)
+                      .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+                      .backgroundColor(Theme.alphaOf(this.tintColor(), 0.18))
+                      .borderRadius(8)
+                      .border({ width: 0.5, color: Theme.alphaOf(this.tintColor(), 0.42) })
+                    Blank()
+                    // 2.5.5：本地覆盖层可用才给编辑入口（老服务端 404 时整块不出现）
+                    if (this.metaOk) {
+                      Row({ space: 4 }) {
+                        SymbolGlyph($r('sys.symbol.pencil_line'))
+                          .fontSize(11)
+                          .fontColor([Theme.TEXT_DIM])
+                        Text('编辑')
+                          .fontSize(11)
+                          .fontColor(Theme.TEXT_DIM)
+                      }
+                      .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+                      .backgroundColor(Theme.CARD_HI)
+                      .borderRadius(11)
+                      .border({ width: 0.5, color: '#26FFFFFF' })
+                      .onClick(() => {
+                        this.openMetaEdit();
+                      })
+                    }
+                  }
+                  .width('100%')
+                  .alignItems(VerticalAlign.Center)
+
                   Text(this.detail.title.length > 0 ? this.detail.title : this.detail.number)
-                    .fontSize(17)
+                    .fontSize(18)
                     .fontWeight(FontWeight.Bold)
                     .fontColor(Theme.TEXT)
+                    .lineHeight(24)
                     .maxLines(3)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
                   Text(this.metaLine())
                     .fontSize(11)
                     .fontColor(Theme.TEXT_FAINT)
                     .maxLines(2)
-                  // 2.5.5：本地覆盖层可用才给编辑入口（老服务端 404 时整块不出现）
-                  if (this.metaOk) {
-                    Text('✎ 编辑信息')
-                      .fontSize(10)
-                      .fontColor(Theme.ACCENT)
-                      .padding({ left: 9, right: 9, top: 4, bottom: 4 })
-                      .backgroundColor(Theme.ACCENT_SOFT)
-                      .borderRadius(9)
-                      .onClick(() => {
-                        this.openMetaEdit();
-                      })
-                  }
-                  Row() {
-                    Column({ space: 6 }) {
+                  Row({ space: 6 }) {
+                    Row({ space: 6 }) {
                       if (this.detail.score > 0) {
-                        Text(`★ ${scoreText(this.detail.score)}`)
-                          .fontSize(12)
-                          .fontColor(Theme.GOLD)
+                        Row({ space: 3 }) {
+                          SymbolGlyph($r('sys.symbol.star_fill'))
+                            .fontSize(12)
+                            .fontColor([Theme.GOLD])
+                          Text(scoreText(this.detail.score))
+                            .fontSize(12)
+                            .fontWeight(FontWeight.Medium)
+                            .fontColor(Theme.GOLD)
+                            .fontFeature('"tnum" 1')
+                        }
+                        .alignItems(VerticalAlign.Center)
                       }
                       if (this.marks().length > 0) {
                         MarkBadges({ marks: this.marks(), max: 4, badgeSize: 10, fill: 'card' })
                       }
                     }
-                    .alignItems(HorizontalAlign.Start)
-
-                    Blank()
+                    .alignItems(VerticalAlign.Center)
+                    .layoutWeight(1)
 
                     // 字幕：跟评分/标记同一行的右侧空位，点开是底部抽屉
                     SubtitleBlock({ metaId: this.detail.id, chosenId: $subChosenId })
                   }
                   .width('100%')
-                  .alignItems(VerticalAlign.Bottom)
+                  .alignItems(VerticalAlign.Center)
                 }
                 .alignItems(HorizontalAlign.Start)
                 .layoutWeight(1)
@@ -2185,117 +2416,134 @@ export struct DetailPage {
               .alignItems(VerticalAlign.Top)
               .margin({ top: 12 })
 
-              // 操作区
-              Row({ space: 10 }) {
-                Button() {
-                  if (this.resumable()) {
-                    // 和「从头」并排之后，一行放不下「继续播放 01:40:21」（真机被截成省略号），
-                    // 所以主按钮给两行：上面是动作，下面就是「从哪儿接着播」
-                    Column({ space: 1 }) {
-                      Text('继续播放')
-                        .fontSize(13)
-                        .fontColor('#FFFFFF')
-                      Text(`${clock(this.detail.position)} 起`)
-                        .fontSize(9)
-                        .fontColor('#D9FFFFFF')
-                    }
-                  } else {
-                    Row({ space: 6 }) {
-                      Text('▶')
-                        .fontSize(13)
-                        .fontColor('#FFFFFF')
-                      Text(this.playLabel())
-                        .fontSize(14)
-                        .fontColor('#FFFFFF')
-                    }
-                  }
-                }
-                .layoutWeight(1)
-                .height(42)
-                .backgroundColor(Theme.ACCENT)
-                .borderRadius(21)
-                .onClick(() => {
-                  this.play(false);
-                })
-
-                // 有进度时补一个「从头」：想重看不用先进播放页再拖进度条
-                if (this.resumable()) {
+              // 两层高密度操作区（2.8.2 P3：主动作发光焦点 + 辅助玻璃胶囊均分，零信息减法）
+              Column({ space: 10 }) {
+                Row({ space: 10 }) {
                   Button() {
-                    Row({ space: 4 }) {
-                      Text('⏮')
-                        .fontSize(11)
-                        .fontColor(Theme.TEXT)
-                      Text('从头')
-                        .fontSize(12)
-                        .fontColor(Theme.TEXT)
+                    Row({ space: 6 }) {
+                      SymbolGlyph($r('sys.symbol.play_fill'))
+                        .fontSize(14)
+                        .fontColor([Theme.ON_ACCENT])
+                      Text(this.resumable() ? `继续播放 · ${clock(this.detail.position)}` : this.playLabel())
+                        .fontSize(14)
+                        .fontWeight(FontWeight.Medium)
+                        .fontColor(Theme.ON_ACCENT)
+                        .fontFeature('"tnum" 1')
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
                     }
+                    .alignItems(VerticalAlign.Center)
                   }
-                  .width(66)
-                  .height(42)
-                  .backgroundColor(Theme.CARD)
-                  .borderRadius(21)
+                  .layoutWeight(1)
+                  .height(44)
+                  .backgroundColor(Color.Transparent)
+                  .linearGradient(Theme.ctaGradient())
+                  .border({ width: 0.75, color: '#38FFFFFF' })
+                  .borderRadius(22)
+                  .shadow({ radius: 16, color: Theme.accentAlpha(0.36), offsetX: 0, offsetY: 6 })
                   .onClick(() => {
-                    this.play(true);
+                    this.play(false);
                   })
-                }
 
-                Column({ space: 1 }) {
-                  Text(this.fav ? '♥' : '♡')
-                    .fontSize(15)
-                    .fontColor(this.fav ? Theme.ACCENT : Theme.TEXT)
-                  Text(this.fav ? '已收藏' : '收藏')
-                    .fontSize(9)
-                    .fontColor(Theme.TEXT_FAINT)
-                }
-                .width(58)
-                .height(42)
-                .justifyContent(FlexAlign.Center)
-                .backgroundColor(Theme.CARD)
-                .borderRadius(21)
-                .onClick(() => {
-                  this.showCollections = true;
-                })
-
-                // 下载（离线缓存，2.5.6）：**单文件时没有「选择版本」面板**，
-                // 这里是唯一的下载入口，所以按钮必须常驻，不能只挂在版本行上。
-                Column({ space: 1 }) {
-                  Text(this.downloadMark())
-                    .fontSize(15)
-                    .fontColor(this.downloadDone() ? Theme.GOLD : Theme.TEXT)
-                  Text(this.downloadDone() ? '已缓存' : '下载')
-                    .fontSize(9)
-                    .fontColor(this.downloadDone() ? Theme.GOLD : Theme.TEXT_FAINT)
-                }
-                .width(58)
-                .height(42)
-                .justifyContent(FlexAlign.Center)
-                .backgroundColor(Theme.CARD)
-                .borderRadius(21)
-                .onClick(() => {
-                  this.downloadAny();
-                })
-
-                // 公开扩展 watch_later：稍后再看（2.6.1.22 从细横条升成主按钮）。
-                // 它原来在按钮下面当一条 46vp 高的横条 —— 一屏里最容易被忽略的位置，
-                // 而它恰恰是「现在不想看、但别忘」这种最常见的动作，所以和「归档」换位。
-                if (BuildConfig.ENABLE_WATCHLATER) {
-                  Column({ space: 1 }) {
-                    Text(this.watchLater ? '◉' : '◷')
-                      .fontSize(15)
-                      .fontColor(this.watchLater ? Theme.ACCENT : Theme.TEXT)
-                    Text(this.watchLater ? '已记录' : '稍后再看')
-                      .fontSize(9)
-                      .fontColor(this.watchLater ? Theme.ACCENT : Theme.TEXT_FAINT)
+                  // 有进度时补一个「从头」：想重看不用先进播放页再拖进度条
+                  if (this.resumable()) {
+                    Button() {
+                      Row({ space: 5 }) {
+                        SymbolGlyph($r('sys.symbol.backward_end_fill'))
+                          .fontSize(13)
+                          .fontColor([Theme.TEXT])
+                        Text('从头')
+                          .fontSize(13)
+                          .fontWeight(FontWeight.Medium)
+                          .fontColor(Theme.TEXT)
+                      }
+                      .alignItems(VerticalAlign.Center)
+                    }
+                    .width(84)
+                    .height(44)
+                    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                    .backgroundColor('#1FFFFFFF')
+                    .border({ width: 0.75, color: '#2EFFFFFF' })
+                    .borderRadius(22)
+                    .onClick(() => {
+                      this.play(true);
+                    })
                   }
-                  .width(58)
-                  .height(42)
+                }
+                .width('100%')
+
+                Row({ space: 8 }) {
+                  Row({ space: 6 }) {
+                    SymbolGlyph(this.fav ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
+                      .fontSize(14)
+                      .fontColor([this.fav ? Theme.ACCENT_INK : Theme.TEXT_DIM])
+                    Text(this.fav ? '已收藏' : '收藏')
+                      .fontSize(12)
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor(this.fav ? Theme.TEXT : Theme.TEXT_DIM)
+                      .maxLines(1)
+                  }
+                  .layoutWeight(1)
+                  .height(38)
                   .justifyContent(FlexAlign.Center)
-                  .backgroundColor(this.watchLater ? Theme.ACCENT_SOFT : Theme.CARD)
-                  .borderRadius(21)
+                  .alignItems(VerticalAlign.Center)
+                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                  .backgroundColor(this.fav ? Theme.accentAlpha(0.16) : '#1AFFFFFF')
+                  .border({ width: 0.75, color: this.fav ? Theme.inkAlpha(0.44) : '#26FFFFFF' })
+                  .borderRadius(19)
                   .onClick(() => {
-                    this.toggleWatchLater();
+                    this.showCollections = true;
                   })
+
+                  // 下载（离线缓存，2.5.6）：单文件时唯一的下载入口，常驻
+                  Row({ space: 6 }) {
+                    SymbolGlyph(this.downloadDone() ? $r('sys.symbol.checkmark') : $r('sys.symbol.download'))
+                      .fontSize(14)
+                      .fontColor([this.downloadDone() ? Theme.GOLD : Theme.TEXT_DIM])
+                    Text(this.downloadDone() ? '已缓存' : (this.downloadMark() === '·' ? '下载中' : '下载'))
+                      .fontSize(12)
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor(this.downloadDone() ? Theme.GOLD : Theme.TEXT_DIM)
+                      .maxLines(1)
+                  }
+                  .layoutWeight(1)
+                  .height(38)
+                  .justifyContent(FlexAlign.Center)
+                  .alignItems(VerticalAlign.Center)
+                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                  .backgroundColor(this.downloadDone() ? '#24FFD06B' : '#1AFFFFFF')
+                  .border({ width: 0.75, color: this.downloadDone() ? '#59FFD06B' : '#26FFFFFF' })
+                  .borderRadius(19)
+                  .onClick(() => {
+                    this.downloadAny();
+                  })
+
+                  // 公开扩展 watch_later：稍后再看
+                  if (BuildConfig.ENABLE_WATCHLATER) {
+                    Row({ space: 6 }) {
+                      SymbolGlyph(this.watchLater ? $r('sys.symbol.clock_fill') : $r('sys.symbol.clock'))
+                        .fontSize(14)
+                        .fontColor([this.watchLater ? Theme.ACCENT_INK : Theme.TEXT_DIM])
+                      Text(this.watchLater ? '已记录' : '稍后再看')
+                        .fontSize(12)
+                        .fontWeight(FontWeight.Medium)
+                        .fontColor(this.watchLater ? Theme.TEXT : Theme.TEXT_DIM)
+                        .maxLines(1)
+                    }
+                    .layoutWeight(1)
+                    .height(38)
+                    .justifyContent(FlexAlign.Center)
+                    .alignItems(VerticalAlign.Center)
+                    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+                    .backgroundColor(this.watchLater ? Theme.accentAlpha(0.16) : '#1AFFFFFF')
+                    .border({ width: 0.75, color: this.watchLater ? Theme.inkAlpha(0.44) : '#26FFFFFF' })
+                    .borderRadius(19)
+                    .onClick(() => {
+                      this.toggleWatchLater();
+                    })
+                  }
                 }
+                .width('100%')
               }
               .width('100%')
               .margin({ top: 16 })
@@ -2317,7 +2565,7 @@ export struct DetailPage {
                     } else {
                       Text(this.rateHint ? '点这里打个分' : '还没打过分')
                         .fontSize(11)
-                        .fontColor(this.rateHint ? Theme.ACCENT : Theme.TEXT_DIM)
+                        .fontColor(this.rateHint ? Theme.ACCENT_INK : Theme.TEXT_DIM)
                     }
                   }
                   .width('100%')
@@ -2336,12 +2584,12 @@ export struct DetailPage {
                   })
                 }
                 .width('100%')
-                .padding(this.rateHint ? 10 : 0)
-                .backgroundColor(this.rateHint ? '#1FFFC53D' : '#00000000')
-                .borderRadius(12)
+                .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+                .backgroundColor(this.rateHint ? '#1FFFC53D' : Theme.CARD)
+                .borderRadius(14)
                 .border({
-                  width: this.rateHint ? 1 : 0,
-                  color: this.rateHint ? '#66FFC53D' : '#00000000'
+                  width: this.rateHint ? 1 : 0.75,
+                  color: this.rateHint ? '#66FFC53D' : '#1AFFFFFF'
                 })
                 .margin({ top: 16 })
               }
@@ -2426,7 +2674,7 @@ export struct DetailPage {
                     .width('100%')
                   Text(this.expanded ? '收起' : '展开')
                     .fontSize(11)
-                    .fontColor(Theme.ACCENT)
+                    .fontColor(Theme.ACCENT_INK)
                     .onClick(() => {
                       this.expanded = !this.expanded;
                     })
@@ -2451,7 +2699,7 @@ export struct DetailPage {
                     Blank()
                     Text('点开看大图 ›')
                       .fontSize(10)
-                      .fontColor(Theme.ACCENT)
+                      .fontColor(Theme.ACCENT_INK)
                   }
                   .width('100%')
                   StillsWall({
@@ -2487,10 +2735,12 @@ export struct DetailPage {
                       })
                     Text('写评价')
                       .fontSize(11)
-                      .fontColor('#FFFFFF')
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor(Theme.ACCENT_INK)
                       .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-                      .backgroundColor(Theme.ACCENT)
-                      .borderRadius(9)
+                      .backgroundColor(Theme.accentAlpha(0.16))
+                      .border({ width: 0.75, color: Theme.inkAlpha(0.42) })
+                      .borderRadius(10)
                       .onClick(() => {
                         this.editingCommentId = 0;
                         this.commentDraft = '';
@@ -2499,7 +2749,7 @@ export struct DetailPage {
                     if (this.detail.comments.length > 2) {
                       Text(this.commentsOpen ? '收起' : '展开全部')
                         .fontSize(11)
-                        .fontColor(Theme.ACCENT)
+                        .fontColor(Theme.ACCENT_INK)
                         .onClick(() => {
                           this.commentsOpen = !this.commentsOpen;
                         })
@@ -2526,7 +2776,7 @@ export struct DetailPage {
                         if (c.mine === true) {
                           Text('改')
                             .fontSize(9)
-                            .fontColor(Theme.ACCENT)
+                            .fontColor(Theme.ACCENT_INK)
                             .padding({ left: 6, right: 6 })
                             .onClick(() => {
                               this.editingCommentId = c.id;
@@ -2544,7 +2794,7 @@ export struct DetailPage {
                         // 长评在列表里只留摘要，点开看全文（链接也能点了）
                         Text('查看全文 ›')
                           .fontSize(9)
-                          .fontColor(Theme.ACCENT)
+                          .fontColor(Theme.ACCENT_INK)
                       }
                       .width('100%')
                     }
@@ -2554,8 +2804,8 @@ export struct DetailPage {
                     .backgroundColor(c.mine === true ? Theme.CARD_HI : Theme.CARD)
                     .borderRadius(10)
                     .border({
-                      width: c.mine === true ? 1 : 0.5,
-                      color: c.mine === true ? Theme.ACCENT : '#14FFFFFF'
+                      width: c.mine === true ? 0.75 : 0.5,
+                      color: c.mine === true ? Theme.inkAlpha(0.46) : '#14FFFFFF'
                     })
                     .onClick(() => {
                       this.openCommentBody = c.body;
@@ -2675,9 +2925,7 @@ export struct DetailPage {
         .height('100%')
         .linearGradient({
           angle: 180,
-          // 把海报主色薄薄地铺在底部：整张图会从「通用深色压边」变成「这部片自己的色调」
-          // 2.6.1.28：0.16 → 0.34 —— 0.16 在暗色头图上几乎看不出来，等于没上色。
-          colors: [['#00000000', 0.40], [Theme.alphaOf(this.tintColor(), 0.34), 0.74], ['#8C0B0B0F', 1.0]]
+          colors: [['#47000000', 0], ['#00000000', 0.30], [Theme.alphaOf(this.tintColor(), 0.30), 0.74], ['#B80B0B0F', 1.0]]
         })
         .hitTestBehavior(HitTestMode.None)
 
@@ -2708,7 +2956,8 @@ export struct DetailPage {
             .width(54)
             .height(54)
             .borderRadius(27)
-            .backgroundColor('#73000000')
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor('#59000000')
             // 2.6.1.28：描边 0.72 → 0.95、外发光 0.80 → 0.90，让「一片一色」真的看得见
             .border({ width: 1, color: this.fx >= 1 ? Theme.alphaOf(this.tintColor(), 0.95) : '#4DFFFFFF' })
             .shadow(this.fx >= 1
@@ -2740,34 +2989,79 @@ export struct DetailPage {
     })
   }
 
+  /**
+   * 没有资源的片子（2026-11-19 用户要求）：**不加载播放控件**。
+   *
+   * 「破解待下载」这类片在库里只有元数据，没有文件 —— 原来那套 ▶ / 光晕 / 浮尘
+   * 全是给人点播放用的，点了只会报错。这里只铺一张静图 + 一句说明，不响应点击。
+   */
+  @Builder
+  PosterStill() {
+    Stack({ alignContent: Alignment.Center }) {
+      Image(Store.I.img(this.detail.fanart.length > 0 ? this.detail.fanart : this.detail.poster))
+        .width('100%')
+        .height('100%')
+        .objectFit(ImageFit.Cover)
+        .backgroundColor('#000000')
+
+      Column()
+        .width('100%')
+        .height('100%')
+        .linearGradient({
+          angle: 180,
+          colors: [['#47000000', 0], ['#00000000', 0.32], ['#990B0B0F', 1.0]]
+        })
+        .hitTestBehavior(HitTestMode.None)
+
+      Text('还没有本地 / 网盘资源')
+        .fontSize(11)
+        .fontColor('#B3FFFFFF')
+        .padding({ left: 11, right: 11, top: 5, bottom: 5 })
+        .borderRadius(11)
+        .backgroundColor('#40000000')
+        .hitTestBehavior(HitTestMode.None)
+    }
+    .width('100%')
+    .aspectRatio(16 / 9)
+    .backgroundColor('#000000')
+  }
+
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.loading) {
-        // 骨架屏（2.6.1.18）：先把「一张大图 + 封面 + 标题两行 + 一排按钮」的位置占出来。
-        // 数据到了只是把灰块换成实内容，整屏不会从转圈直接跳成满屏信息。
+        // 玻璃扫光骨架屏（2.8.2 P1）：精准对齐 16:9 剧照 + 104×148 封面 + 两层操作区
         Column() {
-          SkeletonBlock({ w: '100%', h: 208, radius: 0 })
+          SkeletonBlock({ w: '100%', h: Math.round(Motion.screenWidthVp() * 9 / 16), radius: 0 })
           Column({ space: 10 }) {
             Row({ space: 14 }) {
-              SkeletonBlock({ w: '104', h: 148, radius: 10 })
+              SkeletonBlock({ w: '104', h: 148, radius: 12, rim: true })
+                .opacity(this.morphOn ? 0 : 1)
               Column({ space: 9 }) {
-                SkeletonBlock({ w: '28%', h: 12 })
-                SkeletonBlock({ w: '92%', h: 16, lag: 70 })
+                SkeletonBlock({ w: '30%', h: 12 })
+                SkeletonBlock({ w: '92%', h: 18, lag: 70 })
                 SkeletonBlock({ w: '68%', h: 12, lag: 120 })
-                SkeletonBlock({ w: '44%', h: 11, lag: 170 })
+                SkeletonBlock({ w: '46%', h: 12, lag: 170 })
               }
               .alignItems(HorizontalAlign.Start)
               .layoutWeight(1)
             }
             .width('100%')
             .alignItems(VerticalAlign.Top)
+            .margin({ top: 12 })
 
             Row({ space: 10 }) {
-              SkeletonBlock({ w: '46%', h: 38, radius: 19, lag: 60 })
-              SkeletonBlock({ w: '28%', h: 38, radius: 19, lag: 140 })
+              SkeletonBlock({ w: '68%', h: 42, radius: 21, lag: 60, rim: true })
+              SkeletonBlock({ w: '28%', h: 42, radius: 21, lag: 140, rim: true })
             }
             .width('100%')
             .margin({ top: 6 })
+
+            Row({ space: 10 }) {
+              SkeletonBlock({ w: '31%', h: 38, radius: 19, lag: 90, rim: true })
+              SkeletonBlock({ w: '31%', h: 38, radius: 19, lag: 150, rim: true })
+              SkeletonBlock({ w: '31%', h: 38, radius: 19, lag: 210, rim: true })
+            }
+            .width('100%')
           }
           .width('100%')
           .padding({ left: Theme.PAGE_PAD, right: Theme.PAGE_PAD })
@@ -2777,71 +3071,117 @@ export struct DetailPage {
         .height('100%')
       } else {
         // 私有扩展「右滑删除」现在挂在每个文件行上（见 FileRow），页面本身不再包一层
-        this.Body()
+        Column() {
+          this.Body()
+        }
+        .width('100%')
+        .height('100%')
+        .opacity(this.morphOn && !this.morphSettled ? 0.01 : 1)
+        .translate({ y: this.morphOn && !this.morphSettled ? 18 : 0 })
 
         // 顶部 16:9：没播时是海报（点一下就地开播），播了就是播放器本体。
         // 播放器是页面根 Stack 里的一层 —— 详情内容照常在下边滚动，不重拉任何数据。
         if (this.playerOn) {
-          PlayerView({
-            metaIdParam: this.detail.id,
-            numberParam: this.detail.number,
-            titleParam: this.detail.title,
-            keyParam: this.pKey,
-            nameParam: this.pName,
-            posParam: this.pPos,
-            modeParam: 'portrait',
-            autoplay: true,
-            posterParam: this.detail.fanart.length > 0 ? this.detail.fanart : this.detail.poster,
-            exitSignal: this.pExitSig,
-            onModeChange: (m: string) => {
-              this.pMode = m;
-            },
-            onAskRate: () => {
-              // 第一次从横屏转回竖屏：不弹窗，把「我的评分」那块高亮一下
-              if (this.myRating > 0) {
-                return;
+          Column() {
+            PlayerView({
+              metaIdParam: this.detail.id,
+              numberParam: this.detail.number,
+              titleParam: this.detail.title,
+              keyParam: this.pKey,
+              nameParam: this.pName,
+              posParam: this.pPos,
+              modeParam: 'portrait',
+              autoplay: true,
+              posterParam: this.detail.fanart.length > 0 ? this.detail.fanart : this.detail.poster,
+              exitSignal: this.pExitSig,
+              onModeChange: (m: string) => {
+                this.pMode = m;
+              },
+              onAskRate: () => {
+                // 第一次从横屏转回竖屏：不弹窗，把「我的评分」那块高亮一下
+                if (this.myRating > 0) {
+                  return;
+                }
+                this.rateHint = true;
+                this.toast = '看到这儿了，顺手打个分？';
+                setTimeout(() => {
+                  this.toast = '';
+                }, 2200);
+              },
+              onExited: () => {
+                // 横屏时点返回箭头 = 先退出全屏（和系统返回键一致），
+                // 竖屏时才是「退出播放 + 退出详情页」
+                if (this.pMode !== 'portrait') {
+                  this.pExitSig = this.pExitSig + 1;
+                  return;
+                }
+                this.playerOn = false;
+                router.back();
               }
-              this.rateHint = true;
-              this.toast = '看到这儿了，顺手打个分？';
-              setTimeout(() => {
-                this.toast = '';
-              }, 2200);
-            },
-            onExited: () => {
-              // 横屏时点返回箭头 = 先退出全屏（和系统返回键一致），
-              // 竖屏时才是「退出播放 + 退出详情页」
-              if (this.pMode !== 'portrait') {
-                this.pExitSig = this.pExitSig + 1;
-                return;
-              }
-              this.playerOn = false;
-              router.back();
-            }
-          })
-        } else {
+            })
+          }
+          .width('100%')
+          .padding({ top: !this.embedded && this.pMode === 'portrait' ? this.topInset : 0 })
+          .backgroundColor('#000000')
+        } else if (this.detail.files.length > 0) {
           this.PosterPlay()
+        } else {
+          // 只有元数据、没有任何文件：不画播放控件（点了也播不了，只会报错）
+          this.PosterStill()
         }
 
         // 返回按钮（嵌在播放页里时不画：那时候的「返回」是播放页自己的事）
         if (!this.embedded && !this.playerOn) {
-          // 五十八改：形状与基底的返回胶囊统一（34 见方 / 圆角 12 / 20 号字），
-          // 材质仍用 ULTRA_THIN + 半透明黑（它浮在海报上，需要一点压暗才看得清）
-          Text('‹')
-            .fontSize(20)
-            .fontColor('#FFFFFF')
-            .width(34)
-            .height(34)
-            .textAlign(TextAlign.Center)
-            .borderRadius(12)
-            .backgroundColor('#40000000')
-            .systemMaterial(new uiMaterial.ImmersiveMaterial({
-              style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
-              materialColor: '#26000000'
-            }))
-            .margin({ left: 12, top: 8 })
+          // 统一使用 GlassBack(scrim: true)：内容区不挂 systemMaterial（系统材质仅在标题栏/底栏生效）
+          GlassBack({ scrim: true })
+            .margin({ left: 12, top: this.topInset + 8 })
+        }
+
+        // 待下载「要 / 不要」（2026-11-19）：与返回键同一行、贴右上角。
+        // 仅非公版通道且影片挂着「破解待下载」/「网友推荐待下载」时出现。
+        // 整行 hitTest 透明：不挡住左上那颗返回键。
+        if (!this.embedded && !this.playerOn && BuildConfig.CHANNEL !== 'public' && this.pendingOn) {
+          Row({ space: 8 }) {
+            Row({ space: 4 }) {
+              SymbolGlyph($r('sys.symbol.checkmark'))
+                .fontSize(12)
+                .fontColor([this.pickWant ? Theme.ON_ACCENT : '#FFFFFF'])
+              Text(this.pickWant ? '已要' : '要')
+                .fontSize(13)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(this.pickWant ? Theme.ON_ACCENT : '#FFFFFF')
+            }
+            .alignItems(VerticalAlign.Center)
+            .padding({ left: 13, right: 13, top: 7, bottom: 7 })
+            .borderRadius(15)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor(this.pickWant ? Theme.ACCENT : '#47000000')
+            .border({ width: 0.75, color: this.pickWant ? Theme.ACCENT : '#38FFFFFF' })
             .onClick(() => {
-              router.back();
+              this.decidePending('want');
             })
+            Row({ space: 4 }) {
+              SymbolGlyph($r('sys.symbol.xmark'))
+                .fontSize(11)
+                .fontColor(['#FFFFFF'])
+              Text(this.pickSkip ? '已否' : '不要')
+                .fontSize(13)
+                .fontColor('#FFFFFF')
+            }
+            .alignItems(VerticalAlign.Center)
+            .padding({ left: 13, right: 13, top: 7, bottom: 7 })
+            .borderRadius(15)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .backgroundColor(this.pickSkip ? '#8CFF6B6B' : '#47000000')
+            .border({ width: 0.75, color: this.pickSkip ? '#8CFF6B6B' : '#38FFFFFF' })
+            .onClick(() => {
+              this.decidePending('skip');
+            })
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.End)
+          .padding({ right: 12, top: this.topInset + 8 })
+          .hitTestBehavior(HitTestMode.Transparent)
         }
 
         if (this.showVersions) {
@@ -2914,15 +3254,40 @@ export struct DetailPage {
         }
 
         if (this.toast.length > 0) {
-          Text(this.toast)
-            .fontSize(12)
-            .fontColor('#FFFFFF')
-            .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-            .backgroundColor('#CC000000')
-            .borderRadius(16)
-            .position({ x: '50%', y: '88%' })
-            .translate({ x: -40 })
+          Row() {
+            Text(this.toast)
+              .fontSize(12)
+              .fontWeight(FontWeight.Medium)
+              .fontColor('#FFFFFF')
+              .padding({ left: 16, right: 16, top: 9, bottom: 9 })
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+              .backgroundColor('#CC14141C')
+              .border({ width: 0.75, color: '#33FFFFFF' })
+              .borderRadius(18)
+              .shadow({ radius: 14, color: '#80000000', offsetY: 4 })
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+          .position({ x: 0, y: '86%' })
+          .hitTestBehavior(HitTestMode.None)
         }
+      }
+
+      // 一镜到底封面展开层（2.8.2 P1）：从卡片真实屏幕坐标飞入详情封面槽，落位即卸载
+      if (this.morphOn && this.morphPoster.length > 0) {
+        Image(Store.I.img(this.morphPoster))
+          .width(this.morphSettled ? 104 : this.morphW)
+          .height(this.morphSettled ? 148 : this.morphH)
+          .objectFit(ImageFit.Cover)
+          .borderRadius(this.morphSettled ? 12 : this.morphR)
+          .border({ width: 0.75, color: '#33FFFFFF' })
+          .shadow({ radius: 22, color: '#B3000000', offsetY: 8 })
+          .position({
+            x: this.morphSettled ? Theme.PAGE_PAD : this.morphX,
+            y: this.morphSettled ? this.morphTargetY() : this.morphY
+          })
+          .geometryTransition(`cover-${this.metaId}`)
+          .hitTestBehavior(HitTestMode.None)
       }
 
       // 盲盒转场遮罩：压在详情页之上，页面自己先渲染好，再从这里扩散淡出。
@@ -2950,6 +3315,7 @@ export struct DetailPage {
     }
     .width('100%')
     .height('100%')
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .backgroundColor(Theme.BG)
   }
 

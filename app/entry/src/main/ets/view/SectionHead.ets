@@ -23,20 +23,14 @@ export struct SectionHead {
   @Prop count: string = '';
 
   build() {
-    Row({ space: 7 }) {
-      Column()
-        .width(3)
-        .height(13)
-        .borderRadius(2)
-        .backgroundColor(Theme.alphaOf(Theme.ACCENT, 0.55))
+    Row({ space: 6 }) {
       Text(this.title)
-        .fontSize(13)
-        .fontColor(Theme.TEXT_DIM)
-        .fontWeight(FontWeight.Medium)
-        .letterSpacing(0.4)
+        .fontSize(16)
+        .fontColor(Theme.TEXT)
+        .fontWeight(FontWeight.Bold)
       if (this.count.length > 0) {
         Text(this.count)
-          .fontSize(10)
+          .fontSize(11)
           .fontColor(Theme.TEXT_FAINT)
       }
     }

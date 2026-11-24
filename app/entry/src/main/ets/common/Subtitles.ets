@@ -125,6 +125,141 @@ export interface SubtitleListResult {
   hint?: string;
 }
 
+export interface DedupSubtitleLists {
+  local: LocalCandidate[];
+  cached: SubtitleItem[];
+}
+
+function subExtLower(name: string): string {
+  const dot: number = name.lastIndexOf('.');
+  return dot >= 0 ? name.substring(dot).toLowerCase() : '';
+}
+
+function subNormName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+/**
+ * 统一去重：下载后更名存到视频旁边的字幕、以及点过「同目录」进服务端缓存的字幕，
+ * 都会同时出现在 `local` 与 `cached` 里（甚至 `cached` 里自带原名+同目录名两条）。
+ *
+ * 策略：
+ *  1) `cached` 内部先按 id 去重，再按「规范化文件名」及「同体积 + 同后缀（更名落盘）」去重，
+ *     冲突时优先保留当前激活的 `activeId`（否则保留更干净的本地/后入项）；
+ *  2) `local` 里凡是已在 `cached` 出现（同名，或同体积 + 同后缀）的条目全部合并到 `cached` 那一条，
+ *     避免一份字幕在列表里显示两遍。
+ */
+export function dedupSubtitles(
+  local: LocalCandidate[],
+  cached: SubtitleItem[],
+  activeId: string = '',
+  ownedNames: string[] = []
+): DedupSubtitleLists {
+  const rawCached: SubtitleItem[] = cached === undefined || cached === null ? [] : cached;
+  const rawLocal: LocalCandidate[] = local === undefined || local === null ? [] : local;
+
+  const byId: Map<string, SubtitleItem> = new Map<string, SubtitleItem>();
+  for (let i = 0; i < rawCached.length; i++) {
+    const it: SubtitleItem = rawCached[i];
+    if (it === undefined || it === null || it.id.length === 0) {
+      continue;
+    }
+    if (!byId.has(it.id)) {
+      byId.set(it.id, it);
+    }
+  }
+
+  const uniqueCached: SubtitleItem[] = [];
+  const nameToIdx: Map<string, number> = new Map<string, number>();
+  const sigToIdx: Map<string, number> = new Map<string, number>();
+  const allById: SubtitleItem[] = Array.from(byId.values());
+  for (let i = 0; i < allById.length; i++) {
+    const it: SubtitleItem = allById[i];
+    const nk: string = subNormName(it.name);
+    const ext: string = subExtLower(it.name);
+    const sk: string = it.size > 0 && ext.length > 0 ? `${it.size}|${ext}` : '';
+    let existingIdx: number = -1;
+    if (nk.length > 0 && nameToIdx.has(nk)) {
+      existingIdx = nameToIdx.get(nk) as number;
+    } else if (sk.length > 0 && sigToIdx.has(sk)) {
+      existingIdx = sigToIdx.get(sk) as number;
+    }
+    if (existingIdx >= 0) {
+      const prev: SubtitleItem = uniqueCached[existingIdx];
+      // 若新项正是当前选中的字幕，优先保留它
+      if (activeId.length > 0 && it.id === activeId && prev.id !== activeId) {
+        uniqueCached[existingIdx] = it;
+        if (nk.length > 0) {
+          nameToIdx.set(nk, existingIdx);
+        }
+        if (sk.length > 0) {
+          sigToIdx.set(sk, existingIdx);
+        }
+      }
+      continue;
+    }
+    const idx: number = uniqueCached.length;
+    uniqueCached.push(it);
+    if (nk.length > 0) {
+      nameToIdx.set(nk, idx);
+    }
+    if (sk.length > 0) {
+      sigToIdx.set(sk, idx);
+    }
+  }
+
+  const ownedSet: Set<string> = new Set<string>();
+  for (let i = 0; i < ownedNames.length; i++) {
+    const on: string = subNormName(ownedNames[i]);
+    if (on.length > 0) {
+      ownedSet.add(on);
+    }
+  }
+
+  const uniqueLocal: LocalCandidate[] = [];
+  const seenLocal: Set<string> = new Set<string>();
+  for (let i = 0; i < rawLocal.length; i++) {
+    const lc: LocalCandidate = rawLocal[i];
+    if (lc === undefined || lc === null || lc.name.length === 0) {
+      continue;
+    }
+    const nk: string = subNormName(lc.name);
+    if (seenLocal.has(nk)) {
+      continue;
+    }
+    const ext: string = subExtLower(lc.name);
+    const sk: string = lc.size > 0 && ext.length > 0 ? `${lc.size}|${ext}` : '';
+    // 已在 cached 里（同名 或 下载更名落盘同体积同后缀），或者已被 owned 记录且 cached 非空时合并去重
+    if (nameToIdx.has(nk) || (sk.length > 0 && sigToIdx.has(sk))) {
+      continue;
+    }
+    if (ownedSet.has(nk) && uniqueCached.length > 0) {
+      continue;
+    }
+    seenLocal.add(nk);
+    uniqueLocal.push(lc);
+  }
+
+  return { local: uniqueLocal, cached: uniqueCached };
+}
+
+/** 字幕来源的友好中文标签。 */
+export function subSourceLabel(source: string): string {
+  if (source === 'local') {
+    return '同目录';
+  }
+  if (source === 'online') {
+    return '片库 / 在线';
+  }
+  if (source === 'import') {
+    return '手机导入';
+  }
+  if (source === 'url') {
+    return '手动链接';
+  }
+  return source.length > 0 ? source : '外挂';
+}
+
 export class SubtitleClient {
   private static q(): string {
     return `token=${encodeURIComponent(Store.I.token)}`;
