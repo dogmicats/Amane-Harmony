@@ -27,7 +27,7 @@ FINISH_RATIO = 0.95
 # 2.6.1.92 把业务逻辑整体搬进 core/logic.py 时，`VERSION` 作为顶层赋值被一起搬走了，
 # 结果部署脚本的「落点核对」（它 sed 读 server.py 找 VERSION）读不到 → 直接中止部署。
 # 那条检查是 2026-11-11 加的，专门防「传错目录导致改了没生效」，这次真的挡住了一次。
-VERSION = "2.9.0"
+VERSION = "2.9.1"
 
 # 本文件在 <root>/core/config.py，仓库根是上两层
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

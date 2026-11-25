@@ -12,7 +12,11 @@ import { PlayerParams } from './Types';
 
 @Builder
 function floatCardBuilder(session: PlayHandoff) {
+  // 外层自定义组件节点必须设为 HitTestMode.None：
+  // OverlayManager 里的 CustomNode 默认 HitTestMode.Default，配合内部 100% Stack 会拦掉整页触摸；
+  // 设成 None 后外层不参与命中、也不阻断子卡片和底下页面，卡片外空白区 100% 穿透给 App 页面。
   FloatPlayerCard({ session: session })
+    .hitTestBehavior(HitTestMode.None)
 }
 
 export class FloatBox {
